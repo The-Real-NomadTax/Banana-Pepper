@@ -39,6 +39,6 @@ Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A
 | Linux x86-64 | Initial target | 32-bit Linux ABI/userspace plus per-game adapters |
 | Windows x86-64 | Future desktop target | Native PE backend; Linux games additionally need a Linux runtime/VM or translation |
 | macOS (especially Apple Silicon) | Future desktop target | Linux/Windows ABI and x86 execution solution; graphics translation as needed |
-| Android (typically ARM64) | Future mobile target | Android lifecycle/input frontend plus x86 CPU translation, guest ABI and graphics solution |
+| Android (ARM64) | Big Buck Hunter app (`android/`, see `android.md`) | box64/box32 in a proot Debian rootfs; Xvfb + llvmpipe; touch input and AudioTrack bridges |
 
 Do not advertise game support on any platform until tested there. The current core avoids Unix-only APIs, but cross-compilation and device testing remain outstanding.
