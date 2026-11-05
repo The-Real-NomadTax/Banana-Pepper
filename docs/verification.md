@@ -98,3 +98,62 @@ Windowed 1360×768 presentation and the Aliens-only GLX SGI-to-EXT swap-control 
 Verified mode selection and rendered 3D gameplay, with health/ammunition HUD, enemies and kill totals of 20 and 34 in captures. The user confirmed: "yeah ive been playing everything works and looks good". Manual confirmation is recorded in runtime/aliens/gameplay-verification.json and a capture in gameplay-verified.png; automatic startup result classification alone does not certify gameplay. The game remains open on the user's display. Copied saves currently use Spanish. Audio is disabled; a full playthrough, player two and all advanced weapon/control behavior remain unverified.
 
 Prepared SHA256: 9bd2332bb9c49adb5a3f0854c8c52532f0c3ab29877cee2dae9eb7c8371c5d61. Original Aliens and Jurassic hashes were rechecked and remain unchanged. Workspace tests (9 core, 2 desktop, 2 host shim), all six native i686 shim tests, workspace Clippy and i686 Clippy passed. The desktop launcher rebuilds and formatting/Python syntax checks pass. Existing Jurassic/Big Buck adapters were not changed.
+# Windows / Minecraft verification (2026-11-04)
+
+- Native host: x86_64-pc-windows-msvc, Rust 1.99.1.
+- `cargo build --workspace`: passed. Existing Jurassic dead-code and filesystem
+  incremental-hardlink warnings remain.
+- `cargo test --workspace`: 12 tests passed. Linux shim tests are excluded on
+  Windows; they still require a Linux build to validate the Linux guest code.
+- Actual game directory with spaces, parentheses and square brackets: discovered
+  and inspected successfully as sectionless ELF64; verified SHA256 recorded in
+  `docs/minecraft-windows.md`.
+- Windows executable -> WSL2 Ubuntu -> Bubblewrap dependency probe: executed.
+  Local Ubuntu libraries resolve GLU, OpenGL, LAPACK, BLAS, Fortran, wireless and
+  PCSC. Remaining unresolved libraries are `libfmod.so.10` and
+  `libfmodstudio.so.10`. See `runtime/minecraft/report.json` for the local result.
+- Minecraft gameplay is blocked and has not been verified. No claim of working
+  keyboard/controller input, security hardware or card readers is made.
+- Visual UI verification was unavailable because the computer-use helper failed
+  initialization on the workspace path containing square brackets.
+
+## Subsequent Minecraft investigation (2026-11-04)
+
+- Retrieved the archived FMOD 1.10.20 Linux SDK, verified its pinned SHA256 and
+  extracted only the x86-64 runtime pair and license. Local provenance is in
+  `runtime/minecraft/fmod-source.json`. The setup command reproduces this from
+  the cache; these binaries are excluded from source control.
+- Actual Linux dependency resolution now succeeds with no missing libraries.
+- GDB identified stale `__libc_start_main`/other GOT addresses in the supplied
+  memory snapshot. Rebuilt 659 named imports as ELF64 relocations in a new data
+  LOAD. The normal preparation changes ELF metadata only, preserving all game
+  instruction bytes and the source snapshot. Both local preparation tests pass.
+- Normal reconstructed startup reaches cabinet security initialization and
+  fails with SIGFPE in the configuration-dependent error logger.
+- A temporary investigative startup patch reached Mesa llvmpipe OpenGL threads,
+  but failed PROGRAM/SCENE archives and localization, then crashed in cleanup.
+  That failed patch is not included in normal preparation. The trace is saved
+  locally as `runtime/minecraft/gdb-desktop-asset-failure.log`.
+- Protected ZIP/config/version data still lacks a working decoder. Diagnostics
+  now report `protected_asset_decoder_required` with an empty missing-library
+  list instead of repeatedly launching the observed crash.
+- Windows workspace tests: 12 passed. Additional snapshot preparation tests: 2
+  passed against the supplied local file. Windows desktop rebuild passed.
+- Minecraft remains unplayable; no attract screen or gameplay is claimed.
+
+
+## Final Minecraft startup result
+
+- Bounded GDB capture reads actual HASP status 7 (key not found), with wrapper
+  status 4, before the error logger faults. The current probe reports
+  `hasp_key_not_found`; the earlier protected-asset classification is superseded.
+- A separate investigative copy skips the login block while preserving both
+  asset-seed pointers. It still fails PROGRAM/SCENE archives and localization,
+  then crashes in cleanup. The ordinary runtime image is unchanged by this test.
+- The same encrypted seed tables occur in the bundled GetFile, GetCert and
+  rtinit utilities. No usable decrypted seed state has been recovered.
+- Minecraft has not reached an attract screen or gameplay. WSL remains the
+  Windows backend; the separate native engine remains paused.
+- Final Windows workspace test run: 20 passed, including eight native-runtime
+  tests. Snapshot preparation tests: two passed. Existing incremental-cache
+  hard-link warnings remain.

@@ -2,6 +2,8 @@
 
 A Rust arcade compatibility project, starting on Linux with an egui/eframe desktop workbench. No TeknoParrot code, profiles or loaders are used by this application.
 
+The workbench also builds natively on Windows. Minecraft Dungeons Arcade has a Windows-to-WSL2 runner, library preparation, snapshot import repair and diagnostics. Its Linux dependencies, including FMOD, now resolve locally. Protected game assets and cabinet initialization remain unsupported, so Minecraft gameplay is **not working yet**. See [Windows setup and measured limitations](docs/minecraft-windows.md).
+
 **Current status:** Aliens Armageddon and Jurassic Park reach desktop gameplay with mouse controls. Big Buck Hunter Pro reaches a rendered hunt scene and has verified PCM audio output through PulseAudio/PipeWire. Aliens and Jurassic audio remain disabled. Full playthroughs and physical cabinet hardware are unverified; Fast and Furious Super Cars currently has executable inspection only. See the per-game notes below for build requirements and limitations.
 
 This repository contains the compatibility runtime and tools. Game executables, assets, cabinet records, saves, generated runtime files and third-party libraries are not included. Supply your own local game files under `games/`.
@@ -46,6 +48,7 @@ cargo test -p arcade-core
 | Jurassic Park 2015 | `game_original` | ELF32, i386 |
 | Big Buck Hunter Pro | `game` in the supplied `Big Bug Hunter Pro` directory | ELF32, i386, no section table |
 | Fast and Furious Super Cars | `sdaemon.exe` in the nested game directory | PE32, i386 |
+| Minecraft Dungeons Arcade | supplied `gamedump.exec` (preferred) or `game` for inspection | ELF64, x86-64 |
 
 Jurassic Park deliberately uses the supplied `game_original` rather than the active `game`, which the existing README describes as modified. This is a filename selection, not verification that the file is pristine. Super Cars selects the game executable rather than the bundled third-party loader. Original files and launch scripts are not modified or run. Imported library names are requirements recorded in the executable, not proof those libraries are installed or usable.
 

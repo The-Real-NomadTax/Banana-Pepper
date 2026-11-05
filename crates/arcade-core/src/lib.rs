@@ -3,6 +3,7 @@
 pub mod aliens;
 pub mod big_buck;
 pub mod jurassic;
+pub mod minecraft;
 
 use goblin::Object;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,7 @@ pub struct GameProfile {
 pub enum Controls {
     LightGuns,
     Driving,
+    Joysticks,
 }
 
 /// Paths are relative to the selected games root, never to a developer's home.
@@ -34,6 +36,7 @@ pub fn profiles() -> Vec<GameProfile> {
         ("jurassic", "Jurassic Park 2015", "linux based/Jurassic Park 2015/game_original", Controls::LightGuns),
         ("big-buck", "Big Buck Hunter Pro", "linux based/Big Bug Hunter Pro/game", Controls::LightGuns),
         ("super-cars", "The Fast and the Furious Super Cars", "windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars/sdaemon.exe", Controls::Driving),
+        ("minecraft", "Minecraft Dungeons Arcade", "linux based/Minecraft Dungeons Arcade/gamedump.exec", Controls::Joysticks),
     ].into_iter().map(|(id,title,path,controls)| GameProfile {
         id: id.into(), title: title.into(), executable: path.into(), controls,
     }).collect()
@@ -106,13 +109,13 @@ pub struct GameReport {
 
 pub fn scan(root: &Path) -> Vec<GameReport> {
     profiles().into_iter().map(|profile| {
-        let path = root.join(&profile.executable);
+        let path = if profile.id == "minecraft" { minecraft::executable(root) } else { root.join(&profile.executable) };
         let result = inspect_file(&path);
         let mut blockers = vec!["Cabinet I/O protocol and game adapter are not implemented.".into(),
             "Required security hardware/services have not been validated.".into()];
         if let Ok(info) = &result {
             if info.format == "ELF" {
-                blockers.push("Legacy 32-bit userspace, library ABI and cabinet filesystem need validation.".into());
+                blockers.push(format!("Linux {}-bit userspace, library ABI and cabinet filesystem need validation.", info.bits));
                 if info.section_count == 0 {
                     blockers.push("Section table absent; inspection uses ELF program/dynamic headers.".into());
                 }
@@ -132,6 +135,15 @@ pub fn scan(root: &Path) -> Vec<GameReport> {
                 "Native original build exits before engine startup while connecting to a Sentinel/HASP service on localhost:1947.".into(),
                 "Supplied modified build crashes during native initialization.".into(),
                 "Legacy 32-bit Theora and PhysX 2.8.1 libraries are staged locally; graphics and cabinet I/O are not yet validated.".into(),
+            ];
+        }
+        if profile.id == "minecraft" {
+            blockers = vec![
+                "Windows uses WSL2 with WSLg; Linux uses the same isolated runner directly.".into(),
+                "Run startup diagnostics to check GLU, LAPACK, wireless/PCSC and FMOD 1.10 libraries.".into(),
+                "The measured startup failure is HASP status 7 (protection key not found). Startup diagnostics recheck the actual API status.".into(),
+                "Cabinet joystick, card-reader and security interfaces are not implemented; gameplay is unverified.".into(),
+                "Supplied gamedump.exec is a pre-existing modified build; original game and cabinet boot scripts are never run.".into(),
             ];
         }
         let (binary,error) = match result { Ok(b) => (Some(b),None), Err(e) => (None,Some(e)) };
@@ -197,7 +209,7 @@ mod tests {
     #[test]
     fn missing_games_are_reported_individually() {
         let reports = scan(Path::new("/nonexistent-arcade-test-root"));
-        assert_eq!(reports.len(), 4);
+        assert_eq!(reports.len(), 5);
         assert!(
             reports
                 .iter()

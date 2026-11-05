@@ -1,5 +1,13 @@
 # Runtime architecture and platform plan
 
+## Windows backend direction
+
+Keep both WSL2 and the developing native Linux ABI backend as Windows options.
+The existing Minecraft runner uses WSL2/WSLg. `arcade-linux-runtime` has a native
+static ELF execution proof, but its development is paused at the user's request
+while Minecraft startup and asset decoding are investigated through WSL2.
+Do not route Minecraft through the native crate or remove WSL support.
+
 ## Scope
 
 The supplied games contain native PC executables. On a compatible x86 Linux host, the first approach is to investigate native execution with a compatible 32-bit userspace and implement the cabinet interfaces in our own code. A full CPU emulator would add a much larger task without resolving those interfaces by itself.
@@ -37,8 +45,13 @@ Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A
 | Host | Frontend | Execution work |
 | --- | --- | --- |
 | Linux x86-64 | Initial target | 32-bit Linux ABI/userspace plus per-game adapters |
-| Windows x86-64 | Future desktop target | Native PE backend; Linux games additionally need a Linux runtime/VM or translation |
+| Windows x86-64 | Native workbench build verified | Minecraft uses WSL2/WSLg; dependencies resolve, but protected assets and cabinet initialization prevent gameplay. Other game backends remain Linux-only. |
 | macOS (especially Apple Silicon) | Future desktop target | Linux/Windows ABI and x86 execution solution; graphics translation as needed |
 | Android (typically ARM64) | Future mobile target | Android lifecycle/input frontend plus x86 CPU translation, guest ABI and graphics solution |
 
 Do not advertise game support on any platform until tested there. The current core avoids Unix-only APIs, but cross-compilation and device testing remain outstanding.
+
+Minecraft's supplied `gamedump.exec` is ELF64 x86-64. Its Windows guest runner,
+fingerprint, dependency staging and remaining blockers are documented in
+`minecraft-windows.md`. The Linux guest shim is excluded on Windows so the
+entire workspace builds without Linux GLUT linkage.

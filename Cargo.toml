@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/arcade-core", "crates/arcade-desktop", "crates/arcade-linux-shim"]
+members = ["crates/arcade-core", "crates/arcade-desktop", "crates/arcade-linux-shim", "crates/arcade-linux-runtime"]
 default-members = ["crates/arcade-desktop"]
 resolver = "3"
 
