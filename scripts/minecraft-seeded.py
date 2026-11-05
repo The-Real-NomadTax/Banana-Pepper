@@ -27,12 +27,21 @@ SEEDS = (("seed64", 0x16d3d40, 64), ("seed128", 0x16d3d80, 128))
 POINTERS = {0x1eb7d20: 0x16d4220, 0x1eb7d40: 0x16d41e0, 0x1eb7d38: 0x16d3e00,
             0x1eb7d28: 0x16d3d80, 0x1eb7d30: 0x16d3d40}
 CALL_SITE, RESUME = 0x430487, 0x430542
+REGION_BYTE = 0x17bad20  # normally loaded from dongle memory by the skipped init block
+DEFAULT_COUNTRY = 48     # value in the supplied cabinet's own gamelog
+FACTORY_SETUP_FLAG = 0x179d100  # 1 once factory setup has been completed
 # (va, original bytes, replacement) applied to the runtime copy only.
 OFFLINE_PATCHES = (
     # Dongle heartbeat (hasp_get_info): treat as success instead of counting to abort.
     (0x4a458d, bytes.fromhex("7529"), bytes.fromhex("9090")),
     # Dongle session check (hasp status): return 0.
     (0x4a44e0, bytes.fromhex("53488d"), bytes.fromhex("31c0c3")),
+    # Region setter: keep the byte in memory instead of writing it to dongle memory
+    # (jump to the plain setter at 0x4a5420).
+    (0x4a5440, bytes.fromhex("8b15fa5831"), bytes.fromhex("e9dbffffff")),
+    # Factory-setup flag loader (reads the flag from dongle memory): return success and
+    # keep the preset in-image flag.
+    (0x438bc0, bytes.fromhex("488d35"), bytes.fromhex("31c0c3")),
     # NetworkInit: continue when SysGetCryptoSeed() can't read dongle memory (online-only key).
     (0x490f79, bytes.fromhex("782d"), bytes.fromhex("9090")),
 )
@@ -45,8 +54,12 @@ def module(name, path):
     return result
 
 
-def seeded_image(prepared, seeds):
+def seeded_image(prepared, seeds, country=DEFAULT_COUNTRY):
     image = bytearray(prepared)
+    if not 0 < country < 0xff:
+        raise RuntimeError("Country code must be 1-254")
+    image[REGION_BYTE - BASE] = country
+    image[FACTORY_SETUP_FLAG - BASE] = 1
     if image[CALL_SITE - BASE] != 0xE8:
         raise RuntimeError("Unexpected bytes at the HASP init call site")
     for name, va, size in SEEDS:
@@ -70,6 +83,7 @@ def main():
     parser.add_argument("--seeds", type=Path)
     parser.add_argument("--timeout", type=int, help="stop after N seconds (testing)")
     parser.add_argument("--resolution", default="1280x720")
+    parser.add_argument("--country", type=int, default=DEFAULT_COUNTRY, help="cabinet country/region code")
     parser.add_argument("--no-joysticks", action="store_true", help="don't create virtual cabinet joysticks")
     parser.add_argument("--no-keyboard", action="store_true", help="create joysticks but don't map the keyboard")
     parser.add_argument("--gdb", type=Path, help="run under gdb with this batch script (diagnostics)")
@@ -93,7 +107,7 @@ def main():
     with (output / "session.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         image = output / "game.seeded"
-        image.write_bytes(seeded_image(prepare.prepare(source), seeds))
+        image.write_bytes(seeded_image(prepare.prepare(source), seeds, args.country))
         image.chmod(0o755)
         placeholder = output / "game"  # sandbox() binds this path; overridden below
         if not placeholder.exists():

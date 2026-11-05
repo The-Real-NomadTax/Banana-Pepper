@@ -85,3 +85,11 @@ The original `game` and `Patch` are bound read-only at their cabinet paths so th
 **Measured result:** the game logs `Welcome to Minecraft v03.07` and `Network initialization completed.`, opens a 1280x720 "Minecraft" window and draws the Mojang Studios boot screen (`runtime/minecraft-seeded/boot-screen.png`). The overlays show the next work: *Factory Setup Has Not Been Completed*, P1–P4 joystick not detected, and P1–P4 card scanner not detected. It stayed on that screen from 30 to 90 seconds. Attract mode, controls, audio and gameplay are not verified yet.
 
 `--gdb <script>` runs the same sandbox under GDB for diagnostics, and `--timeout N` stops it after N seconds.
+
+### Joysticks, region and factory setup (2026-11-05)
+
+- **Joysticks:** the game lists joysticks through its built-in SDL, then runs `udevadm info` on each one. A normal Bubblewrap `--ro-bind` of `/dev/input` is `nodev`, so SDL found 0 devices. The launcher now creates four uinput pads (`scripts/minecraft-joysticks.py`) and `--dev-bind`s only those four nodes. The P1–P4 joystick warnings are gone. `--no-joysticks` and `--no-keyboard` turn this off.
+- **Region:** the country byte at `0x17bad20` is normally loaded from dongle memory by the skipped init block, so it stayed 0. The launcher presets it (`--country`, default 48, the value in the supplied cabinet's own gamelog), and the setter at `0x4a5440` now stores the byte in memory only.
+- **Factory setup:** `ATTRACT_FACTORY_SETUP_INCOMP` is shown while the flag at `0x179d100` is 0. That flag normally comes from dongle memory (`0x438bc0`). The launcher presets it to 1 and makes the loader return success. The warning is gone.
+
+**Measured result:** the game logs `Country Code: 48` and draws the Mojang screen with only the four "Card Scanner is not detected" warnings. It stayed on that screen from 40 to 110 seconds. Attract mode and gameplay are still not reached.
