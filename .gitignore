@@ -1,0 +1,17 @@
+/target/
+/games/
+/reports/
+
+/runtime/
+/arcade-report.json
+
+# Local agent configuration and credentials
+/.agents/
+/.codex/
+/.aws/
+.env
+.env.*
+
+# Python cache files
+__pycache__/
+*.py[cod]
