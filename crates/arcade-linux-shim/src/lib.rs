@@ -1,6 +1,8 @@
 //! Small guest-side compatibility layer; build for i686-unknown-linux-gnu.
 #[cfg(target_arch = "x86")]
 mod aliens;
+#[cfg(target_arch = "x86")]
+mod aliens_exit;
 #[cfg(any(target_arch = "x86", test))]
 mod inputs;
 #[cfg(target_arch = "x86")]
@@ -20,6 +22,7 @@ unsafe extern "C" {
     fn glutInitWindowSize(width: c_int, height: c_int);
     fn glutCreateWindow(title: *const c_char) -> c_int;
     fn glutDestroyWindow(window: c_int);
+    fn glutFullScreen();
     #[cfg(target_arch = "x86")]
     fn glutGet(query: c_int) -> c_int;
     #[cfg(target_arch = "x86")]
@@ -43,9 +46,13 @@ pub extern "C" fn glutEnterGameMode() -> c_int {
     unsafe {
         #[cfg(target_arch = "x86")]
         jamma::install();
-        glutInitWindowSize(640, 480);
+        let (width, height) = window_size();
+        glutInitWindowSize(width, height);
         let id = glutCreateWindow(c"Arcade Foundry - Big Buck Hunter Pro".as_ptr());
         WINDOW.store(id, Ordering::Relaxed);
+        if std::env::var_os("ARCADE_FULLSCREEN").is_some_and(|v| v == "1") {
+            glutFullScreen();
+        }
         #[cfg(target_arch = "x86")]
         {
             glutKeyboardFunc(key_down);
@@ -56,6 +63,25 @@ pub extern "C" fn glutEnterGameMode() -> c_int {
         }
         id
     }
+}
+
+/// Desktop window size from ARCADE_RESOLUTION (settings.cfg); 640x480 otherwise.
+fn window_size() -> (c_int, c_int) {
+    parse_size(&std::env::var("ARCADE_RESOLUTION").unwrap_or_default()).unwrap_or((640, 480))
+}
+
+fn parse_size(value: &str) -> Option<(c_int, c_int)> {
+    let (w, h) = value.split_once('x')?;
+    let (w, h) = (w.parse::<c_int>().ok()?, h.parse::<c_int>().ok()?);
+    ((320..=7680).contains(&w) && (240..=4320).contains(&h)).then_some((w, h))
+}
+
+#[cfg(test)]
+#[test]
+fn window_size_parsing() {
+    assert_eq!(parse_size("1280x960"), Some((1280, 960)));
+    assert_eq!(parse_size("12x9"), None);
+    assert_eq!(parse_size("wide"), None);
 }
 
 #[unsafe(no_mangle)]
@@ -83,6 +109,7 @@ extern "C" fn key_up(key: u8, _x: c_int, _y: c_int) {
 #[cfg(target_arch = "x86")]
 extern "C" fn initialize() {
     jurassic::initialize();
+    aliens_exit::start();
     if std::env::var_os("ARCADE_BBH_ADAPTER").is_some_and(|v| v == "1") {
         unsafe {
             jamma::install();

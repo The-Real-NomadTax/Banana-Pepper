@@ -2,7 +2,9 @@
 //! No game execution or host graphics APIs belong in this crate.
 pub mod aliens;
 pub mod big_buck;
+pub mod controls;
 pub mod jurassic;
+pub mod settings;
 
 use goblin::Object;
 use serde::{Deserialize, Serialize};
@@ -119,6 +121,13 @@ pub fn scan(root: &Path) -> Vec<GameReport> {
             } else {
                 blockers.push("Windows execution backend is not implemented.".into());
             }
+        }
+        if profile.id == "super-cars" {
+            blockers = vec![
+                "Runs under Wine (WineD3D) for one SHA256-verified sdaemon.exe; keyboard drives the cabinet inputs through the arcade-wine-hook dinput8.dll.".into(),
+                "Steering is digital (ramped); analog wheels/gamepads, force feedback, LED display and the H2O board are not emulated.".into(),
+                "The game logs DONGLE MISSING periodically; races still run, but long sessions and audits are unverified.".into(),
+            ];
         }
         if profile.id == "big-buck" {
             blockers = vec![

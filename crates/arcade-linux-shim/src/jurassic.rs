@@ -37,13 +37,24 @@ extern "C" fn poll_event(event: *mut c_void) -> i32 {
     result
 }
 
+/// SDL_FULLSCREEN. Stripped for a desktop window unless settings.cfg asks
+/// for fullscreen (ARCADE_FULLSCREEN=1).
+const SDL_FULLSCREEN: u32 = 0x8000_0000;
+
 extern "C" fn set_video_mode(width: i32, height: i32, bits: i32, flags: u32) -> *mut c_void {
-    let surface = unsafe { SDL_SetVideoMode(width, height, bits, flags & !0x8000_0000) };
+    let fullscreen = std::env::var_os("ARCADE_FULLSCREEN").is_some_and(|v| v == "1");
+    let flags = if fullscreen {
+        flags | SDL_FULLSCREEN
+    } else {
+        flags & !SDL_FULLSCREEN
+    };
+    let surface = unsafe { SDL_SetVideoMode(width, height, bits, flags) };
     if !surface.is_null() {
         let renderer = unsafe { glGetString(0x1f01) };
         if !renderer.is_null() {
             eprintln!(
-                "[jurassic] windowed SDL video {width}x{height}: {:?}",
+                "[jurassic] {} SDL video {width}x{height}: {:?}",
+                if fullscreen { "fullscreen" } else { "windowed" },
                 unsafe { CStr::from_ptr(renderer) }
             );
         }
@@ -53,7 +64,13 @@ extern "C" fn set_video_mode(width: i32, height: i32, bits: i32, flags: u32) -> 
 
 // SM_SetVSync/VidReset can run before a GL context exists. Let SDL keep the
 // requested swap policy rather than sending an unsupported vendor GLX request.
+// ARCADE_VSYNC (0/1, from settings.cfg) overrides the game's own choice.
 extern "C" fn set_vsync(interval: i32) -> i32 {
+    let interval = std::env::var("ARCADE_VSYNC")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|v| (0..=1).contains(v))
+        .unwrap_or(interval);
     unsafe { SDL_GL_SetAttribute(16, interval) } // SDL_GL_SWAP_CONTROL
 }
 struct Binding {
@@ -164,9 +181,7 @@ pub fn initialize() {
             std::process::exit(1);
         }
         DESKTOP_CONTROLS.store(true, Ordering::Relaxed);
-        eprintln!(
-            "[jurassic] desktop controls: 1/2 start, 5/6 coin, mouse aim, left fire, right secondary, T test, 9 service, Esc exit"
-        );
+        eprintln!("[jurassic] desktop controls active (see controls.cfg); mouse aims, Esc exits");
     }
 }
 

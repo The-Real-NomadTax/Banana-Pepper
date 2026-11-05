@@ -1,0 +1,11 @@
+[package]
+name = "arcade-wine-hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 32-bit Windows guest library loaded by Wine as the game's dinput8.dll.
+# Build: cargo build -p arcade-wine-hook --target i686-pc-windows-msvc --release
+# (linker and panic settings live in .cargo/config.toml).
+[lib]
+crate-type = ["cdylib"]

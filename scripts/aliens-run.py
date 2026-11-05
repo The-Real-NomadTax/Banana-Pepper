@@ -9,6 +9,9 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from arcade_audio import sdl_audio_args
+from arcade_settings import guest_env_args, resolution
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -23,7 +26,10 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     if hashlib.sha256((game / 'game').read_bytes()).hexdigest() != '297c07db82b531e276d4ea7ceb4a11c9ce3aacb436f63526c179c2fd4de3e4db':
         raise SystemExit('Unsupported Aliens build')
-    if hashlib.sha256((output / 'game-native').read_bytes()).hexdigest() != '9bd2332bb9c49adb5a3f0854c8c52532f0c3ab29877cee2dae9eb7c8371c5d61':
+    # The prepared image varies with controls.cfg; the Rust preparer records its hash.
+    recorded = output / 'game-native.sha256'
+    expected = recorded.read_text().strip() if recorded.is_file() else ''
+    if not expected or hashlib.sha256((output / 'game-native').read_bytes()).hexdigest() != expected:
         raise SystemExit('Prepare the hash-verified Aliens runtime using the Rust CLI first')
     with (output / 'session.lock').open('a') as lock:
         try:
@@ -56,9 +62,20 @@ def main():
                     '--ro-bind-try', '/etc/fonts', '/etc/fonts',
                     '--setenv', 'DISPLAY', display, '--setenv', 'PATH', '/work/bin:/usr/bin:/bin',
                     '--setenv', 'HOME', '/tmp', '--setenv', 'LD_LIBRARY_PATH', '/runtime-libs:/usr/lib32',
-                    '--setenv', 'ARCADE_ALIENS', '1', '--setenv', 'SDL_AUDIODRIVER', 'dummy',
+                    '--setenv', 'ARCADE_ALIENS', '1',
+                    # Unique class lets the shim find this window for Esc / close-button exit.
+                    '--setenv', 'SDL_VIDEO_X11_WMCLASS', 'ArcadeFoundryAliens',
                     '--setenv', 'SDL_VIDEO_X11_XRANDR', '0', '--setenv', 'SDL_VIDEO_X11_VIDMODE', '0',
                     '--setenv', 'SDL_VIDEO_X11_DGAMOUSE', '0', '--chdir', '/pm']
+        # The game's statically linked SDL 1.2 includes a PulseAudio driver ("pulse").
+        if args.launch:
+            audio_args, audio_driver = sdl_audio_args('pulse')
+        else:
+            audio_args, audio_driver = ['--setenv', 'SDL_AUDIODRIVER', 'dummy'], 'dummy'
+        command += audio_args
+        # Fullscreen, vsync and renderer choices from settings.cfg (launch only).
+        if args.launch:
+            command += guest_env_args()
         # Use supplied development definitions instead of encrypted prod copies.
         for name in ['aud', 'adj', 'conf', 'attract', 'cpmgui', 'online', 'locales', 'translation', 'ttf']:
             source = game / 'g6/aa/data' / name
@@ -84,7 +101,8 @@ def main():
         for stale in output.glob('window-*.png'):
             stale.unlink()
         (output / 'window-geometry.txt').unlink(missing_ok=True)
-        run = 'LD_PRELOAD=/shim.so /pm/game -f1360x768'
+        size = resolution() if args.launch else '1360x768'
+        run = f'LD_PRELOAD=/shim.so /pm/game -f{size}'
         if not args.launch:
             run = 'timeout -k 2s 45s strace -f -s 180 -o /work/startup.strace -E LD_PRELOAD=/shim.so /pm/game -f1360x768'
         if args.debug:
@@ -100,19 +118,27 @@ def main():
                          '  import -window "$window" /work/window-$frame.png 2>/work/capture.log || true\n fi\n'
                          ' kill -0 "$pid" 2>/dev/null || break\ndone\nwait "$pid"\n')
         command += ['/bin/bash', '/work/guest.sh']
-        print(f'Aliens {"desktop launch" if args.launch else "45-second startup probe"}; logs: {output}', flush=True)
+        print(f'Aliens {"desktop launch" if args.launch else "45-second startup probe"}; audio: {audio_driver}; logs: {output}', flush=True)
         status = subprocess.run(command, check=False).returncode
         (output / 'exit-code.txt').write_text(str(status) + '\n')
         initialization = game_log.read_bytes()[log_start:].decode(errors='replace') if game_log.exists() else ''
+        runner_log = (output / 'game.log').read_text(errors='replace') if (output / 'game.log').exists() else ''
+        # The window manager closes the client after the close button is used;
+        # Xlib then reports the lost connection and exits non-zero.
+        closed_by = ('escape' if '[aliens] Esc pressed; exiting' in runner_log else
+                     'window' if 'X connection to' in runner_log or 'XIO:' in runner_log else None)
         (output / 'initialization.log').write_text(initialization)
         (output / 'result.json').write_text(json.dumps({
             'exit_code': status, 'debugger': args.debug, 'plaintext_substitution': args.plaintext_assets,
             'window_captured': any(output.glob('window-*.png')), 'gameplay_verified': False,
-            'audio_driver': 'dummy', 'dongle_initialization_failed': 'DongleInitialize() FAILED!' in initialization,
+            'audio_driver': audio_driver, 'closed_by': closed_by, 'dongle_initialization_failed': 'DongleInitialize() FAILED!' in initialization,
             'rtdt_definitions_failed': 'Error Loading RTDT Defs File' in initialization,
             'segmentation_fault': 'FATAL signal SIGSEGV' in initialization, 'source_sha256': hashlib.sha256((game / 'game').read_bytes()).hexdigest(),
             'log': str(output / 'game.log'),
         }, indent=2) + '\n')
+        if args.launch and closed_by:
+            print(f'Aliens closed ({"Esc" if closed_by == "escape" else "window close button"}).', flush=True)
+            return 0
         return 0 if status == 124 and not args.launch else status
 
 

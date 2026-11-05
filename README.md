@@ -2,7 +2,7 @@
 
 A Rust arcade compatibility project, starting on Linux with an egui/eframe desktop workbench. No TeknoParrot code, profiles or loaders are used by this application.
 
-**Current status:** Aliens Armageddon and Jurassic Park reach desktop gameplay with mouse controls. Big Buck Hunter Pro reaches a rendered hunt scene and has verified PCM audio output through PulseAudio/PipeWire. Aliens and Jurassic audio remain disabled. Full playthroughs and physical cabinet hardware are unverified; Fast and Furious Super Cars currently has executable inspection only. See the per-game notes below for build requirements and limitations.
+**Current status:** Aliens Armageddon and Jurassic Park reach desktop gameplay with mouse controls. Big Buck Hunter Pro reaches a rendered hunt scene and has verified PCM audio output through PulseAudio/PipeWire. Aliens and Jurassic audio now play through the desktop sound server (pending listening confirmation). Full playthroughs and physical cabinet hardware are unverified; Fast and Furious Super Cars (a Windows build) runs under Wine and reaches races with keyboard driving controls. See the per-game notes below for build requirements and limitations.
 
 This repository contains the compatibility runtime and tools. Game executables, assets, cabinet records, saves, generated runtime files and third-party libraries are not included. Supply your own local game files under `games/`.
 
@@ -24,7 +24,7 @@ Interactive Big Buck Hunter on your own display:
 cargo run -p arcade-desktop -- --launch-big-buck games
 ```
 
-Or use **Play on my display** in the workbench. T = test, 1 = start, left mouse = fire, right mouse = pump, Esc = exit. Desktop mode has no automatic inputs or timeout. Its logs and save files live in `runtime/big-buck-desktop/`.
+Or use **Play on my display** in the workbench. T = test, 1 = start, left mouse = fire, right mouse = pump, Esc = exit (keys are customizable, see below). Desktop mode has no automatic inputs or timeout. Its logs and save files live in `runtime/big-buck-desktop/`.
 
 Headless inspection (no display required):
 
@@ -37,6 +37,28 @@ To build/test only the portable core without desktop dependencies:
 ```sh
 cargo test -p arcade-core
 ```
+
+## Game settings
+
+Each playable profile (Aliens, Jurassic Park, Big Buck Hunter, Super Cars) has a **⚙ Settings** button on its page. The window has three tabs:
+
+- **Controls**: key bindings, described below and saved to `controls.cfg`.
+- **Graphics**: resolution, windowed or fullscreen, VSync (game default / on / off) and renderer (GPU or Mesa software).
+- **Audio**: sound on/off and an optional PulseAudio/PipeWire output sink (`pactl list short sinks`).
+
+Graphics and audio choices are saved to `settings.cfg` in the project root, one `[game]` section each, and apply the next time the game starts. The defaults reproduce the original launcher: Aliens and Jurassic at 1360x768 windowed on the GPU, Big Buck Hunter in a 640x480 window with software rendering. Resolution is passed to the game's own `-f` option (Aliens, Jurassic) or sets the window size (Big Buck Hunter, whose aiming is rescaled). Fullscreen fills only the monitor the game window opens on (Aliens asks the window manager for it, because its built-in SDL 1.2 fullscreen covers every monitor); choose that monitor's resolution for a full picture. Fullscreen and non-default sizes are experimental. Diagnostic and probe runs ignore these settings.
+
+
+Keyboard bindings for Aliens, Jurassic Park and Big Buck Hunter live in `controls.cfg` in the project root. Edit them in the workbench's **Controls** section (click an action, then press the new key; **+** adds an extra key, **×** unbinds, Esc cancels), or edit the file directly. Changes apply the next time a game starts. A key already used by another action moves to the new action, and the other action takes the replaced key, so swapping two keys takes one click. Escape is reserved for exiting.
+
+| Game | Customizable | Fixed |
+| --- | --- | --- |
+| Aliens Armageddon | P1/P2 Start, Coin 1/2, **Test**, Service, Volume up/down (one key each) | Native mouse aim/fire |
+| Jurassic Park 2015 | Starts, coins, Test, Service, menu keys, Fire, Secondary (any number of keys, including MouseLeft/MouseRight) | Mouse aim and menu pointer |
+| Big Buck Hunter Pro | Starts, coins, Test, Service, keyboard trigger (ASCII keys only: no arrows/F-keys) | Mouse fire/pump |
+| Fast and Furious Super Cars | Steering, gas, brake, start, views, music, gears, coins, Test, Service, volume (any number of keys) | Esc exits |
+
+Aliens defaults: **T** opens the operator test menu, where T selects, **9** goes back and **Up/Down** move. Outside the menu Up/Down change volume, as on the cabinet.
 
 ## Included profiles
 
@@ -54,6 +76,7 @@ Jurassic Park deliberately uses the supplied `game_original` rather than the act
 - `crates/arcade-core`: static ELF/PE inspection, game reports, normalized cabinet input. No UI, graphics or process execution.
 - `crates/arcade-desktop`: egui/eframe browser, Linux startup backend, report export and local input monitor.
 - `crates/arcade-linux-shim`: 32-bit guest library adapting cabinet fullscreen requests into an ordinary GL window.
+- `crates/arcade-wine-hook`: freestanding 32-bit Windows DLL, loaded by Wine as Super Cars' `dinput8.dll`, that feeds keyboard input to the game's cabinet I/O layer.
 - `runtime`: generated executable copies, save data, virtual-display tools and startup captures; excluded from source control.
 - `docs/architecture.md`: platform boundaries and runtime implementation plan.
 - `games`: local game files, excluded from source control.
@@ -64,8 +87,12 @@ API references: [eframe 0.36.2](https://docs.rs/eframe/0.36.2/eframe/) and [gobl
 
 ## Jurassic Park investigation
 
-Jurassic Park now opens on the desktop with player-one mouse aiming and firing. Start reaches mission selection, and gameplay shots have produced a score of 75. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-jurassic games` or choose **Open Jurassic Park on my display**. **1** starts, **mouse** aims, **left click** fires, **T** opens test mode, and **Esc** exits. The Rust desktop profile uses the supplied plaintext scripts and omits unavailable cabinet security initialization. Audio, physical cabinet I/O and player-two aiming remain unfinished. The RIO connection overlay is suppressed in desktop mode. [Startup and control notes](docs/jurassic-startup.md) document the exact build checks and remaining work.
+Jurassic Park now opens on the desktop with player-one mouse aiming and firing. Start reaches mission selection, and gameplay shots have produced a score of 75. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-jurassic games` or choose **Open Jurassic Park on my display**. **1** starts, **mouse** aims, **left click** fires, **T** opens test mode, and **Esc** exits. The Rust desktop profile uses the supplied plaintext scripts and omits unavailable cabinet security initialization. Main audio plays through PulseAudio/PipeWire; cabinet/rumble audio, physical cabinet I/O and player-two aiming remain unfinished. The RIO connection overlay is suppressed in desktop mode. [Startup and control notes](docs/jurassic-startup.md) document the exact build checks and remaining work.
 
 ## Aliens Armageddon desktop runtime
 
-Aliens now reaches playable 3D gameplay on the desktop; the user confirmed working controls and visuals. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-aliens games` or choose **Open Aliens on my display**. **1** starts, the native desktop mouse maps handle aiming/firing, and **5** inserts a coin. The current copied settings are Spanish: choose **MODO HISTORIA** for Story Mode. Audio remains disabled; a full playthrough and player two are unverified. [Aliens startup notes](docs/aliens-startup.md) document the validated asset seeds, graphics adapters and runtime-only changes. Original files remain unchanged.
+Aliens now reaches playable 3D gameplay on the desktop; the user confirmed working controls and visuals. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-aliens games` or choose **Open Aliens on my display**. **1** starts, the native desktop mouse maps handle aiming/firing, **5** inserts a coin, **T** opens the test menu (all customizable) and **Esc** or the window's close button quits. The current copied settings are Spanish: choose **MODO HISTORIA** for Story Mode. Audio plays through PulseAudio/PipeWire; a full playthrough and player two are unverified. [Aliens startup notes](docs/aliens-startup.md) document the validated asset seeds, graphics adapters and runtime-only changes. Original files remain unchanged.
+
+## Fast and Furious Super Cars (Wine)
+
+Super Cars is a Windows build. It runs under system Wine 11 with WineD3D in a private prefix (`runtime/supercars/prefix`), with the game mapped to `C:\rawart`. The bundled MohkerzLoaderz/TeknoParrot files are not used. Build the input adapter once with `rustup target add i686-pc-windows-msvc` and `cargo build -p arcade-wine-hook --target i686-pc-windows-msvc --release`. Then run `cargo run -p arcade-desktop -- --launch-super-cars games` or choose **Open Super Cars on my display**. **Left/Right** steer, **Up** = gas, **Down** = brake, **5** = coin (4 per credit), **Enter** = start, **T** = test menu and **Esc** exits. Keys are customizable. The game logs a missing dongle but races still run. Analog wheels/gamepads, force feedback and the cabinet LED/H2O boards are not implemented. [Super Cars runtime notes](docs/supercars-startup.md) cover the adapter, graphics choices and remaining gaps.

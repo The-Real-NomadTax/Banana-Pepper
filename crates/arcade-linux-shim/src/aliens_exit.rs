@@ -1,0 +1,473 @@
+//! Desktop exit for Aliens. Its statically linked SDL 1.2 loads X11 itself, so
+//! its events cannot be interposed; the engine also ignores SDL_QUIT. A watcher
+//! thread on a separate XCB connection therefore provides:
+//! * Escape while an Aliens window has keyboard focus: exit the game.
+//! * The window close button: WM_DELETE_WINDOW is removed from the game
+//!   window's WM_PROTOCOLS, so the window manager disconnects the client
+//!   instead of sending an ignored close request.
+//! * Fullscreen (ARCADE_FULLSCREEN=1 from settings.cfg): the window manager is
+//!   asked for EWMH fullscreen, which fills the monitor the window is on. The
+//!   game's own SDL 1.2 fullscreen covers the whole X screen instead, i.e.
+//!   every monitor at once, so the launcher always builds a windowed image.
+//!
+//! Game windows are identified by the unique SDL_VIDEO_X11_WMCLASS the
+//! launcher sets. XCB is loaded with dlopen; it reports errors per request, so
+//! nothing here touches the game's own Xlib error handlers.
+use std::ffi::{c_char, c_int, c_void};
+use std::time::{Duration, Instant};
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Cookie {
+    sequence: u32,
+}
+#[repr(C)]
+struct FocusReply {
+    response_type: u8,
+    revert_to: u8,
+    sequence: u16,
+    length: u32,
+    focus: u32,
+}
+#[repr(C)]
+struct TreeReply {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    root: u32,
+    parent: u32,
+    children_len: u16,
+    pad1: [u8; 14],
+}
+#[repr(C)]
+struct KeymapReply {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    keys: [u8; 32],
+}
+#[repr(C)]
+struct AtomReply {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    atom: u32,
+}
+#[repr(C)]
+struct PropertyReply {
+    response_type: u8,
+    format: u8,
+    sequence: u16,
+    length: u32,
+    kind: u32,
+    bytes_after: u32,
+    value_len: u32,
+    pad0: [u8; 12],
+}
+#[repr(C)]
+struct ScreenIterator {
+    data: *const u32, // xcb_screen_t begins with its root window
+    rem: c_int,
+    index: c_int,
+}
+
+type Conn = *mut c_void;
+type Err = *mut *mut c_void;
+
+struct Xcb {
+    connection_has_error: unsafe extern "C" fn(Conn) -> c_int,
+    get_setup: unsafe extern "C" fn(Conn) -> *const c_void,
+    setup_roots_iterator: unsafe extern "C" fn(*const c_void) -> ScreenIterator,
+    flush: unsafe extern "C" fn(Conn) -> c_int,
+    poll_for_event: unsafe extern "C" fn(Conn) -> *mut c_void,
+    get_input_focus: unsafe extern "C" fn(Conn) -> Cookie,
+    get_input_focus_reply: unsafe extern "C" fn(Conn, Cookie, Err) -> *mut FocusReply,
+    query_tree: unsafe extern "C" fn(Conn, u32) -> Cookie,
+    query_tree_reply: unsafe extern "C" fn(Conn, Cookie, Err) -> *mut TreeReply,
+    query_tree_children: unsafe extern "C" fn(*const TreeReply) -> *const u32,
+    query_tree_children_length: unsafe extern "C" fn(*const TreeReply) -> c_int,
+    query_keymap: unsafe extern "C" fn(Conn) -> Cookie,
+    query_keymap_reply: unsafe extern "C" fn(Conn, Cookie, Err) -> *mut KeymapReply,
+    intern_atom: unsafe extern "C" fn(Conn, u8, u16, *const c_char) -> Cookie,
+    intern_atom_reply: unsafe extern "C" fn(Conn, Cookie, Err) -> *mut AtomReply,
+    get_property: unsafe extern "C" fn(Conn, u8, u32, u32, u32, u32, u32) -> Cookie,
+    get_property_reply: unsafe extern "C" fn(Conn, Cookie, Err) -> *mut PropertyReply,
+    get_property_value: unsafe extern "C" fn(*const PropertyReply) -> *const c_void,
+    get_property_value_length: unsafe extern "C" fn(*const PropertyReply) -> c_int,
+    delete_property: unsafe extern "C" fn(Conn, u32, u32) -> Cookie,
+    send_event: unsafe extern "C" fn(Conn, u8, u32, u32, *const u8) -> Cookie,
+}
+
+impl Xcb {
+    // Each symbol's type is fixed by the struct field it initializes.
+    #[allow(clippy::missing_transmute_annotations)]
+    fn load() -> Result<
+        (
+            Self,
+            unsafe extern "C" fn(*const c_char, *mut c_int) -> Conn,
+        ),
+        String,
+    > {
+        let handle =
+            unsafe { libc::dlopen(c"libxcb.so.1".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        if handle.is_null() {
+            return Err("libxcb.so.1 is unavailable".into());
+        }
+        macro_rules! sym {
+            ($name:literal) => {{
+                let pointer = unsafe { libc::dlsym(handle, $name.as_ptr()) };
+                if pointer.is_null() {
+                    return Err(format!("libxcb lacks {:?}", $name));
+                }
+                unsafe { std::mem::transmute::<*mut c_void, _>(pointer) }
+            }};
+        }
+        let connect = sym!(c"xcb_connect");
+        Ok((
+            Self {
+                connection_has_error: sym!(c"xcb_connection_has_error"),
+                get_setup: sym!(c"xcb_get_setup"),
+                setup_roots_iterator: sym!(c"xcb_setup_roots_iterator"),
+                flush: sym!(c"xcb_flush"),
+                poll_for_event: sym!(c"xcb_poll_for_event"),
+                get_input_focus: sym!(c"xcb_get_input_focus"),
+                get_input_focus_reply: sym!(c"xcb_get_input_focus_reply"),
+                query_tree: sym!(c"xcb_query_tree"),
+                query_tree_reply: sym!(c"xcb_query_tree_reply"),
+                query_tree_children: sym!(c"xcb_query_tree_children"),
+                query_tree_children_length: sym!(c"xcb_query_tree_children_length"),
+                query_keymap: sym!(c"xcb_query_keymap"),
+                query_keymap_reply: sym!(c"xcb_query_keymap_reply"),
+                intern_atom: sym!(c"xcb_intern_atom"),
+                intern_atom_reply: sym!(c"xcb_intern_atom_reply"),
+                get_property: sym!(c"xcb_get_property"),
+                get_property_reply: sym!(c"xcb_get_property_reply"),
+                get_property_value: sym!(c"xcb_get_property_value"),
+                get_property_value_length: sym!(c"xcb_get_property_value_length"),
+                delete_property: sym!(c"xcb_delete_property"),
+                send_event: sym!(c"xcb_send_event"),
+            },
+            connect,
+        ))
+    }
+}
+
+/// Owned XCB reply/error memory (malloc'd by libxcb).
+fn take<T>(reply: *mut T, error: *mut c_void) -> Option<*mut T> {
+    if !error.is_null() {
+        unsafe { libc::free(error) };
+    }
+    (!reply.is_null()).then_some(reply)
+}
+fn release<T>(reply: *mut T) {
+    unsafe { libc::free(reply.cast()) };
+}
+
+const ATOM_WM_CLASS: u32 = 67;
+const ATOM_STRING: u32 = 31;
+const ANY_PROPERTY_TYPE: u32 = 0;
+/// Evdev keycode for Escape (Xorg and XWayland).
+const ESCAPE_KEYCODE: usize = 9;
+
+pub struct Watcher {
+    x: Xcb,
+    conn: Conn,
+    root: u32,
+    wm_protocols: u32,
+    net_wm_state: u32,
+    net_wm_state_fullscreen: u32,
+    /// Windows already asked to go fullscreen.
+    fullscreen_requested: Vec<u32>,
+    class: Vec<u8>,
+    /// Top-level windows carrying the launcher's WM_CLASS.
+    pub windows: Vec<u32>,
+}
+
+impl Watcher {
+    pub fn connect(class: &str) -> Result<Self, String> {
+        let (x, connect) = Xcb::load()?;
+        let conn = unsafe { connect(std::ptr::null(), std::ptr::null_mut()) };
+        if conn.is_null() || unsafe { (x.connection_has_error)(conn) } != 0 {
+            return Err("cannot connect to the X display".into());
+        }
+        let root = unsafe { *(x.setup_roots_iterator)((x.get_setup)(conn)).data };
+        let atom = |name: &[u8]| -> Result<u32, String> {
+            let mut error = std::ptr::null_mut();
+            let cookie =
+                unsafe { (x.intern_atom)(conn, 0, name.len() as u16, name.as_ptr().cast()) };
+            let reply = take(
+                unsafe { (x.intern_atom_reply)(conn, cookie, &mut error) },
+                error,
+            )
+            .ok_or_else(|| format!("cannot intern {}", String::from_utf8_lossy(name)))?;
+            let atom = unsafe { (*reply).atom };
+            release(reply);
+            Ok(atom)
+        };
+        let wm_protocols = atom(b"WM_PROTOCOLS")?;
+        let net_wm_state = atom(b"_NET_WM_STATE")?;
+        let net_wm_state_fullscreen = atom(b"_NET_WM_STATE_FULLSCREEN")?;
+        Ok(Self {
+            x,
+            conn,
+            root,
+            wm_protocols,
+            net_wm_state,
+            net_wm_state_fullscreen,
+            fullscreen_requested: Vec::new(),
+            class: class.as_bytes().to_vec(),
+            windows: Vec::new(),
+        })
+    }
+
+    fn drain_events(&self) {
+        loop {
+            let event = unsafe { (self.x.poll_for_event)(self.conn) };
+            if event.is_null() {
+                break;
+            }
+            release(event);
+        }
+    }
+
+    fn children(&self, window: u32) -> Option<(u32, Vec<u32>)> {
+        let mut error = std::ptr::null_mut();
+        let cookie = unsafe { (self.x.query_tree)(self.conn, window) };
+        let reply = take(
+            unsafe { (self.x.query_tree_reply)(self.conn, cookie, &mut error) },
+            error,
+        )?;
+        let count = unsafe { (self.x.query_tree_children_length)(reply) }.max(0) as usize;
+        let children = unsafe { (self.x.query_tree_children)(reply) };
+        let list = if children.is_null() {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(children, count) }.to_vec()
+        };
+        let parent = unsafe { (*reply).parent };
+        release(reply);
+        Some((parent, list))
+    }
+
+    /// Property bytes (8/32-bit formats both returned as raw bytes).
+    fn property(&self, window: u32, atom: u32, kind: u32) -> Option<Vec<u8>> {
+        let mut error = std::ptr::null_mut();
+        let cookie = unsafe { (self.x.get_property)(self.conn, 0, window, atom, kind, 0, 64) };
+        let reply = take(
+            unsafe { (self.x.get_property_reply)(self.conn, cookie, &mut error) },
+            error,
+        )?;
+        let length = unsafe { (self.x.get_property_value_length)(reply) }.max(0) as usize;
+        let value = unsafe { (self.x.get_property_value)(reply) };
+        let bytes = if value.is_null() || length == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(value.cast::<u8>(), length) }.to_vec()
+        };
+        release(reply);
+        Some(bytes)
+    }
+
+    fn is_game(&self, window: u32) -> bool {
+        // WM_CLASS is "instance\0class\0"; match the class component.
+        self.property(window, ATOM_WM_CLASS, ATOM_STRING)
+            .is_some_and(|value| value.split(|b| *b == 0).nth(1) == Some(self.class.as_slice()))
+    }
+
+    /// Search root → frame → wrapper → client for windows with our class.
+    pub fn find_windows(&mut self) {
+        let mut found = Vec::new();
+        let mut level = vec![self.root];
+        for _ in 0..4 {
+            let mut next = Vec::new();
+            for window in level {
+                if let Some((_, children)) = self.children(window) {
+                    for child in children {
+                        if self.is_game(child) {
+                            found.push(child);
+                        } else {
+                            next.push(child);
+                        }
+                    }
+                }
+            }
+            level = next;
+        }
+        self.windows = found;
+    }
+
+    /// Re-validate known windows; rescan if any disappeared or none are known.
+    pub fn refresh(&mut self) {
+        if self.windows.is_empty() || !self.windows.iter().all(|w| self.is_game(*w)) {
+            self.find_windows();
+        }
+    }
+
+    /// Remove WM_PROTOCOLS so the window manager closes the client directly.
+    /// Returns how many windows changed. SDL may set it again; call regularly.
+    pub fn enable_close_button(&self) -> usize {
+        let mut changed = 0;
+        for &window in &self.windows {
+            if self
+                .property(window, self.wm_protocols, ANY_PROPERTY_TYPE)
+                .is_some_and(|v| !v.is_empty())
+            {
+                unsafe { (self.x.delete_property)(self.conn, window, self.wm_protocols) };
+                changed += 1;
+            }
+        }
+        unsafe { (self.x.flush)(self.conn) };
+        self.drain_events();
+        changed
+    }
+
+    /// Ask the window manager (EWMH) to make each new game window fullscreen
+    /// on its current monitor. Returns how many requests were sent.
+    pub fn request_fullscreen(&mut self) -> usize {
+        let mut sent = 0;
+        for &window in &self.windows {
+            if self.fullscreen_requested.contains(&window) {
+                continue;
+            }
+            // xcb_client_message_event_t: type 33, format 32, sequence,
+            // window, message type, then five 32-bit data words.
+            let mut event = [0u8; 32];
+            event[0] = 33;
+            event[1] = 32;
+            event[4..8].copy_from_slice(&window.to_ne_bytes());
+            event[8..12].copy_from_slice(&self.net_wm_state.to_ne_bytes());
+            for (i, word) in [1u32, self.net_wm_state_fullscreen, 0, 1, 0]
+                .into_iter()
+                .enumerate()
+            {
+                // _NET_WM_STATE_ADD, property, none, source = application.
+                event[12 + i * 4..16 + i * 4].copy_from_slice(&word.to_ne_bytes());
+            }
+            const SUBSTRUCTURE_NOTIFY_AND_REDIRECT: u32 = (1 << 19) | (1 << 20);
+            unsafe {
+                (self.x.send_event)(
+                    self.conn,
+                    0,
+                    self.root,
+                    SUBSTRUCTURE_NOTIFY_AND_REDIRECT,
+                    event.as_ptr(),
+                )
+            };
+            self.fullscreen_requested.push(window);
+            sent += 1;
+        }
+        if sent > 0 {
+            unsafe { (self.x.flush)(self.conn) };
+        }
+        sent
+    }
+
+    fn focused_game(&self) -> bool {
+        let mut error = std::ptr::null_mut();
+        let cookie = unsafe { (self.x.get_input_focus)(self.conn) };
+        let Some(reply) = take(
+            unsafe { (self.x.get_input_focus_reply)(self.conn, cookie, &mut error) },
+            error,
+        ) else {
+            return false;
+        };
+        let mut window = unsafe { (*reply).focus };
+        release(reply);
+        // 0 = None, 1 = PointerRoot. Walk up from SDL's child window.
+        for _ in 0..6 {
+            if window <= 1 || window == self.root {
+                return false;
+            }
+            if self.windows.contains(&window) {
+                return true;
+            }
+            match self.children(window) {
+                Some((parent, _)) => window = parent,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    fn escape_down(&self) -> bool {
+        let mut error = std::ptr::null_mut();
+        let cookie = unsafe { (self.x.query_keymap)(self.conn) };
+        let Some(reply) = take(
+            unsafe { (self.x.query_keymap_reply)(self.conn, cookie, &mut error) },
+            error,
+        ) else {
+            return false;
+        };
+        let down = unsafe { (*reply).keys[ESCAPE_KEYCODE / 8] } & (1 << (ESCAPE_KEYCODE % 8)) != 0;
+        release(reply);
+        down
+    }
+
+    pub fn escape_in_game(&self) -> bool {
+        !self.windows.is_empty() && self.escape_down() && self.focused_game()
+    }
+
+    pub fn alive(&self) -> bool {
+        unsafe { (self.x.connection_has_error)(self.conn) == 0 }
+    }
+}
+
+/// Start the watcher thread for launcher-run Aliens sessions.
+pub fn start() {
+    if !std::env::var_os("ARCADE_ALIENS").is_some_and(|v| v == "1") {
+        return;
+    }
+    let Some(class) = std::env::var("SDL_VIDEO_X11_WMCLASS")
+        .ok()
+        .filter(|c| !c.is_empty())
+    else {
+        eprintln!("[aliens] desktop exit disabled: SDL_VIDEO_X11_WMCLASS not set by the launcher");
+        return;
+    };
+    let _ = std::thread::Builder::new()
+        .name("arcade-exit".into())
+        .spawn(move || {
+            let mut watcher = match Watcher::connect(&class) {
+                Ok(watcher) => watcher,
+                Err(error) => {
+                    eprintln!("[aliens] desktop exit disabled: {error}");
+                    return;
+                }
+            };
+            eprintln!("[aliens] desktop exit: Esc or the window close button");
+            let fullscreen = std::env::var_os("ARCADE_FULLSCREEN").is_some_and(|v| v == "1");
+            let mut last_scan = Instant::now() - Duration::from_secs(10);
+            let mut announced = false;
+            while watcher.alive() {
+                if last_scan.elapsed() >= Duration::from_secs(1) {
+                    last_scan = Instant::now();
+                    watcher.refresh();
+                    if watcher.enable_close_button() > 0 && !announced {
+                        announced = true;
+                        eprintln!("[aliens] window close button enabled");
+                    }
+                    if fullscreen && watcher.request_fullscreen() > 0 {
+                        eprintln!("[aliens] requested fullscreen on the window's monitor");
+                    }
+                }
+                if watcher.escape_in_game() {
+                    eprintln!("[aliens] Esc pressed; exiting");
+                    unsafe {
+                        libc::fflush(std::ptr::null_mut());
+                        libc::_exit(0);
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        });
+}
+
+// xcb reply structs are fixed-size X11 wire layouts.
+const _: () = assert!(std::mem::size_of::<FocusReply>() == 12);
+const _: () = assert!(std::mem::size_of::<TreeReply>() == 32);
+const _: () = assert!(std::mem::size_of::<KeymapReply>() == 40);
+const _: () = assert!(std::mem::size_of::<AtomReply>() == 12);
+const _: () = assert!(std::mem::size_of::<PropertyReply>() == 32);

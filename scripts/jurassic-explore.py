@@ -14,6 +14,9 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from arcade_audio import sdl_audio_args
+from arcade_settings import guest_env_args, resolution
+
 
 def stage_shader_overrides(game, output):
     """Keep color/bloom output conventions consistent in runtime-only copies."""
@@ -130,6 +133,12 @@ def main():
             args += ["--setenv", "ARCADE_JURASSIC_LAUNCH", "1"]
         else:
             args = ["timeout", "-k", "1s", f"{options.seconds + 15}s"] + args
+        # Host SDL 1.2 (sdl12-compat) forwards to SDL2/SDL3, whose Pulse driver is "pulseaudio".
+        if options.launch and options.desktop:
+            audio_args, audio_driver = sdl_audio_args("pulseaudio")
+        else:
+            audio_args, audio_driver = ["--setenv", "SDL_AUDIODRIVER", "dummy"], "dummy"
+        args += audio_args
         if options.desktop:
             display = os.environ.get("DISPLAY", "")
             number = display.removeprefix(":").split(".")[0]
@@ -140,6 +149,13 @@ def main():
                 raise SystemExit(f"Desktop X11 socket missing: {socket}")
             args += ["--ro-bind", str(socket), str(socket), "--setenv", "DISPLAY", display,
                      "--setenv", "ARCADE_JURASSIC_DESKTOP", "1"]
+            # Key bindings from controls.cfg, prepared by the Rust launcher.
+            keys = os.environ.get("ARCADE_JURASSIC_KEYS")
+            if keys:
+                args += ["--setenv", "ARCADE_JURASSIC_KEYS", keys]
+            # Resolution, fullscreen, vsync and renderer from settings.cfg.
+            if options.launch:
+                args += ["--setenv", "ARCADE_RESOLUTION", resolution()] + guest_env_args()
             authority = Path(os.environ.get("XAUTHORITY", str(Path.home() / ".Xauthority")))
             if authority.is_file():
                 args += ["--ro-bind", str(authority), "/tmp/game.Xauthority", "--setenv", "XAUTHORITY", "/tmp/game.Xauthority"]
@@ -150,7 +166,7 @@ def main():
                 if Path(directory).exists():
                     args += ["--ro-bind", directory, directory]
         args += ["--chdir", "/pm", "/bin/bash", "/work/jurassic-explore-guest.sh", str(options.seconds)]
-        print(f"{'DESKTOP STARTUP' if options.launch else 'DEBUG EXPERIMENT'}: {len(programs)} plaintext backups; cabinet security initialization omitted; audio disabled.", flush=True)
+        print(f"{'DESKTOP STARTUP' if options.launch else 'DEBUG EXPERIMENT'}: {len(programs)} plaintext backups; cabinet security initialization omitted; audio: {audio_driver}.", flush=True)
         print(f"{'Desktop' if options.desktop else 'Private-display'} captures and runtime log: {output}", flush=True)
         status = subprocess.run(args, check=False).returncode
         log = (output / ("game.log" if options.launch else "gdb.log")).read_text(errors="replace")
@@ -165,7 +181,7 @@ def main():
             "cabinet_security_initialization": "omitted; supplied plaintext assets used; no HASP decryption",
             "plaintext_program_backups": len(programs),
             "shader_overrides": [str(destination) for _, destination in shader_overrides],
-            "audio_driver": "dummy",
+            "audio_driver": audio_driver,
             "display": "desktop X11" if options.desktop else "private Xvfb",
             "window_titles": windows.read_text(errors="replace") if windows.exists() else "",
             "swap_buffers_observed": "SDL_GL_SwapBuffers" in log,

@@ -89,16 +89,58 @@ extern "C" fn success() -> c_int {
     0
 }
 
+/// (ASCII key, switch index); matches arcade-core's default controls.cfg.
+const DEFAULT_KEYS: &[(u8, usize)] = &[
+    (b'1', 5),
+    (13, 5),
+    (b'2', 6),
+    (b'5', 7),
+    (b'6', 8),
+    (b't', 11),
+    (b'9', 10),
+    (b' ', 1),
+];
+static KEYS: std::sync::OnceLock<Vec<(u8, usize)>> = std::sync::OnceLock::new();
+
+/// Parses ARCADE_BBH_KEYS ("switch:ascii,..."), written from controls.cfg.
+fn parse_keys(value: &str) -> Result<Vec<(u8, usize)>, String> {
+    let mut keys = Vec::new();
+    for pair in value.split(',').filter(|p| !p.trim().is_empty()) {
+        let parsed = pair.split_once(':').and_then(|(index, key)| {
+            Some((
+                index.trim().parse::<usize>().ok()?,
+                key.trim().parse::<u8>().ok()?,
+            ))
+        });
+        match parsed {
+            Some((index @ (1 | 5 | 6 | 7 | 8 | 10 | 11), key))
+                if (1..128).contains(&key) && key != 27 =>
+            {
+                keys.push((key.to_ascii_lowercase(), index));
+            }
+            _ => return Err(format!("unsupported key binding \"{pair}\"")),
+        }
+    }
+    Ok(keys)
+}
+
+fn switch_for(key: u8) -> Option<usize> {
+    let keys = KEYS.get_or_init(|| match std::env::var("ARCADE_BBH_KEYS") {
+        Ok(value) => parse_keys(&value).unwrap_or_else(|error| {
+            eprintln!("[arcade] {error}; using default keys");
+            DEFAULT_KEYS.to_vec()
+        }),
+        Err(_) => DEFAULT_KEYS.to_vec(),
+    });
+    let key = key.to_ascii_lowercase();
+    keys.iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, index)| *index)
+}
+
 pub fn key(key: u8, down: bool) {
-    let index = match key.to_ascii_lowercase() {
-        b't' => 11,
-        b'5' => 7,
-        b'6' => 8,
-        b'1' | 13 => 5,
-        b'2' => 6,
-        b'9' => 10,
-        b' ' => 1,
-        _ => return,
+    let Some(index) = switch_for(key) else {
+        return;
     };
     let mut switches = SWITCHES.lock().unwrap_or_else(|e| e.into_inner());
     switches.set(index, down);
@@ -207,5 +249,20 @@ mod tests {
         key(b't', false);
         assert_eq!(unsafe { *(counters as *const u32).add(11) }, 2);
         assert_eq!(unsafe { arcade_jamma_op(0xff) }, -9000);
+    }
+
+    #[test]
+    fn configured_keys_parse_and_reject_unknown_switches() {
+        // Same order as arcade-core's default controls.cfg output.
+        let parsed = parse_keys("5:49,5:13,6:50,7:53,8:54,11:116,10:57,1:32").unwrap();
+        let mut expected = DEFAULT_KEYS.to_vec();
+        expected.sort();
+        let mut sorted = parsed.clone();
+        sorted.sort();
+        assert_eq!(sorted, expected);
+        assert_eq!(parse_keys("11:70").unwrap(), [(b'f', 11)]);
+        assert!(parse_keys("3:49").is_err());
+        assert!(parse_keys("11:27").is_err());
+        assert!(parse_keys("11").is_err());
     }
 }

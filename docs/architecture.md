@@ -21,7 +21,7 @@ Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A
 - Aliens imports legacy OpenGL/GLU/GLUT, ESD, a hardcoded `/usr/lib/libcsv.so`, and declares `/usr/lib/PhysX/v2.8.1/` as RPATH. Installed 64-bit equivalents cannot satisfy a 32-bit process.
 - Big Buck Hunter's supplied directory is spelled `Big Bug Hunter Pro`; the profile preserves that spelling.
 - Jurassic Park has multiple executable variants and a pre-existing TeknoParrot setup. Its documentation is historical evidence, not a dependency or verified explanation for our runtime.
-- Super Cars includes `sdaemon.exe` and a separate bundled loader. The profile inspects `sdaemon.exe` directly.
+- Super Cars includes `sdaemon.exe` and a separate bundled loader. The profile inspects and runs `sdaemon.exe` directly; the loader is not used.
 
 ## Implementation sequence
 
@@ -30,7 +30,7 @@ Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A
 3. Specify its observed cabinet transport and message semantics. Implement a Rust adapter with captured, reproducible protocol tests and a diagnostic device simulator. The current mouse monitor is not that simulator.
 4. Connect normalized gun/coin/start state, add device selection, calibration and focus/disconnect release handling. Confirm boot, attract mode, credit, start, play and clean shutdown.
 5. Repeat for the next Linux titles; share only interfaces shown to be compatible.
-6. Add a Windows host backend and per-game Windows I/O adapter. Running the PE game on Linux would additionally require a Windows API compatibility layer. Wine/Proton is an optional future dependency decision, not integrated here.
+6. Add a Windows host backend and per-game Windows I/O adapter. On Linux, Super Cars now runs under Wine (see `supercars-startup.md`), with its I/O adapter as a freestanding Windows DLL (`crates/arcade-wine-hook`). A native Windows backend would reuse that DLL.
 
 ## Platform support targets
 

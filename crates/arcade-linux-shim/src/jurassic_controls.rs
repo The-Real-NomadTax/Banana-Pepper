@@ -28,7 +28,9 @@ const fn map(source: i32, target: i32) -> InputMap {
 
 // Sources are raw IO/SDL enums; targets are CoreInput enums. Keyboard symbols
 // match in both enums, while cabinet and gun inputs have different layouts.
-const MAPS: &[InputMap] = &[
+// Button bindings come from controls.cfg via ARCADE_JURASSIC_KEYS
+// ("target:source,..."); these defaults apply when it is absent.
+const DEFAULT_BUTTONS: &[InputMap] = &[
     map(49, 371),
     map(50, 372), // starts: 1, 2
     map(53, 379),
@@ -39,39 +41,101 @@ const MAPS: &[InputMap] = &[
     map(274, 384),
     map(13, 385),
     map(8, 386), // menus
-    map(324, 331),
-    map(325, 332), // mouse -> player one aim
     map(326, 333),
     map(327, 334), // left trigger, right secondary
+];
+// Mouse position always drives player-one aim and the menu pointer.
+const POINTER_MAPS: &[InputMap] = &[
+    map(324, 331),
+    map(325, 332), // mouse -> player one aim
     map(324, 387),
     map(325, 388),
     map(326, 391),
     map(326, 392), // menu pointer
 ];
+const BUTTON_TARGETS: &[i32] = &[371, 372, 379, 380, 378, 377, 383, 384, 385, 386, 333, 334];
+
+static MAPS: std::sync::OnceLock<Vec<InputMap>> = std::sync::OnceLock::new();
+
+fn parse_buttons(value: &str) -> Result<Vec<InputMap>, String> {
+    let mut maps = Vec::new();
+    for pair in value.split(',').filter(|p| !p.trim().is_empty()) {
+        let (target, source) = pair
+            .split_once(':')
+            .ok_or_else(|| format!("bad key binding \"{pair}\""))?;
+        let target: i32 = target
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad target \"{pair}\""))?;
+        let source: i32 = source
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad key \"{pair}\""))?;
+        if !BUTTON_TARGETS.contains(&target) || !(1..=327).contains(&source) || source == 27 {
+            return Err(format!("unsupported key binding \"{pair}\""));
+        }
+        maps.push(map(source, target));
+    }
+    Ok(maps)
+}
+
+fn build_maps(buttons: Option<&str>) -> Result<Vec<InputMap>, String> {
+    let mut maps = match buttons {
+        Some(value) => parse_buttons(value)?,
+        None => DEFAULT_BUTTONS.to_vec(),
+    };
+    // Pointer maps last so they win over any analog destination overlap.
+    maps.extend_from_slice(POINTER_MAPS);
+    maps.dedup();
+    Ok(maps)
+}
+
+fn maps() -> &'static [InputMap] {
+    MAPS.get().map(Vec::as_slice).unwrap_or(&[])
+}
 
 // GameInputMaps can add/rebuild cabinet maps after our first SDL poll. Analog
 // maps overwrite earlier destinations, so desktop maps must remain last.
-fn order_maps(table: &mut [InputMap], length: usize) -> Result<usize, &'static str> {
+fn order_maps(
+    table: &mut [InputMap],
+    length: usize,
+    desktop: &[InputMap],
+) -> Result<usize, &'static str> {
     if length > table.len() {
         return Err("invalid input map count");
     }
-    let native_count = table[..length].iter().filter(|p| !MAPS.contains(p)).count();
-    if native_count + MAPS.len() > table.len() {
+    let native_count = table[..length]
+        .iter()
+        .filter(|p| !desktop.contains(p))
+        .count();
+    if native_count + desktop.len() > table.len() {
         return Err("input map table is full");
     }
     let mut kept = 0;
     for i in 0..length {
         let entry = table[i];
-        if !MAPS.contains(&entry) {
+        if !desktop.contains(&entry) {
             table[kept] = entry;
             kept += 1;
         }
     }
-    table[kept..kept + MAPS.len()].copy_from_slice(MAPS);
-    Ok(kept + MAPS.len())
+    table[kept..kept + desktop.len()].copy_from_slice(desktop);
+    Ok(kept + desktop.len())
 }
 
 pub fn initialize() -> Result<(), String> {
+    let buttons = std::env::var("ARCADE_JURASSIC_KEYS").ok();
+    let built = build_maps(buttons.as_deref())?;
+    eprintln!(
+        "[jurassic] {} desktop input maps ({})",
+        built.len(),
+        if buttons.is_some() {
+            "controls.cfg"
+        } else {
+            "defaults"
+        }
+    );
+    let _ = MAPS.set(built);
     // The launcher also verifies the complete executable SHA-256. These checks
     // guard the pointer and mapping ABI at the point where the shim uses it.
     for (address, expected) in [
@@ -108,7 +172,7 @@ pub unsafe fn update() {
     );
     let count = 0x08b505f8 as *mut u32;
     let table = unsafe { std::slice::from_raw_parts_mut(0x08db6e80 as *mut InputMap, 1024) };
-    match order_maps(table, unsafe { count.read() } as usize) {
+    match order_maps(table, unsafe { count.read() } as usize, maps()) {
         Ok(length) => unsafe { count.write(length as u32) },
         Err(error) => {
             eprintln!("[jurassic] desktop controls stopped: {error}");
@@ -128,27 +192,46 @@ mod tests {
 
     #[test]
     fn desktop_aim_follows_late_cabinet_maps_and_survives_rebuilds() {
+        let desktop = build_maps(None).unwrap();
         let mut table = [InputMap::default(); 1024];
-        let first = order_maps(&mut table, 0).unwrap();
+        let first = order_maps(&mut table, 0, &desktop).unwrap();
         let cabinet = map(351, 331);
         table[first] = cabinet;
-        let length = order_maps(&mut table, first + 1).unwrap();
+        let length = order_maps(&mut table, first + 1, &desktop).unwrap();
         assert_eq!(table[0], cabinet);
         assert_eq!(
             table[..length].iter().rfind(|m| m.target == 331),
             Some(&map(324, 331))
         );
-        assert_eq!(order_maps(&mut table, length).unwrap(), length);
-        assert_eq!(order_maps(&mut table, 0).unwrap(), MAPS.len());
+        assert_eq!(order_maps(&mut table, length, &desktop).unwrap(), length);
+        assert_eq!(order_maps(&mut table, 0, &desktop).unwrap(), desktop.len());
     }
 
     #[test]
     fn invalid_or_full_tables_are_unchanged() {
+        let desktop = build_maps(None).unwrap();
         let mut table = [map(1, 2); 20];
         let original = table;
-        assert!(order_maps(&mut table, 21).is_err());
+        assert!(order_maps(&mut table, 21, &desktop).is_err());
         assert_eq!(table, original);
-        assert!(order_maps(&mut table, 20).is_err());
+        assert!(order_maps(&mut table, 20, &desktop).is_err());
         assert_eq!(table, original);
+    }
+
+    #[test]
+    fn configured_buttons_replace_defaults_and_keep_pointer_maps() {
+        let defaults = build_maps(None).unwrap();
+        // Same order as arcade-core's default controls.cfg output.
+        let configured = build_maps(Some(
+            "371:49,372:50,379:53,380:54,378:116,377:57,383:273,384:274,385:13,386:8,333:326,334:327",
+        ))
+        .unwrap();
+        assert_eq!(configured, defaults);
+        let custom = build_maps(Some("378:290,333:32,333:326")).unwrap();
+        assert_eq!(&custom[..3], &[map(290, 378), map(32, 333), map(326, 333)]);
+        assert!(custom.ends_with(POINTER_MAPS));
+        assert!(build_maps(Some("999:49")).is_err());
+        assert!(build_maps(Some("378:27")).is_err());
+        assert!(build_maps(Some("378")).is_err());
     }
 }

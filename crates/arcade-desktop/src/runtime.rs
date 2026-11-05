@@ -1,5 +1,27 @@
 //! Linux-specific process orchestration. No execution APIs in arcade-core.
+use arcade_core::settings::{GameSettings, Settings};
 use std::path::Path;
+
+/// Per-game settings from settings.cfg in the project root.
+pub fn game_settings(project: &Path, game: &str) -> Result<GameSettings, String> {
+    Ok(Settings::load(&project.join("settings.cfg"))?
+        .game(game)
+        .clone())
+}
+
+/// Hand settings to a Python launch harness: audio choices for arcade_audio.py
+/// and guest environment variables for arcade_settings.py.
+pub fn settings_env(command: &mut std::process::Command, settings: &GameSettings) {
+    command
+        .env("ARCADE_AUDIO", if settings.audio { "1" } else { "0" })
+        .env("ARCADE_RESOLUTION", settings.resolution_text())
+        .env("ARCADE_GUEST_ENV", settings.guest_env_value());
+    if settings.audio_sink.is_empty() {
+        command.env_remove("ARCADE_AUDIO_SINK");
+    } else {
+        command.env("ARCADE_AUDIO_SINK", &settings.audio_sink);
+    }
+}
 
 #[cfg(target_os = "linux")]
 fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<String, String> {
@@ -29,6 +51,13 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
         .join("../..")
         .canonicalize()
         .map_err(|e| e.to_string())?;
+    // Settings apply to the desktop session; the private-display probe keeps
+    // its fixed software-rendered, audio-enabled configuration.
+    let settings = if desktop {
+        game_settings(&project, "big_buck")?
+    } else {
+        GameSettings::defaults(arcade_core::settings::profile("big_buck").expect("profile"))
+    };
     let shim = project.join("target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so");
     if !shim.is_file() {
         return Err("Build the guest shim first: cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu".into());
@@ -138,7 +167,7 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
             })
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| runtime.join("pulse/native"));
-        if socket.exists() {
+        if settings.audio && socket.exists() {
             command.arg("--ro-bind").arg(socket).args([
                 "/tmp/arcade-pulse/native",
                 "--setenv",
@@ -148,7 +177,10 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
                 "ARCADE_BBH_AUDIO",
                 "1",
             ]);
-            if let Some(sink) = std::env::var_os("ARCADE_AUDIO_SINK") {
+            let sink = (!settings.audio_sink.is_empty())
+                .then(|| settings.audio_sink.clone().into())
+                .or_else(|| std::env::var_os("ARCADE_AUDIO_SINK"));
+            if let Some(sink) = sink {
                 command.args(["--setenv", "PULSE_SINK"]).arg(sink);
             }
             let cookie = std::env::var_os("PULSE_COOKIE")
@@ -217,16 +249,36 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
                 "/tmp/arcade.Xauthority",
             ]);
         }
+        let controls = arcade_core::controls::Bindings::load(&project.join("controls.cfg"))?;
+        command
+            .args(["--setenv", "ARCADE_BBH_KEYS"])
+            .arg(controls.env_value("big_buck")?);
+        // Window size, fullscreen, vsync and renderer from settings.cfg.
+        for (key, value) in settings.guest_env() {
+            command.args(["--setenv", key]).arg(value);
+        }
+        if settings.renderer == arcade_core::settings::Renderer::Gpu {
+            for device in [
+                "/dev/dri",
+                "/dev/nvidia0",
+                "/dev/nvidiactl",
+                "/dev/nvidia-modeset",
+                "/dev/nvidia-uvm",
+            ] {
+                if Path::new(device).exists() {
+                    command.args(["--dev-bind", device, device]);
+                }
+            }
+            for path in ["/sys", "/proc/driver/nvidia"] {
+                if Path::new(path).exists() {
+                    command.args(["--ro-bind", path, path]);
+                }
+            }
+        }
         command.args([
             "--setenv",
             "HOME",
             "/tmp",
-            "--setenv",
-            "LIBGL_ALWAYS_SOFTWARE",
-            "1",
-            "--setenv",
-            "__GLX_VENDOR_LIBRARY_NAME",
-            "mesa",
             "--setenv",
             "ARCADE_BBH_ADAPTER",
             "1",

@@ -1,0 +1,12 @@
+# The Super Cars Wine hook is a freestanding 32-bit Windows DLL: no MSVC
+# toolchain or CRT is needed, only LLVM's lld-link.
+[target.i686-pc-windows-msvc]
+linker = "lld-link"
+rustflags = [
+    "-C", "panic=abort",
+    "-C", "link-arg=/NODEFAULTLIB",
+    "-C", "link-arg=/ENTRY:_DllMainCRTStartup@12",
+    "-C", "link-arg=/EXPORT:DirectInput8Create=_DirectInput8Create@20",
+    "-C", "link-arg=/SAFESEH:NO",
+    "-C", "link-arg=/OPT:REF",
+]

@@ -9,9 +9,9 @@ cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu
 cargo run -p arcade-desktop -- --launch-jurassic games
 ```
 
-The workbench also has **Open Jurassic Park on my display**. Startup may show a black loading window for roughly 15 seconds before the attract video. The game opens in a 1360×768 window; **Esc** or closing the window exits. The session remains open until exited. Main audio currently uses SDL's dummy backend; cabinet/rumble audio is not implemented.
+The workbench also has **Open Jurassic Park on my display**. Startup may show a black loading window for roughly 15 seconds before the attract video. The game opens in a 1360×768 window; **Esc** or closing the window exits. The session remains open until exited. Main audio uses SDL's `pulseaudio` driver through your desktop sound server (`ARCADE_AUDIO=0` forces silence); cabinet/rumble audio is not implemented.
 
-Desktop controls (click/focus the game window first):
+Default desktop controls (click/focus the game window first). Everything except mouse aim can be rebound in the workbench's **Controls** section or `controls.cfg`. The launcher passes the bindings to the shim as `ARCADE_JURASSIC_KEYS`:
 
 | Input | Action |
 | --- | --- |

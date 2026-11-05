@@ -5,7 +5,24 @@ use std::{fs, io::Write, path::Path};
 pub const ORIGINAL_SHA256: &str =
     "297c07db82b531e276d4ea7ceb4a11c9ce3aacb436f63526c179c2fd4de3e4db";
 
-pub fn prepare(source: &Path, destination: &Path) -> Result<(), String> {
+/// Cabinet switch source operand → `mov [esp], source` sites in input setup.
+/// Targets: P1/P2 Start (+ menu confirm), Test (+ menu select), Service (+ menu
+/// back), Volume up/down (+ menu up/down), Coin 1/2. The third Start/Test
+/// sites belong to a second input-map setup that re-registers those switches.
+const SWITCH_SITES: &[(u32, &[usize])] = &[
+    (0x154, &[0x08081376, 0x0808138a, 0x08193dce]),
+    (0x155, &[0x0808139e, 0x080813b2, 0x08193de2]),
+    (0x150, &[0x080813c6, 0x080813da, 0x08193dba]),
+    (0x151, &[0x080813ee, 0x08081402]),
+    (0x152, &[0x08081416, 0x0808142a]),
+    (0x153, &[0x0808143e, 0x08081452]),
+    (0x14c, &[0x08081466]),
+    (0x14d, &[0x0808147a]),
+];
+
+/// Writes a separate runtime image and returns its SHA-256. `keys` holds
+/// (cabinet switch source, SDL key symbol) pairs from [`crate::controls`].
+pub fn prepare(source: &Path, destination: &Path, keys: &[(u32, u32)]) -> Result<String, String> {
     let mut bytes = fs::read(source).map_err(|e| e.to_string())?;
     if format!("{:x}", Sha256::digest(&bytes)) != ORIGINAL_SHA256 {
         return Err("Unrecognized Aliens build; no changes applied".into());
@@ -53,7 +70,9 @@ pub fn prepare(source: &Path, destination: &Path) -> Result<(), String> {
     }
     bytes[SUPERVISOR..SUPERVISOR + 6].copy_from_slice(&[0xb8, 1, 0, 0, 0, 0xc3]);
     // Keep -fWIDTHxHEIGHT's requested size, but create an ordinary desktop
-    // window. The original flag requests cabinet fullscreen presentation.
+    // window. The original flag requests cabinet fullscreen presentation,
+    // which SDL 1.2 stretches across every monitor of the X screen. Desktop
+    // fullscreen is requested from the window manager by the guest shim.
     const FULLSCREEN: usize = 0x08083bfa - 0x08048000;
     if bytes.get(FULLSCREEN..FULLSCREEN + 7) != Some(&[0xc6, 0x05, 0x51, 0xb5, 0x90, 0x08, 0x01]) {
         return Err("Unsupported Aliens window-mode site; no snapshot written".into());
@@ -69,21 +88,28 @@ pub fn prepare(source: &Path, destination: &Path) -> Result<(), String> {
         }
         bytes[offset + 6] = 1;
     }
-    // Minimal progression input: the cabinet's player-one Start switch becomes
-    // keyboard 1. Keep its menu-confirm mapping consistent. Gun controls follow
-    // separately; Start and coin let us verify actual level loading.
-    for (address, original, key) in [
-        (0x08081376usize, 0x154u32, 49u32),
-        (0x0808138a, 0x154, 49),
-        (0x08081466, 0x14c, 53),
-    ] {
-        let offset = address - 0x08048000;
-        if bytes.get(offset..offset + 3) != Some(&[0xc7, 0x04, 0x24])
-            || bytes.get(offset + 3..offset + 7) != Some(original.to_le_bytes().as_slice())
-        {
-            return Err("Unsupported Aliens progression mapping; no snapshot written".into());
+    // Cabinet switch sources become desktop keys. Each switch is registered
+    // once or twice (game action plus its operator-menu meaning); every site is
+    // fingerprint-checked before any operand changes.
+    let mut patched = Vec::new();
+    for &(source, sites) in SWITCH_SITES {
+        let key = keys
+            .iter()
+            .find(|(s, _)| *s == source)
+            .map(|(_, k)| *k)
+            .ok_or_else(|| format!("No Aliens key for cabinet switch {source:#x}"))?;
+        for &address in sites {
+            let offset = address - 0x08048000;
+            if bytes.get(offset..offset + 3) != Some(&[0xc7, 0x04, 0x24])
+                || bytes.get(offset + 3..offset + 7) != Some(source.to_le_bytes().as_slice())
+            {
+                return Err("Unsupported Aliens input mapping; no snapshot written".into());
+            }
+            patched.push((offset + 3, key));
         }
-        bytes[offset + 3..offset + 7].copy_from_slice(&key.to_le_bytes());
+    }
+    for (offset, key) in patched {
+        bytes[offset..offset + 4].copy_from_slice(&key.to_le_bytes());
     }
     // Supplied cabinet-response records contain the decoded asset seed tables.
     // Restore those tables in the runtime copy so the game's native filename
@@ -125,6 +151,7 @@ pub fn prepare(source: &Path, destination: &Path) -> Result<(), String> {
         .write(true)
         .open(&temp)
         .map_err(|e| e.to_string())?;
+    let prepared = format!("{:x}", Sha256::digest(&bytes));
     file.write_all(&bytes)
         .and_then(|_| file.sync_all())
         .map_err(|e| e.to_string())?;
@@ -136,7 +163,7 @@ pub fn prepare(source: &Path, destination: &Path) -> Result<(), String> {
         fs::set_permissions(destination, fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(prepared)
 }
 
 #[cfg(test)]
@@ -150,7 +177,10 @@ mod tests {
         let destination = dir.join("output");
         fs::write(&source, b"unknown game").unwrap();
         fs::write(&destination, b"existing snapshot").unwrap();
-        assert!(prepare(&source, &destination).is_err());
+        let keys = crate::controls::Bindings::default()
+            .codes("aliens")
+            .unwrap();
+        assert!(prepare(&source, &destination, &keys).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"unknown game");
         assert_eq!(fs::read(&destination).unwrap(), b"existing snapshot");
         assert!(!destination.with_extension("preparing").exists());

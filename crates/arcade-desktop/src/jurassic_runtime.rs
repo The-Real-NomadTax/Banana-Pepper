@@ -15,10 +15,16 @@ pub fn launch(root: &Path) -> Result<String, String> {
         &root.join("linux based/Jurassic Park 2015/game_legacy_patched"),
         &output.join("game-desktop"),
     )?;
-    let status = std::process::Command::new("python3")
+    let controls = arcade_core::controls::Bindings::load(&project.join("controls.cfg"))?;
+    let settings = crate::runtime::game_settings(&project, "jurassic")?;
+    let mut command = std::process::Command::new("python3");
+    command
         .arg(project.join("scripts/jurassic-explore.py"))
         .args(["--launch", "--desktop", "--games-root"])
         .arg(root)
+        .env("ARCADE_JURASSIC_KEYS", controls.env_value("jurassic")?);
+    crate::runtime::settings_env(&mut command, &settings);
+    let status = command
         .status()
         .map_err(|e| format!("Cannot launch Jurassic desktop runtime: {e}"))?;
     if !status.success() {

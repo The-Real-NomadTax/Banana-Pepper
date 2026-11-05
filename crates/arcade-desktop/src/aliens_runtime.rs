@@ -9,10 +9,17 @@ pub fn run(root: &Path, launch: bool) -> Result<String, String> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     let output = project.join("runtime/aliens");
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-    arcade_core::aliens::prepare(
+    let controls = arcade_core::controls::Bindings::load(&project.join("controls.cfg"))?;
+    // Fullscreen is applied by the guest shim (single monitor), not the image.
+    let settings = crate::runtime::game_settings(&project, "aliens")?;
+    let prepared = arcade_core::aliens::prepare(
         &root.join("linux based/Aliens Armageddon/game"),
         &output.join("game-native"),
+        &controls.codes("aliens")?,
     )?;
+    // The harness only runs the image this preparer just wrote.
+    std::fs::write(output.join("game-native.sha256"), format!("{prepared}\n"))
+        .map_err(|e| e.to_string())?;
     let mut command = std::process::Command::new("python3");
     command
         .arg(project.join("scripts/aliens-run.py"))
@@ -20,6 +27,7 @@ pub fn run(root: &Path, launch: bool) -> Result<String, String> {
         .arg(root);
     if launch {
         command.arg("--launch");
+        crate::runtime::settings_env(&mut command, &settings);
     }
     let status = command.status().map_err(|e| e.to_string())?;
     if !status.success() {

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs only inside the private Bubblewrap test environment.
 set -eu
-export SDL_AUDIODRIVER=dummy HOME=/tmp
+export SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-dummy} HOME=/tmp
 export SDL12COMPAT_OPENGL_SCALING=0
 if [[ ${ARCADE_JURASSIC_DESKTOP:-0} != 1 ]]; then
 export DISPLAY=:0 LIBGL_ALWAYS_SOFTWARE=1 __GLX_VENDOR_LIBRARY_NAME=mesa
@@ -14,7 +14,7 @@ trap 'kill "$xpid" 2>/dev/null || true' EXIT
 for i in {1..50}; do [[ -S /tmp/.X11-unix/X0 ]] && break; sleep .1; done
 fi
 if [[ ${ARCADE_JURASSIC_LAUNCH:-0} == 1 ]]; then
-    LD_PRELOAD=/shim.so /pm/game -f1360x768 > /work/game.log 2>&1 &
+    LD_PRELOAD=/shim.so /pm/game -f"${ARCADE_RESOLUTION:-1360x768}" > /work/game.log 2>&1 &
 else
     gdb -batch -x /work/jurassic-explore.gdb --args /pm/game -f1024x768 > /work/gdb.log 2>&1 &
 fi
