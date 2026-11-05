@@ -1,6 +1,7 @@
 mod aliens_runtime;
 mod jurassic_runtime;
 mod runtime;
+mod minecraft_runtime;
 mod supercars_runtime;
 
 use arcade_core::controls::{self, Bindings};
@@ -12,8 +13,22 @@ use std::{
     sync::mpsc::{self, Receiver},
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    if let Err(error) = run_app() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--probe-minecraft" || a == "--launch-minecraft" || a == "--setup-minecraft-libs") {
+        if args.len() > 2 { return Err("Usage: arcade-desktop --probe-minecraft|--launch-minecraft|--setup-minecraft-libs [game-folder-or-library-root]".into()); }
+        let root = args.get(1).map(PathBuf::from).unwrap_or_else(|| "games".into());
+        let mode = if args[0] == "--launch-minecraft" { "launch" } else if args[0] == "--setup-minecraft-libs" { "setup" } else { "probe" };
+        println!("{}", minecraft_runtime::run(&root, mode)?);
+        return Ok(());
+    }
     if args
         .first()
         .is_some_and(|a| a == "--probe-aliens" || a == "--launch-aliens")
@@ -123,9 +138,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    if !args.is_empty() {
+    let initial_root = if args.first().is_some_and(|a| a == "--games-root") && args.len() == 2 {
+        Some(args[1].to_string_lossy().into_owned())
+    } else { None };
+    if !args.is_empty() && initial_root.is_none() {
         return Err(
-            "Usage: arcade-desktop [--scan [games-root] | --probe-big-buck [games-root] | --launch-big-buck [games-root] | --launch-super-cars [games-root]]".into(),
+            "Usage: arcade-desktop [--games-root PATH | --scan [PATH] | --probe-minecraft [PATH] | --launch-minecraft [PATH] | --setup-minecraft-libs [PATH] | --probe-big-buck [PATH] | --launch-big-buck [PATH] | --launch-super-cars [PATH]]".into(),
         );
     }
     eframe::run_native(
@@ -134,9 +152,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             viewport: egui::ViewportBuilder::default().with_inner_size([1160.0, 800.0]),
             ..Default::default()
         },
-        Box::new(|cc| {
+        Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             let mut app = ArcadeApp::default();
+            if let Some(root) = initial_root { app.root = root; app.selected = 4; }
             app.rescan(cc.egui_ctx.clone());
             Ok(Box::new(app))
         }),
@@ -582,7 +601,7 @@ impl eframe::App for ArcadeApp {
                     self.reports = reports;
                     self.pending = None;
                     self.message =
-                        "Inspection complete. Big Buck Hunter has an experimental Linux startup backend."
+                        "Inspection complete. Choose a game for launch options and runtime requirements."
                             .into();
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -658,14 +677,16 @@ impl eframe::App for ArcadeApp {
             ui.add_space(10.0);
         });
         egui::Panel::bottom("status").show(ui, |ui| {
-            ui.label(&self.message);
+            egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                ui.label(&self.message);
+            });
         });
         egui::Panel::left("library")
             .default_size(250.0)
             .show(ui, |ui| {
                 ui.add_space(12.0);
                 ui.heading("Library");
-                ui.label("4 cabinet profiles");
+                ui.label(format!("{} cabinet profiles", arcade_core::profiles().len()));
                 ui.add_space(14.0);
                 for (i, report) in self.reports.iter().enumerate() {
                     ui.vertical(|ui| {
@@ -698,7 +719,12 @@ impl eframe::App for ArcadeApp {
                 let Some(report) = self.reports.get(self.selected) else { ui.label("Waiting for library inspection…"); return; };
                 ui.add_space(12.0);
                 ui.heading(&report.profile.title);
-                ui.label(RichText::new(if report.profile.id == "big-buck" { "EXPERIMENTAL — virtual JAMMA inputs; gameplay incomplete" } else { "NOT PLAYABLE — runtime adapter not implemented" }).color(Color32::from_rgb(244, 188, 95)));
+                ui.label(RichText::new(match report.profile.id.as_str() {
+                    "minecraft" => "EXPERIMENTAL — diagnose Linux startup and licensing",
+                    "big-buck" => "EXPERIMENTAL — virtual JAMMA inputs; gameplay incomplete",
+                    "aliens" | "jurassic" if cfg!(target_os = "linux") => "EXPERIMENTAL — Linux desktop gameplay",
+                    _ => "Runtime adapter unavailable on this host",
+                }).color(Color32::from_rgb(244, 188, 95)));
                 ui.add_space(10.0);
                 ui.label(report.path.display().to_string());
                 if let Some(error) = &report.error { ui.colored_label(Color32::LIGHT_RED, error); }
@@ -717,6 +743,26 @@ impl eframe::App for ArcadeApp {
                     });
                 }
                 ui.add_space(12.0);
+                if report.profile.id == "minecraft" {
+                    ui.label(if cfg!(windows) { "Windows backend: WSL2 / Ubuntu with WSLg." } else { "Linux backend: native x86-64 guest inside Bubblewrap." });
+                    ui.label("Original game files stay read-only; saves and logs use runtime/minecraft.");
+                    ui.label("Cabinet controls are not mapped yet. Startup diagnostics identify missing libraries and the next failure.");
+                    for (label, mode) in [("Diagnose Minecraft startup", "probe"), ("Prepare Linux libraries", "setup"), ("Launch Minecraft guest", "launch")] {
+                        if ui.add_enabled(self.probe.is_none() && report.binary.is_some(), egui::Button::new(label)).clicked() {
+                            self.screenshot = None;
+                            self.desktop_running = true;
+                            let root = PathBuf::from(&self.root);
+                            let (tx, rx) = mpsc::channel();
+                            self.probe = Some(rx);
+                            self.message = format!("Minecraft: {mode} in progress…");
+                            let repaint = ctx.clone();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(minecraft_runtime::run(&root, mode));
+                                repaint.request_repaint();
+                            });
+                        }
+                    }
+                }
                 if report.profile.id == "big-buck" {
                     ui.label("Mouse aims and fires, right click pumps, Esc exits. Keys, graphics and audio are under Settings.");
                     if ui.add_enabled(self.probe.is_none(),egui::Button::new("Play on my display")).clicked() {

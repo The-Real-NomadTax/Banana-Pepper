@@ -1,4 +1,5 @@
 //! Small guest-side compatibility layer; build for i686-unknown-linux-gnu.
+#![cfg(target_os = "linux")]
 #[cfg(target_arch = "x86")]
 mod aliens;
 #[cfg(target_arch = "x86")]

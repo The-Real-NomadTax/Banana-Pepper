@@ -112,3 +112,79 @@ Verified off-device only, because the user's computer shell was unavailable: con
 ## Aliens quit handling
 
 Aliens previously had to be killed from a terminal. The new shim watcher (`aliens_exit.rs`) adds Esc-to-quit and a working close button; see `aliens-startup.md`. An x86-64 integration test ran it against Xvfb with SDL-shaped windows and XTest. It found only the window with the matching class, removed WM_PROTOCOLS (again after it was re-set), exited on Esc only with the game focused, and rescanned after the client exited. Clippy is clean on the module. **Not yet verified:** the i686 build and the behavior with the real game and window manager.
+
+# Windows / Minecraft verification (2026-11-04)
+
+- Native host: x86_64-pc-windows-msvc, Rust 1.99.1.
+- `cargo build --workspace`: passed. Existing Jurassic dead-code and filesystem
+  incremental-hardlink warnings remain.
+- `cargo test --workspace`: 12 tests passed. Linux shim tests are excluded on
+  Windows; they still require a Linux build to validate the Linux guest code.
+- Actual game directory with spaces, parentheses and square brackets: discovered
+  and inspected successfully as sectionless ELF64; verified SHA256 recorded in
+  `docs/minecraft-windows.md`.
+- Windows executable -> WSL2 Ubuntu -> Bubblewrap dependency probe: executed.
+  Local Ubuntu libraries resolve GLU, OpenGL, LAPACK, BLAS, Fortran, wireless and
+  PCSC. Remaining unresolved libraries are `libfmod.so.10` and
+  `libfmodstudio.so.10`. See `runtime/minecraft/report.json` for the local result.
+- Minecraft gameplay is blocked and has not been verified. No claim of working
+  keyboard/controller input, security hardware or card readers is made.
+- Visual UI verification was unavailable because the computer-use helper failed
+  initialization on the workspace path containing square brackets.
+
+## Subsequent Minecraft investigation (2026-11-04)
+
+- Retrieved the archived FMOD 1.10.20 Linux SDK, verified its pinned SHA256 and
+  extracted only the x86-64 runtime pair and license. Local provenance is in
+  `runtime/minecraft/fmod-source.json`. The setup command reproduces this from
+  the cache; these binaries are excluded from source control.
+- Actual Linux dependency resolution now succeeds with no missing libraries.
+- GDB identified stale `__libc_start_main`/other GOT addresses in the supplied
+  memory snapshot. Rebuilt 659 named imports as ELF64 relocations in a new data
+  LOAD. The normal preparation changes ELF metadata only, preserving all game
+  instruction bytes and the source snapshot. Both local preparation tests pass.
+- Normal reconstructed startup reaches cabinet security initialization and
+  fails with SIGFPE in the configuration-dependent error logger.
+- A temporary investigative startup patch reached Mesa llvmpipe OpenGL threads,
+  but failed PROGRAM/SCENE archives and localization, then crashed in cleanup.
+  That failed patch is not included in normal preparation. The trace is saved
+  locally as `runtime/minecraft/gdb-desktop-asset-failure.log`.
+- Protected ZIP/config/version data still lacks a working decoder. Diagnostics
+  now report `protected_asset_decoder_required` with an empty missing-library
+  list instead of repeatedly launching the observed crash.
+- Windows workspace tests: 12 passed. Additional snapshot preparation tests: 2
+  passed against the supplied local file. Windows desktop rebuild passed.
+- Minecraft remains unplayable; no attract screen or gameplay is claimed.
+
+
+## Final Minecraft startup result
+
+- Bounded GDB capture reads actual HASP status 7 (key not found), with wrapper
+  status 4, before the error logger faults. The current probe reports
+  `hasp_key_not_found`; the earlier protected-asset classification is superseded.
+- A separate investigative copy skips the login block while preserving both
+  asset-seed pointers. It still fails PROGRAM/SCENE archives and localization,
+  then crashes in cleanup. The ordinary runtime image is unchanged by this test.
+- The same encrypted seed tables occur in the bundled GetFile, GetCert and
+  rtinit utilities. No usable decrypted seed state has been recovered.
+- Minecraft has not reached an attract screen or gameplay. WSL remains the
+  Windows backend; the separate native engine remains paused.
+- Final Windows workspace test run: 20 passed, including eight native-runtime
+  tests. Snapshot preparation tests: two passed. Existing incremental-cache
+  hard-link warnings remain.
+
+## Minecraft Linux host follow-up
+
+Pulled origin/aspens-crap at 35fa190 and reproduced startup on CachyOS x86-64 using the supplied Minecraft 3.07 directory. Existing uncommitted Android work was preserved in a named stash on android-big-buck before switching branches. No Android changes were merged into the Aspen branch.
+
+Added Arch/CachyOS library setup: pacman's package metadata supplies the wireless_tools HTTPS URL and SHA256; only libiw.so.30 is extracted into the local runtime cache. FMOD setup uses the existing pinned SDK archive. Both setup and loader checks succeed, with no system package installation and no missing game libraries.
+
+The bounded native diagnostic again reads HASP status 7 and wrapper status 4. Static inspection locates the 128/64-byte seed initialization and confirms that GetFile/GetCert/rtinit contain the same encoded seed pair. No decoded response cache was found; the user confirmed only the supplied folder is available. No new security/asset bypass patch is applied. Minecraft remains blocked before a game window or gameplay; see minecraft-linux.md.
+
+All 17 host Rust workspace tests pass. Both snapshot reconstruction tests and both new package-download rejection tests pass. Four existing dead-code warnings occur in the Windows-oriented native-runtime test helpers on Linux. Python compilation and git diff whitespace checks pass. Original game/dump hashes remain unchanged. Libraries and diagnostic logs stay under ignored runtime/minecraft; the changes to source/docs are local on aspens-crap.
+
+## Minecraft decoder experiment beyond cabinet login
+
+Added scripts/minecraft-asset-probe.py as an explicitly separate diagnostic. It hash-checks the supplied snapshot, prepares its own runtime/save directory, skips login/ID in GDB while retaining the file-reader configuration pointers, and captures the native first-map key/IV/output. Cabinet shell display helpers are inert and the test is bounded to 35 seconds. The normal launcher and original executable are unchanged.
+
+The derived filename is /pm/g7/minecraft/eFileMaps/fileMap000. Native AES returns zero but its output is invalid map text. Independent AES-256-OFB agrees byte-for-byte over the full 584-byte map. PROGRAM/SCENE and localization still fail; cleanup SIGSEGVs at 0x937c2b. A bounded 1,206-check supplied-candidate/filename test found no recognized ZIP/version plaintext. The source dump's active seed pointers, licensing context and map-init state are zero. No usable initialized decoder state was recovered, and no working-game claim is made. Runtime evidence is excluded from Git.
