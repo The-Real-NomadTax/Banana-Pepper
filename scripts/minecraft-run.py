@@ -17,6 +17,7 @@ import html
 import re
 import tarfile
 import urllib.request
+import urllib.parse
 
 EXPECTED = "663b147927e7b9d60cef7bd41cf49d3fd64058619880391083ea1ba872d6be3b"
 PACKAGES = ["libglu1-mesa", "libopengl0", "liblapack3", "libblas3", "libgfortran5", "libquadmath0", "libiw30t64", "libpcsclite1"]
@@ -78,12 +79,56 @@ def setup_fmod(output):
     print("FMOD 1.10.20 x86-64 libraries staged and checksummed.", flush=True)
 
 
+def setup_arch_wireless(output):
+    """Stage only libiw from the host's package metadata; never install it."""
+    metadata = subprocess.run(
+        ["pacman", "-Sp", "--print-format", "%n %v %h %l", "wireless_tools"],
+        capture_output=True, text=True, check=True, timeout=30).stdout.strip().splitlines()
+    if len(metadata) != 1:
+        raise RuntimeError("Expected one wireless_tools package in the host package database")
+    name, version, digest, url = metadata[0].split()
+    if name != "wireless_tools" or not re.fullmatch(r"[0-9a-f]{64}", digest) or urllib.parse.urlparse(url).scheme != "https":
+        raise RuntimeError("Invalid wireless_tools package metadata")
+    archive = output / "packages" / ("wireless_tools-" + digest + ".pkg.tar.zst")
+    if not archive.exists() or hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+        with urllib.request.urlopen(url, timeout=45) as response:
+            content = response.read(16 * 1024 * 1024 + 1)
+        if len(content) > 16 * 1024 * 1024 or hashlib.sha256(content).hexdigest() != digest:
+            raise RuntimeError("wireless_tools checksum/size mismatch; no library installed")
+        temporary = archive.with_suffix(".download")
+        temporary.write_bytes(content)
+        temporary.replace(archive)
+    # Extract one explicitly named member to stdout; no package paths/scripts
+    # are installed or allowed to write into the host filesystem.
+    library = subprocess.run(["tar", "-xOf", str(archive), "usr/lib/libiw.so.30"],
+                             capture_output=True, check=True, timeout=30).stdout
+    if library[:5] != b"\x7fELF\x02":
+        raise RuntimeError("wireless_tools library is not ELF64")
+    destination = output / "lib/libiw.so.30"
+    temporary = destination.with_suffix(".preparing")
+    temporary.write_bytes(library)
+    temporary.replace(destination)
+    (output / "wireless-source.json").write_text(json.dumps({
+        "package": name, "version": version, "url": url, "archive_sha256": digest,
+        "library_sha256": hashlib.sha256(library).hexdigest(),
+    }, indent=2) + "\n")
+    print("Host wireless_tools libiw staged and checksum-verified.", flush=True)
+
+
 def setup(output):
-    """Extract distribution packages locally, without sudo or system changes."""
+    """Extract libraries locally, without sudo or system package changes."""
     cache = output / "packages"
     cache.mkdir(exist_ok=True)
     libraries = output / "libraries"
     libraries.mkdir(exist_ok=True)
+    (output / "lib").mkdir(exist_ok=True)
+    if shutil.which("pacman"):
+        setup_arch_wireless(output)
+        setup_fmod(output)
+        print("Arch/CachyOS compatibility libraries staged. Other dependencies use the host's existing libraries.")
+        return
+    if not shutil.which("apt-get") or not shutil.which("dpkg-deb"):
+        raise RuntimeError("Automatic library setup requires apt/dpkg or pacman; libraries can also be supplied in runtime/minecraft/lib")
     for package in PACKAGES:
         result = subprocess.run(["apt-get", "download", package], cwd=cache,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
@@ -98,7 +143,7 @@ def setup(output):
 
 def sandbox(game, output):
     if not shutil.which("bwrap"):
-        raise RuntimeError("Bubblewrap is required in Ubuntu: sudo apt install bubblewrap")
+        raise RuntimeError("Bubblewrap is required for the isolated Linux runtime")
     command = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session", "--clearenv",
                "--ro-bind", "/usr", "/usr", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
     for name in ("bin", "sbin", "lib", "lib64"):
@@ -133,7 +178,7 @@ def display_options(command):
         raise RuntimeError("No graphical display found. Windows requires WSL2 with WSLg.")
     x11 = Path("/tmp/.X11-unix")
     if not x11.exists():
-        raise RuntimeError("X11 socket directory is missing; restart WSLg before launching.")
+        raise RuntimeError("X11 socket directory is missing; start a desktop X11/XWayland session (WSLg on Windows).")
     command += ["--ro-bind", str(x11.resolve()), "/tmp/.X11-unix", "--setenv", "DISPLAY", display]
     for path in ("/mnt/wslg", "/usr/lib/wsl"):
         if Path(path).exists():

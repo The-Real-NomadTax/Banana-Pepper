@@ -157,3 +157,19 @@ Prepared SHA256: 9bd2332bb9c49adb5a3f0854c8c52532f0c3ab29877cee2dae9eb7c8371c5d6
 - Final Windows workspace test run: 20 passed, including eight native-runtime
   tests. Snapshot preparation tests: two passed. Existing incremental-cache
   hard-link warnings remain.
+
+## Minecraft Linux host follow-up
+
+Pulled origin/aspens-crap at 35fa190 and reproduced startup on CachyOS x86-64 using the supplied Minecraft 3.07 directory. Existing uncommitted Android work was preserved in a named stash on android-big-buck before switching branches. No Android changes were merged into the Aspen branch.
+
+Added Arch/CachyOS library setup: pacman's package metadata supplies the wireless_tools HTTPS URL and SHA256; only libiw.so.30 is extracted into the local runtime cache. FMOD setup uses the existing pinned SDK archive. Both setup and loader checks succeed, with no system package installation and no missing game libraries.
+
+The bounded native diagnostic again reads HASP status 7 and wrapper status 4. Static inspection locates the 128/64-byte seed initialization and confirms that GetFile/GetCert/rtinit contain the same encoded seed pair. No decoded response cache was found; the user confirmed only the supplied folder is available. No new security/asset bypass patch is applied. Minecraft remains blocked before a game window or gameplay; see minecraft-linux.md.
+
+All 17 host Rust workspace tests pass. Both snapshot reconstruction tests and both new package-download rejection tests pass. Four existing dead-code warnings occur in the Windows-oriented native-runtime test helpers on Linux. Python compilation and git diff whitespace checks pass. Original game/dump hashes remain unchanged. Libraries and diagnostic logs stay under ignored runtime/minecraft; the changes to source/docs are local on aspens-crap.
+
+## Minecraft decoder experiment beyond cabinet login
+
+Added scripts/minecraft-asset-probe.py as an explicitly separate diagnostic. It hash-checks the supplied snapshot, prepares its own runtime/save directory, skips login/ID in GDB while retaining the file-reader configuration pointers, and captures the native first-map key/IV/output. Cabinet shell display helpers are inert and the test is bounded to 35 seconds. The normal launcher and original executable are unchanged.
+
+The derived filename is /pm/g7/minecraft/eFileMaps/fileMap000. Native AES returns zero but its output is invalid map text. Independent AES-256-OFB agrees byte-for-byte over the full 584-byte map. PROGRAM/SCENE and localization still fail; cleanup SIGSEGVs at 0x937c2b. A bounded 1,206-check supplied-candidate/filename test found no recognized ZIP/version plaintext. The source dump's active seed pointers, licensing context and map-init state are zero. No usable initialized decoder state was recovered, and no working-game claim is made. Runtime evidence is excluded from Git.

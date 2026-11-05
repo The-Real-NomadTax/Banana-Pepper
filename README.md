@@ -2,7 +2,7 @@
 
 A Rust arcade compatibility project, starting on Linux with an egui/eframe desktop workbench. No TeknoParrot code, profiles or loaders are used by this application.
 
-The workbench also builds natively on Windows. Minecraft Dungeons Arcade has a Windows-to-WSL2 runner, library preparation, snapshot import repair and diagnostics. Its Linux dependencies, including FMOD, now resolve locally. Protected game assets and cabinet initialization remain unsupported, so Minecraft gameplay is **not working yet**. See [Windows setup and measured limitations](docs/minecraft-windows.md).
+The workbench also builds natively on Windows. Minecraft Dungeons Arcade has native Linux and Windows-to-WSL2 runners, library preparation, snapshot import repair and diagnostics. Its Linux dependencies, including FMOD, now resolve locally on CachyOS as well as Ubuntu. Protected game assets and cabinet initialization remain unsupported, so Minecraft gameplay is **not working yet**. See [Linux setup and measured blocker](docs/minecraft-linux.md) or [Windows setup](docs/minecraft-windows.md).
 
 **Current status:** Aliens Armageddon and Jurassic Park reach desktop gameplay with mouse controls. Big Buck Hunter Pro reaches a rendered hunt scene and has verified PCM audio output through PulseAudio/PipeWire. Aliens and Jurassic audio remain disabled. Full playthroughs and physical cabinet hardware are unverified; Fast and Furious Super Cars currently has executable inspection only. See the per-game notes below for build requirements and limitations.
 

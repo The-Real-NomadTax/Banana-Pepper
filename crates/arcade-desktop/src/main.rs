@@ -311,7 +311,7 @@ impl eframe::App for ArcadeApp {
                 ui.add_space(12.0);
                 ui.heading(&report.profile.title);
                 ui.label(RichText::new(match report.profile.id.as_str() {
-                    "minecraft" => "EXPERIMENTAL — diagnose WSL startup and licensing",
+                    "minecraft" => "EXPERIMENTAL — diagnose Linux startup and licensing",
                     "big-buck" => "EXPERIMENTAL — virtual JAMMA inputs; gameplay incomplete",
                     "aliens" | "jurassic" if cfg!(target_os = "linux") => "EXPERIMENTAL — Linux desktop gameplay",
                     _ => "Runtime adapter unavailable on this host",
@@ -335,10 +335,10 @@ impl eframe::App for ArcadeApp {
                 }
                 ui.add_space(12.0);
                 if report.profile.id == "minecraft" {
-                    ui.label("Windows backend: WSL2 / Ubuntu with WSLg.");
+                    ui.label(if cfg!(windows) { "Windows backend: WSL2 / Ubuntu with WSLg." } else { "Linux backend: native x86-64 guest inside Bubblewrap." });
                     ui.label("Original game files stay read-only; saves and logs use runtime/minecraft.");
                     ui.label("Cabinet controls are not mapped yet. Startup diagnostics identify missing libraries and the next failure.");
-                    for (label, mode) in [("Diagnose Minecraft startup", "probe"), ("Prepare Ubuntu libraries", "setup"), ("Launch Minecraft guest", "launch")] {
+                    for (label, mode) in [("Diagnose Minecraft startup", "probe"), ("Prepare Linux libraries", "setup"), ("Launch Minecraft guest", "launch")] {
                         if ui.add_enabled(self.probe.is_none() && report.binary.is_some(), egui::Button::new(label)).clicked() {
                             self.screenshot = None;
                             self.desktop_running = true;
