@@ -61,8 +61,11 @@ pub fn run(root: &Path, mode: &str) -> Result<String, String> {
     let output = project.join("runtime/minecraft");
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
     let output = output.canonicalize().map_err(|e| e.to_string())?;
-    std::fs::write(output.join("minecraft_prepare.py"), include_bytes!("../../../scripts/minecraft-prepare.py"))
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        output.join("minecraft_prepare.py"),
+        include_bytes!("../../../scripts/minecraft-prepare.py"),
+    )
+    .map_err(|e| e.to_string())?;
     let game_arg = guest_path(&game)?;
     let output_arg = guest_path(&output)?;
     #[cfg(windows)]

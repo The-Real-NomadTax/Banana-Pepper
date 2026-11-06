@@ -1,0 +1,141 @@
+--- a/src/elfs/elfparser32.c
++++ b/src/elfs/elfparser32.c
+@@ -60,6 +60,109 @@
+     }
+ }
+ 
++
++// Arcade Foundry: some shipped i386 executables have no section header table.
++// Recover the dynamic information from program headers instead.
++static long VaddrToOffset32(elfheader_t* h, uint32_t vaddr, uint32_t* avail)
++{
++    for(int i=0; i<h->numPHEntries; ++i) {
++        Elf32_Phdr* ph = &h->PHEntries._32[i];
++        if(ph->p_type==PT_LOAD && vaddr>=ph->p_vaddr && vaddr<ph->p_vaddr+ph->p_filesz) {
++            if(avail) *avail = ph->p_vaddr+ph->p_filesz-vaddr;
++            return ph->p_offset + (vaddr-ph->p_vaddr);
++        }
++    }
++    return -1;
++}
++
++static void* ReadAtVaddr32(FILE* f, elfheader_t* h, uint32_t vaddr, uint32_t size)
++{
++    uint32_t avail = 0;
++    long off = VaddrToOffset32(h, vaddr, &avail);
++    if(off<0 || !size || size>avail) return NULL;
++    void* buf = actual_calloc(1, size);
++    fseeko64(f, off, SEEK_SET);
++    if(fread(buf, size, 1, f)!=1) { actual_free(buf); return NULL; }
++    return buf;
++}
++
++static void LoadDynamicFromPH32(FILE* f, elfheader_t* h)
++{
++    for(int i=0; i<h->numPHEntries; ++i) {
++        Elf32_Phdr* ph = &h->PHEntries._32[i];
++        if(ph->p_type!=PT_DYNAMIC || !ph->p_filesz) continue;
++        h->Dynamic._32 = actual_calloc(1, ph->p_filesz);
++        fseeko64(f, ph->p_offset, SEEK_SET);
++        if(fread(h->Dynamic._32, ph->p_filesz, 1, f)!=1) {
++            actual_free(h->Dynamic._32);
++            h->Dynamic._32 = NULL;
++            return;
++        }
++        h->numDynamic = ph->p_filesz/sizeof(Elf32_Dyn);
++        printf_log(LOG_INFO, "%s has no section headers, using PT_DYNAMIC (%d entries)\n", h->name, h->numDynamic);
++        return;
++    }
++}
++
++static void FillFromDynamic32(FILE* f, elfheader_t* h)
++{
++    uint32_t symtab=0, strtab=0, strsz=0, versym=0, hash=0, gnuhash=0;
++    for(size_t i=0; i<h->numDynamic; ++i) {
++        Elf32_Dyn d = h->Dynamic._32[i];
++        switch(d.d_tag) {
++            case DT_SYMTAB: symtab = d.d_un.d_ptr; break;
++            case DT_STRTAB: strtab = d.d_un.d_ptr; break;
++            case DT_STRSZ: strsz = d.d_un.d_val; break;
++            case DT_VERSYM: versym = d.d_un.d_ptr; break;
++            case DT_HASH: hash = d.d_un.d_ptr; break;
++            case DT_GNU_HASH: gnuhash = d.d_un.d_ptr; break;
++        }
++    }
++    uint32_t nsyms = 0;
++    if(hash) {
++        uint32_t* hh = ReadAtVaddr32(f, h, hash, 8);
++        if(hh) { nsyms = hh[1]; actual_free(hh); }
++    } else if(gnuhash) {
++        uint32_t* gh = ReadAtVaddr32(f, h, gnuhash, 16);
++        if(gh) {
++            uint32_t nbuckets=gh[0], symoffset=gh[1], bloom=gh[2];
++            uint32_t base = gnuhash+16+bloom*4;
++            uint32_t* buckets = ReadAtVaddr32(f, h, base, nbuckets*4);
++            uint32_t last = 0;
++            for(uint32_t b=0; buckets && b<nbuckets; ++b) if(buckets[b]>last) last=buckets[b];
++            if(last>=symoffset) {
++                uint32_t chain = 0, idx = last;
++                do {
++                    uint32_t* c = ReadAtVaddr32(f, h, base+nbuckets*4+(idx-symoffset)*4, 4);
++                    if(!c) break;
++                    chain = *c; actual_free(c); ++idx;
++                } while(!(chain&1));
++                nsyms = idx;
++            } else nsyms = symoffset;
++            if(buckets) actual_free(buckets);
++            actual_free(gh);
++        }
++    }
++    if(strtab && strsz) h->DynStr = ReadAtVaddr32(f, h, strtab, strsz);
++    if(symtab && nsyms) {
++        h->DynSym._32 = ReadAtVaddr32(f, h, symtab, nsyms*sizeof(Elf32_Sym));
++        if(h->DynSym._32) h->numDynSym = nsyms;
++    }
++    if(versym) h->VerSym = (Elf32_Half*)from_ptrv(versym);
++    if(h->pltgot) {
++        h->gotplt = h->pltgot;
++        h->gotplt_end = h->pltgot + 12 + (h->pltent ? (h->pltsz/h->pltent)*4 : 0);
++    }
++    for(int i=0; i<h->numPHEntries; ++i) {
++        Elf32_Phdr* ph = &h->PHEntries._32[i];
++        if(ph->p_type==PT_LOAD && (ph->p_flags&PF_X) && h->entrypoint>=ph->p_vaddr && h->entrypoint<ph->p_vaddr+ph->p_memsz) {
++            h->text = ph->p_vaddr;
++            h->textsz = ph->p_filesz;
++        }
++    }
++    printf_log(LOG_INFO, "%s: recovered %d dynamic symbols without sections\n", h->name, h->numDynSym);
++}
++
+ elfheader_t* ParseElfHeader32(FILE* f, const char* name, int exec)
+ {
+     Elf32_Ehdr header;
+@@ -187,6 +290,10 @@
+ 
+         LoadNamedSection(f, h->SHEntries._32, h->numSHEntries, h->SHStrTab, ".dynamic", "Dynamic", SHT_DYNAMIC, (void**)&h->Dynamic._32, &h->numDynamic);
+         if (BOX64ENV(dump) && h->Dynamic._32) DumpDynamicSections32(h);
++    } else {
++        LoadDynamicFromPH32(f, h);
++    }
++    {
+         // grab DT_REL & DT_RELA stuffs
+         // also grab the DT_STRTAB string table
+         {
+@@ -346,6 +453,8 @@
+                 //DumpDynamicNeeded32(h); cannot dump now, it's not loaded yet
+             }
+         }
++    }
++    if(header.e_shentsize && header.e_shnum) {
+         // look for PLT Offset
+         int ii = FindSection(h->SHEntries._32, h->numSHEntries, h->SHStrTab, ".got.plt");
+         if(ii) {
+@@ -381,6 +490,8 @@
+ 
+         LoadNamedSection(f, h->SHEntries._32, h->numSHEntries, h->SHStrTab, ".dynstr", "DynSym Strings", SHT_STRTAB, (void**)&h->DynStr, NULL);
+         LoadNamedSection(f, h->SHEntries._32, h->numSHEntries, h->SHStrTab, ".dynsym", "DynSym", SHT_DYNSYM, (void**)&h->DynSym, &h->numDynSym);
++    } else if(h->Dynamic._32) {
++        FillFromDynamic32(f, h);
+     }
+     
+     return h;

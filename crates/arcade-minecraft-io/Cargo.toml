@@ -1,0 +1,12 @@
+[package]
+name = "arcade-minecraft-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Desktop keyboard, QR scanners and virtual dispenser for Minecraft Dungeons Arcade 3.07"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+libc = "0.2"

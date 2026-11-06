@@ -9,6 +9,7 @@ arcade-core.workspace = true
 arcade-content = { path = "../arcade-content" }
 eframe.workspace = true
 serde_json.workspace = true
+rfd = "0.17.2"
 
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 

@@ -21,7 +21,11 @@ use core::{mem::transmute, ptr};
 // ---------------------------------------------------------------------------
 // Win32 imports (raw-dylib: no import libraries or CRT are needed).
 
-#[link(name = "kernel32", kind = "raw-dylib", import_name_type = "undecorated")]
+#[link(
+    name = "kernel32",
+    kind = "raw-dylib",
+    import_name_type = "undecorated"
+)]
 unsafe extern "system" {
     fn VirtualProtect(addr: *mut u8, size: usize, protect: u32, old: *mut u32) -> i32;
     fn VirtualAlloc(addr: *mut u8, size: usize, kind: u32, protect: u32) -> *mut u8;
@@ -40,7 +44,13 @@ unsafe extern "system" {
         flags: u32,
         template: isize,
     ) -> isize;
-    fn WriteFile(file: isize, buf: *const u8, len: u32, written: *mut u32, overlapped: *mut u8) -> i32;
+    fn WriteFile(
+        file: isize,
+        buf: *const u8,
+        len: u32,
+        written: *mut u32,
+        overlapped: *mut u8,
+    ) -> i32;
     fn GetTickCount() -> u32;
     fn DisableThreadLibraryCalls(module: isize) -> i32;
     fn ExitProcess(code: u32) -> !;
@@ -58,6 +68,15 @@ const RTIO_ACTIVE: usize = 0x0040_1ab0;
 /// Input event sink used by the board driver: `sink(code, state)`, cdecl.
 const SINK: usize = 0x004a_9510;
 const SINK_BYTES: [u8; 9] = [0x8b, 0x44, 0x24, 0x04, 0xa9, 0x00, 0x00, 0x01, 0x00];
+/// The `0x10040` (cabinet controls available) case in the input query at
+/// 0x4a9a40. Menus only read adc1 when this query or a joystick is active;
+/// otherwise they fall back to the developer keyboard that we suppress.
+/// Patch this query case only: RTIO_ACTIVE itself must still report the real
+/// board status so the original poll does not call the absent board driver.
+const CABINET_QUERY: usize = 0x004a_9a6d;
+const CABINET_QUERY_BYTES: [u8; 5] = [0xe9, 0x3e, 0x80, 0xf5, 0xff];
+// xor eax,eax; inc eax; ret; nop (return true in the five-byte tail jump).
+const CABINET_QUERY_PATCH: [u8; 5] = [0x33, 0xc0, 0x40, 0xc3, 0x90];
 /// Raw `GetDeviceState` keyboard buffer, 256 bytes by DIK code; 0x80 = down.
 const RAW_KEYS: usize = 0x0478_0108;
 /// The game's per-key edge state derived from it (bit 0 down, 1 pressed, 2 released).
@@ -133,11 +152,25 @@ fn log(text: &[u8]) {
     unsafe {
         if s.log == -1 {
             // GENERIC_WRITE, share read, OPEN_ALWAYS -> appended below via FILE_APPEND_DATA.
-            s.log = CreateFileA(b"arcade-hook.log\0".as_ptr(), 0x0004, 1, ptr::null_mut(), 4, 0x80, 0);
+            s.log = CreateFileA(
+                b"arcade-hook.log\0".as_ptr(),
+                0x0004,
+                1,
+                ptr::null_mut(),
+                4,
+                0x80,
+                0,
+            );
         }
         if s.log != -1 {
             let mut written = 0;
-            WriteFile(s.log, text.as_ptr(), text.len() as u32, &mut written, ptr::null_mut());
+            WriteFile(
+                s.log,
+                text.as_ptr(),
+                text.len() as u32,
+                &mut written,
+                ptr::null_mut(),
+            );
             WriteFile(s.log, b"\r\n".as_ptr(), 2, &mut written, ptr::null_mut());
         }
     }
@@ -239,7 +272,14 @@ fn after_poll(s: &mut State) {
             s.prev_raw[usize::from(dik)] = now;
             if s.logged > 0 {
                 s.logged -= 1;
-                log_number(if now { b"key down dik=" } else { b"key up dik=" }, u32::from(dik));
+                log_number(
+                    if now {
+                        b"key down dik="
+                    } else {
+                        b"key up dik="
+                    },
+                    u32::from(dik),
+                );
             }
         }
     }
@@ -249,7 +289,11 @@ fn after_poll(s: &mut State) {
         log(b"Escape pressed: exiting");
         unsafe { ExitProcess(0) }
     }
-    let held = |target: u32| s.bindings[..s.binding_count].iter().any(|&(t, k)| t == target && down(k));
+    let held = |target: u32| {
+        s.bindings[..s.binding_count]
+            .iter()
+            .any(|&(t, k)| t == target && down(k))
+    };
 
     // Buttons: post press/release edges exactly like the board driver does.
     let sink: extern "C" fn(u32, u32) = unsafe { transmute(SINK) };
@@ -264,7 +308,11 @@ fn after_poll(s: &mut State) {
 
     // Steering ramps like a wheel and recentres; pedals are on/off.
     let tick = unsafe { GetTickCount() };
-    let elapsed = if s.last_tick == 0 { 16 } else { tick.wrapping_sub(s.last_tick).min(100) } as i32;
+    let elapsed = if s.last_tick == 0 {
+        16
+    } else {
+        tick.wrapping_sub(s.last_tick).min(100)
+    } as i32;
     s.last_tick = tick;
     let left = held(T_STEER_LEFT);
     let right = held(T_STEER_RIGHT);
@@ -283,8 +331,14 @@ fn after_poll(s: &mut State) {
     let analog = ANALOG as *mut i32;
     unsafe {
         ptr::write_volatile(analog.add(ADC_STEER), steer);
-        ptr::write_volatile(analog.add(ADC_GAS), if held(T_GAS) { ANALOG_MAX } else { 0 });
-        ptr::write_volatile(analog.add(ADC_BRAKE), if held(T_BRAKE) { ANALOG_MAX } else { 0 });
+        ptr::write_volatile(
+            analog.add(ADC_GAS),
+            if held(T_GAS) { ANALOG_MAX } else { 0 },
+        );
+        ptr::write_volatile(
+            analog.add(ADC_BRAKE),
+            if held(T_BRAKE) { ANALOG_MAX } else { 0 },
+        );
     }
 
     // Hide the keyboard from the game's developer shortcuts (camera/debug keys).
@@ -304,16 +358,25 @@ fn after_poll(s: &mut State) {
 
 unsafe fn install() {
     let s = state();
-    if !bytes_match(POLL, &POLL_BYTES) || !bytes_match(SINK, &SINK_BYTES) {
+    if !bytes_match(POLL, &POLL_BYTES)
+        || !bytes_match(SINK, &SINK_BYTES)
+        || !bytes_match(CABINET_QUERY, &CABINET_QUERY_BYTES)
+    {
         log(b"arcade-wine-hook: unsupported sdaemon.exe build; controls not installed");
         return;
     }
     let mut env = [0u8; 2048];
     let n = unsafe {
-        GetEnvironmentVariableA(b"ARCADE_SUPERCARS_KEYS\0".as_ptr(), env.as_mut_ptr(), env.len() as u32)
+        GetEnvironmentVariableA(
+            b"ARCADE_SUPERCARS_KEYS\0".as_ptr(),
+            env.as_mut_ptr(),
+            env.len() as u32,
+        )
     } as usize;
     let mut flag = [0u8; 4];
-    if unsafe { GetEnvironmentVariableA(b"ARCADE_SUPERCARS_DEBUG\0".as_ptr(), flag.as_mut_ptr(), 4) } == 1
+    if unsafe {
+        GetEnvironmentVariableA(b"ARCADE_SUPERCARS_DEBUG\0".as_ptr(), flag.as_mut_ptr(), 4)
+    } == 1
         && flag[0] == b'1'
     {
         s.logged = 200;
@@ -333,30 +396,53 @@ unsafe fn install() {
     }
     let tb = t as usize;
     let code: [u8; 11] = {
-        let call = (RTIO_ACTIVE as i32).wrapping_sub((tb + 6) as i32).to_le_bytes();
-        let back = ((POLL + 6) as i32).wrapping_sub((tb + 11) as i32).to_le_bytes();
-        [0x51, 0xe8, call[0], call[1], call[2], call[3], 0xe9, back[0], back[1], back[2], back[3]]
+        let call = (RTIO_ACTIVE as i32)
+            .wrapping_sub((tb + 6) as i32)
+            .to_le_bytes();
+        let back = ((POLL + 6) as i32)
+            .wrapping_sub((tb + 11) as i32)
+            .to_le_bytes();
+        [
+            0x51, 0xe8, call[0], call[1], call[2], call[3], 0xe9, back[0], back[1], back[2],
+            back[3],
+        ]
     };
     for (i, b) in code.iter().enumerate() {
         unsafe { ptr::write_volatile(t.add(i), *b) };
     }
     s.trampoline = tb;
 
-    let jump = (poll_hook as extern "C" fn() as usize as i32).wrapping_sub((POLL + 5) as i32).to_le_bytes();
+    let jump = (poll_hook as extern "C" fn() as usize as i32)
+        .wrapping_sub((POLL + 5) as i32)
+        .to_le_bytes();
     let patch = [0xe9, jump[0], jump[1], jump[2], jump[3], 0x90];
     let mut old = 0;
+    let mut query_old = 0;
     unsafe {
+        if VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), 0x40, &mut query_old) == 0 {
+            log(b"arcade-wine-hook: cabinet query VirtualProtect failed");
+            return;
+        }
         if VirtualProtect(POLL as *mut u8, patch.len(), 0x40, &mut old) == 0 {
+            VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), query_old, &mut query_old);
             log(b"arcade-wine-hook: VirtualProtect failed");
             return;
+        }
+        for (i, b) in CABINET_QUERY_PATCH.iter().enumerate() {
+            ptr::write_volatile((CABINET_QUERY + i) as *mut u8, *b);
         }
         for (i, b) in patch.iter().enumerate() {
             ptr::write_volatile((POLL + i) as *mut u8, *b);
         }
         VirtualProtect(POLL as *mut u8, patch.len(), old, &mut old);
+        VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), query_old, &mut query_old);
         FlushInstructionCache(GetCurrentProcess(), POLL as *const u8, patch.len());
+        FlushInstructionCache(GetCurrentProcess(), CABINET_QUERY as *const u8, CABINET_QUERY_PATCH.len());
     }
-    log_number(b"arcade-wine-hook: controls installed, bindings=", s.binding_count as u32);
+    log_number(
+        b"arcade-wine-hook: controls installed, bindings=",
+        s.binding_count as u32,
+    );
 }
 
 #[unsafe(no_mangle)]
