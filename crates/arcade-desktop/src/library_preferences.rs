@@ -1,0 +1,213 @@
+//! Desktop-only preferences, separate from game runtime settings.
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct Preferences {
+    pub root: String,
+    pub games: BTreeMap<String, String>,
+}
+
+fn preference_path() -> Result<PathBuf, String> {
+    let base = if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|path| Path::new(path).is_absolute())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+    };
+    base.map(|base| base.join("arcade-foundry/library.json"))
+        .ok_or_else(|| "Cannot locate your user configuration directory.".into())
+}
+
+pub fn load() -> Result<Preferences, String> {
+    load_from(&preference_path()?)
+}
+
+fn load_from(path: &Path) -> Result<Preferences, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Preferences {
+                root: "games".into(),
+                ..Default::default()
+            });
+        }
+        Err(error) => return Err(format!("Could not read saved folders: {error}")),
+    };
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Could not read saved folders: {error}"))?;
+    // Retain the single-folder preference from earlier desktop versions.
+    if let Some(root) = value.as_str() {
+        return Ok(Preferences {
+            root: root.into(),
+            ..Default::default()
+        });
+    }
+    let root = value
+        .get("root")
+        .and_then(|v| v.as_str())
+        .ok_or("Invalid saved library folder")?;
+    let games =
+        serde_json::from_value(value.get("games").cloned().unwrap_or(serde_json::json!({})))
+            .map_err(|error| format!("Invalid saved game folders: {error}"))?;
+    Ok(Preferences {
+        root: root.into(),
+        games,
+    })
+}
+
+pub fn save(preferences: &Preferences) -> Result<(), String> {
+    write_to(&preference_path()?, preferences)
+}
+
+fn write_to(path: &Path, preferences: &Preferences) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(
+        &serde_json::json!({"root": preferences.root, "games": preferences.games}),
+    )
+    .map_err(|error| error.to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Could not save folders: {error}"))?;
+    }
+    std::fs::write(path, bytes).map_err(|error| format!("Could not save folders: {error}"))
+}
+
+pub fn validate(folder: &str) -> Result<String, String> {
+    normalize(folder)
+}
+
+fn normalize(folder: &str) -> Result<String, String> {
+    if folder.trim().is_empty() {
+        return Err("Enter a games folder before saving.".into());
+    }
+    let folder = std::fs::canonicalize(folder)
+        .map_err(|error| format!("Cannot open games folder: {error}"))?;
+    if !folder.is_dir() {
+        return Err("Choose a directory for your game files.".into());
+    }
+    let folder = folder
+        .to_str()
+        .ok_or("The games folder path must contain valid Unicode.")?
+        .to_owned();
+    Ok(folder)
+}
+
+/// Present a selected directory through the layout required by existing runtimes.
+/// Only links inside the desktop preference directory are created; game files stay put.
+pub fn runtime_root(game: &str, folder: &str) -> Result<PathBuf, String> {
+    let profile = arcade_core::profiles()
+        .into_iter()
+        .find(|profile| profile.id == game)
+        .ok_or("Unknown game")?;
+    if game == "minecraft" {
+        return Ok(PathBuf::from(folder));
+    }
+    let layouts = preference_path()?
+        .parent()
+        .ok_or("Missing configuration directory")?
+        .join("game-folders");
+    linked_root(&layouts, &profile, Path::new(folder))
+}
+
+fn linked_root(
+    layouts: &Path,
+    profile: &arcade_core::GameProfile,
+    folder: &Path,
+) -> Result<PathBuf, String> {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    folder.hash(&mut hash);
+    let root = layouts.join(format!("{}-{:x}", profile.id, hash.finish()));
+    let relative = profile
+        .executable
+        .parent()
+        .ok_or("Missing game directory")?;
+    let link = root.join(relative);
+    std::fs::create_dir_all(link.parent().ok_or("Missing library directory")?)
+        .map_err(|e| e.to_string())?;
+    match std::fs::symlink_metadata(&link) {
+        Ok(_) => {
+            if link.canonicalize().map_err(|e| e.to_string())?
+                != folder.canonicalize().map_err(|e| e.to_string())?
+            {
+                return Err("The saved game folder link points to another directory.".into());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(folder, &link)
+                .map_err(|e| format!("Cannot link game folder: {e}"))?;
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_dir(folder, &link).map_err(|e| {
+                format!("Cannot link game folder (enable Windows Developer Mode): {e}")
+            })?;
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok(root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn independent_folders_survive_reload_and_old_settings_migrate() {
+        let temp = std::env::temp_dir().join(format!("arcade-library-{}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let config = temp.join("config/library.json");
+        assert_eq!(load_from(&config).unwrap().root, "games");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, br#""old library""#).unwrap();
+        let mut prefs = load_from(&config).unwrap();
+        assert_eq!(prefs.root, "old library");
+        for id in ["aliens", "jurassic", "big-buck", "super-cars", "minecraft"] {
+            let folder = temp.join(format!("{id} game files"));
+            std::fs::create_dir_all(&folder).unwrap();
+            prefs
+                .games
+                .insert(id.into(), validate(folder.to_str().unwrap()).unwrap());
+        }
+        write_to(&config, &prefs).unwrap();
+        assert_eq!(load_from(&config).unwrap(), prefs);
+        for invalid in [
+            "",
+            "   ",
+            config.to_str().unwrap(),
+            temp.join("missing").to_str().unwrap(),
+        ] {
+            assert!(validate(invalid).is_err());
+            assert_eq!(load_from(&config).unwrap(), prefs);
+        }
+        #[cfg(unix)]
+        for profile in arcade_core::profiles()
+            .into_iter()
+            .filter(|p| p.id != "minecraft")
+        {
+            let folder = Path::new(&prefs.games[&profile.id]);
+            std::fs::write(
+                folder.join(profile.executable.file_name().unwrap()),
+                b"game data",
+            )
+            .unwrap();
+            let root = linked_root(&temp.join("layouts"), &profile, folder).unwrap();
+            assert_eq!(
+                std::fs::read(root.join(&profile.executable)).unwrap(),
+                b"game data"
+            );
+            assert_eq!(
+                linked_root(&temp.join("layouts"), &profile, folder).unwrap(),
+                root
+            );
+        }
+        std::fs::write(&config, b"broken json").unwrap();
+        assert!(load_from(&config).is_err());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+}
