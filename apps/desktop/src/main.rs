@@ -1,5 +1,6 @@
 //! Banana Pepper desktop frontend. Games are reached only through the
 //! `banana-api` registry; this crate names no individual game.
+mod capture;
 mod zar_compressor;
 mod appearance;
 mod library_preferences;
@@ -127,9 +128,12 @@ struct ArcadeApp {
 struct ControlsUi {
     bindings: Bindings,
     path: PathBuf,
-    /// (game, action, add instead of replace) while waiting for a key press.
-    capturing: Option<(&'static str, &'static str, bool)>,
+    /// (game, action, add instead of replace, player) while waiting for a key press.
+    capturing: Option<(&'static str, &'static str, bool, usize)>,
     message: String,
+    /// Press-to-bind for controller buttons and movement axes.
+    pad_capture: Option<capture::Capture>,
+    devices: capture::Devices,
 }
 impl ControlsUi {
     fn load() -> Self {
@@ -145,6 +149,8 @@ impl ControlsUi {
             bindings,
             path,
             capturing: None,
+            pad_capture: None,
+            devices: capture::Devices::default(),
             message,
         }
     }
@@ -277,6 +283,7 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
                             {
                                 app.settings.tab = tab;
                                 app.controls.capturing = None;
+                                app.controls.pad_capture = None;
                             }
                         }
                     });
@@ -305,8 +312,7 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
                             }
                             SettingsTab::Controls => {
                                 if let Some(profile) = profile {
-                                    players_row(ui, &mut app.settings, profile);
-                                    controls_panel(ui, &mut app.controls, profile.id);
+                                    controls_tab(ui, &mut app.settings, &mut app.controls, profile);
                                 }
                             }
                             SettingsTab::Graphics => {
@@ -343,6 +349,7 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
     if close_requested {
         app.settings.open = None;
         app.controls.capturing = None;
+        app.controls.pad_capture = None;
     }
 }
 
@@ -362,64 +369,6 @@ fn settings_choice<T: PartialEq>(
         response.mark_changed();
     }
     response
-}
-
-/// One or two players, for two-player games (settings.cfg `players`).
-fn players_row(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings::Profile) {
-    if profile.max_players < 2 {
-        return;
-    }
-    let game = app.settings.game_mut(profile.id).expect("profile settings");
-    let mut change = None;
-    ui.horizontal(|ui| {
-        ui.label("Players");
-        for (players, label) in [(1, "1 player"), (2, "2 players")] {
-            if settings_choice(ui, &mut game.players, players, label).clicked() {
-                change = Some(format!("{} {label}", profile.title));
-            }
-        }
-    });
-    if game.players > 1 {
-        egui::Grid::new(("player-inputs", profile.id))
-            .num_columns(3)
-            .spacing([8.0, 4.0])
-            .show(ui, |ui| {
-                for player in 0..2 {
-                    ui.label(format!("Player {}", player + 1));
-                    for input in settings::PlayerInput::ALL {
-                        let selected = game.inputs[player] == input;
-                        let response = ui.add(
-                            egui::Button::selectable(selected, input.label())
-                                .frame_when_inactive(true),
-                        );
-                        if response.clicked() && !selected {
-                            game.set_input(player, input);
-                            change = Some(format!(
-                                "{} player {} uses {}",
-                                profile.title,
-                                player + 1,
-                                input.label().to_ascii_lowercase()
-                            ));
-                        }
-                    }
-                    ui.end_row();
-                }
-            });
-        ui.small(match game.inputs_env() {
-            "pad,kbm" => "Every controller plays player one. The mouse aims and fires for player two, with player two's keys (Start 2, Coin 2). Player two's own controller buttons below are not used.",
-            "kbm,pad" => "The mouse and keyboard play player one. Every controller plays player two, with player two's controller buttons below.",
-            _ => "Controller 1 plays player one and controller 2 plays player two, each with its own buttons below. The mouse and keyboard also play player one. Connect both controllers before starting the game.",
-        });
-    } else {
-        ui.small("Every controller, the mouse and the keyboard play player one.");
-    }
-    if let Some(change) = change {
-        app.save(&change);
-    }
-    if app.message.contains(" player") {
-        ui.small(app.message.as_str());
-    }
-    ui.separator();
 }
 
 fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings::Profile) {
@@ -650,150 +599,554 @@ fn audio_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings
     }
 }
 
-fn controls_panel(ui: &mut egui::Ui, state: &mut ControlsUi, game_id: &str) {
-    let Some(game) = controls::game(game_id) else {
+/// All player bindings in one scrolling controls setup, without player tabs.
+fn controls_tab(
+    ui: &mut egui::Ui,
+    settings_ui: &mut SettingsUi,
+    state: &mut ControlsUi,
+    profile: &'static settings::Profile,
+) {
+    let Some(game) = controls::game(profile.id) else {
         return;
     };
-    if let Some((capture_game, action, append)) = state.capturing
-        && capture_game == game.id
+    let two_player = profile.max_players > 1 && !game.player_two.is_empty();
+    let mut change = None;
     {
-        let captured = ui.ctx().input(|i| {
-            i.events.iter().find_map(|event| match event {
-                egui::Event::Key {
-                    key,
-                    pressed: true,
-                    repeat: false,
-                    ..
-                } => Some(key.name().to_owned()),
-                egui::Event::PointerButton {
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    ..
-                } => Some("MouseLeft".to_owned()),
-                egui::Event::PointerButton {
-                    button: egui::PointerButton::Secondary,
-                    pressed: true,
-                    ..
-                } => Some("MouseRight".to_owned()),
-                _ => None,
-            })
-        });
-        if let Some(name) = captured {
-            state.capturing = None;
-            if name == "Escape" || (name.starts_with("Mouse") && !game.mouse_buttons) {
-                state.message = "Key change cancelled.".into();
-            } else {
-                match state.bindings.rebind(game.id, action, &name, append) {
-                    Ok(change) => state.save(change),
-                    Err(e) => state.message = format!("Not changed: {e}"),
+        let settings = settings_ui
+            .settings
+            .game_mut(profile.id)
+            .expect("profile settings");
+        if two_player {
+            ui.horizontal(|ui| {
+                ui.label("Players");
+                for (players, label) in [(1, "1 player"), (2, "2 players")] {
+                    if settings_choice(ui, &mut settings.players, players, label).clicked() {
+                        change = Some(format!("{} {label}", profile.title));
+                    }
+                }
+            });
+        }
+        let player_count = if two_player {
+            usize::from(settings.players.min(2))
+        } else {
+            1
+        };
+        for player in 0..player_count {
+            if !profile.input_methods.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("Player {} input method", player + 1));
+                    for method in profile.input_methods.iter().copied() {
+                        let label = method_label(profile, method);
+                        let selected = settings.inputs[player] == method;
+                        let button =
+                            egui::Button::selectable(selected, label).frame_when_inactive(true);
+                        if ui.add(button).on_hover_text(method_help(method)).clicked() && !selected
+                        {
+                            settings.set_input(player, method);
+                            change = Some(format!(
+                                "{} player {} uses {label}",
+                                profile.title,
+                                player + 1
+                            ));
+                        }
+                    }
+                });
+                let method = settings.inputs[player];
+                ui.small(method_help(method));
+                if let Some(kind) = method.device() {
+                    let names = banana_runtime::device_names(kind);
+                    let others = (0..usize::from(settings.players.min(2)))
+                        .filter(|&p| p != player && settings.inputs[p] == method)
+                        .count();
+                    let text = if names.is_empty() {
+                        if cfg!(target_os = "linux") {
+                            "No such device is connected now. Connect it before starting the game."
+                                .to_owned()
+                        } else {
+                            "Devices are found when the game starts.".to_owned()
+                        }
+                    } else {
+                        let list = names
+                            .iter()
+                            .enumerate()
+                            .map(|(i, n)| format!("{}. {n}", i + 1))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        if others > 0 {
+                            format!(
+                                "Connected: {list}. Both players use this method: player 1 gets the first, player 2 the rest."
+                            )
+                        } else {
+                            format!("Connected: {list}.")
+                        }
+                    };
+                    ui.small(text);
                 }
             }
         }
-        ui.ctx().request_repaint();
     }
-    ui.small(game.note);
-    ui.add_space(4.0);
-    let two_player = !game.player_two.is_empty();
-    egui::Grid::new(("controls", game.id))
-        .num_columns(if two_player { 4 } else { 3 })
+    if let Some(change) = change {
+        settings_ui.save(&change);
+    }
+    if settings_ui.message.contains(" player") || settings_ui.message.contains(" uses ") {
+        ui.small(settings_ui.message.as_str());
+    }
+    ui.separator();
+    capture_key(ui, state, game);
+    let settings = settings_ui.settings.game(profile.id);
+    let player_count = if two_player {
+        usize::from(settings.players.min(2))
+    } else {
+        1
+    };
+    if let Some(capture) = state.pad_capture.as_ref() {
+        if capture.player < player_count {
+            let method = settings.inputs[capture.player];
+            poll_pad_capture(ui, state, game, method);
+        } else {
+            state.pad_capture = None;
+        }
+    }
+    ui.heading("Control bindings");
+    ui.strong("Player 1");
+    player_controls(ui, state, game, two_player, settings.inputs[0]);
+    if player_count > 1 {
+        ui.add_space(12.0);
+        ui.separator();
+        ui.strong("Player 2");
+        player_two_controls(ui, state, game, settings.inputs[1]);
+    }
+}
+
+fn method_label(profile: &settings::Profile, method: settings::InputMethod) -> &'static str {
+    // Racers have no aim: their keyboard-and-mouse choice is the keyboard.
+    if method == settings::InputMethod::KeyboardMouse
+        && !profile.input_methods.contains(&settings::InputMethod::RawInput)
+    {
+        "Keyboard"
+    } else {
+        method.label()
+    }
+}
+
+fn method_help(method: settings::InputMethod) -> &'static str {
+    use settings::InputMethod::*;
+    match method {
+        KeyboardMouse => "The desktop keyboard and mouse. Only one player can have them.",
+        XInput => "Xbox-style controllers (XInput). Bluetooth and wired Xbox pads and most modern gamepads.",
+        DirectInput => "Other game controllers (DirectInput): generic USB gamepads, arcade sticks and wheels. Buttons are numbered 1 to 12.",
+        RawInput => "A mouse or light gun of this player's own (Raw Input), so two can be told apart. The first one used is player 1's when both players pick Raw Input.",
+    }
+}
+
+/// Key capture for the open menu: the key or mouse button pressed next.
+fn capture_key(ui: &mut egui::Ui, state: &mut ControlsUi, game: &'static controls::Game) {
+    let Some((capture_game, action, append, player)) = state.capturing else {
+        return;
+    };
+    if capture_game != game.id {
+        return;
+    }
+    let captured = ui.ctx().input(|i| {
+        i.events.iter().find_map(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                ..
+            } => Some(key.name().to_owned()),
+            egui::Event::PointerButton {
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } => Some("MouseLeft".to_owned()),
+            egui::Event::PointerButton {
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                ..
+            } => Some("MouseRight".to_owned()),
+            _ => None,
+        })
+    });
+    if let Some(name) = captured {
+        state.capturing = None;
+        if name == "Escape" || (name.starts_with("Mouse") && (!game.mouse_buttons || player == 1)) {
+            state.message = "Key change cancelled.".into();
+        } else {
+            let result = if player == 1 {
+                state.bindings.rebind_p2(game.id, action, &name, append)
+            } else {
+                state.bindings.rebind(game.id, action, &name, append)
+            };
+            match result {
+                Ok(change) => state.save(change),
+                Err(e) => state.message = format!("Not changed: {e}"),
+            }
+        }
+    }
+    ui.ctx().request_repaint();
+}
+
+/// A key button: shows `keys`, and starts capturing on click.
+fn key_button(
+    ui: &mut egui::Ui,
+    state: &mut ControlsUi,
+    game: &'static controls::Game,
+    action: &'static controls::Action,
+    player: usize,
+    keys: &[String],
+) {
+    let waiting = matches!(state.capturing,
+        Some((g, a, _, p)) if g == game.id && a == action.id && p == player);
+    let text = if waiting {
+        "Press a key… (Esc cancels)".to_owned()
+    } else if keys.is_empty() {
+        "unbound".to_owned()
+    } else {
+        keys.join(", ")
+    };
+    let button = egui::Button::new(RichText::new(text).monospace()).min_size(egui::vec2(170.0, 0.0));
+    if ui.add(button).on_hover_text("Click, then press the new key").clicked() {
+        state.capturing = Some((game.id, action.id, false, player));
+        state.pad_capture = None;
+        state.message = format!("Press a key for {}.", action.label);
+    }
+}
+
+/// Press-to-bind: reads the player's devices while a capture is waiting,
+/// and binds the first new button press or axis movement.
+fn poll_pad_capture(
+    ui: &mut egui::Ui,
+    state: &mut ControlsUi,
+    game: &'static controls::Game,
+    method: settings::InputMethod,
+) {
+    let Some(capture) = state.pad_capture.as_mut() else {
+        return;
+    };
+    if capture.game != game.id || capture.method != method {
+        state.pad_capture = None;
+        return;
+    }
+    let escape = ui.ctx().input(|i| {
+        i.key_pressed(egui::Key::Escape)
+            || i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }))
+    });
+    if escape {
+        state.pad_capture = None;
+        state.message = "Binding cancelled.".into();
+        return;
+    }
+    if capture.timed_out() {
+        state.pad_capture = None;
+        state.message = "Nothing was pressed; binding cancelled.".into();
+        return;
+    }
+    let Some(now) = state.devices.read(method) else {
+        state.pad_capture = None;
+        state.message = format!(
+            "{} devices cannot be read here; choose from the List menu instead.",
+            method.label()
+        );
+        return;
+    };
+    ui.ctx().request_repaint();
+    let Some(found) = capture.update(now) else {
+        return;
+    };
+    let (player, want) = (capture.player, capture.want);
+    state.pad_capture = None;
+    let result = match (found, want) {
+        (capture::Captured::Button(name), capture::Want::Button(action)) => {
+            let bound = if player == 1 {
+                state.bindings.p2_pads(game.id, action)
+            } else {
+                state.bindings.keys(game.id, action).to_vec()
+            };
+            if bound.iter().any(|b| b == name) {
+                Ok(format!("{} is already bound there", controls::pad_label(method, name).unwrap_or(name)))
+            } else if player == 1 {
+                state.bindings.toggle_pad_p2(game.id, action, name)
+            } else {
+                state.bindings.toggle_pad(game.id, action, name)
+            }
+        }
+        (capture::Captured::Axis(name), capture::Want::Axis { which, append }) => {
+            let mut axes = if append {
+                state.bindings.movement(game.id, player, which)
+            } else {
+                Vec::new()
+            };
+            axes.retain(|a| a != &name);
+            axes.truncate(1);
+            axes.push(name);
+            state.bindings.set_movement(game.id, player, which, &axes)
+        }
+        _ => return,
+    };
+    match result {
+        Ok(change) => state.save(change),
+        Err(e) => state.message = format!("Not changed: {e}"),
+    }
+}
+
+/// Controller buttons for one action, named for the player's input method:
+/// click, then press the button on the device (List shows them all).
+fn pad_menu(
+    ui: &mut egui::Ui,
+    state: &mut ControlsUi,
+    game: &'static controls::Game,
+    action: &'static controls::Action,
+    player: usize,
+    method: settings::InputMethod,
+) {
+    let bound: Vec<String> = if player == 1 {
+        state.bindings.p2_pads(game.id, action.id)
+    } else {
+        state
+            .bindings
+            .keys(game.id, action.id)
+            .iter()
+            .filter(|k| controls::is_pad(k))
+            .cloned()
+            .collect()
+    };
+    let named: Vec<&str> = bound
+        .iter()
+        .filter_map(|b| controls::pad_label(method, b))
+        .collect();
+    let waiting = state.pad_capture.as_ref().is_some_and(|c| {
+        c.game == game.id && c.player == player && c.want == capture::Want::Button(action.id)
+    });
+    let text = if waiting {
+        "🎮 Press a button…".to_owned()
+    } else if named.is_empty() {
+        "🎮 none".to_owned()
+    } else {
+        format!("🎮 {}", named.join(", "))
+    };
+    ui.horizontal(|ui| {
+        let button = egui::Button::new(RichText::new(text).monospace()).min_size(egui::vec2(150.0, 0.0));
+        let clicked = ui
+            .add(button)
+            .on_hover_text("Click, then press the button on the device (adds it). Click again or press Esc to cancel.")
+            .clicked();
+        if clicked && waiting {
+            state.pad_capture = None;
+            state.message = "Binding cancelled.".into();
+        } else if clicked {
+            let start = capture::Capture::new(game.id, player, method, capture::Want::Button(action.id));
+            state.message = start.prompt(["", ""]);
+            state.capturing = None;
+            state.pad_capture = Some(start);
+        }
+        ui.menu_button("List", |ui| {
+            ui.label(RichText::new(format!("{} buttons", method.label())).small());
+            for (name, _, _) in controls::PAD_BUTTONS {
+                let Some(label) = controls::pad_label(method, name) else {
+                    continue;
+                };
+                let mut on = bound.iter().any(|k| k == name);
+                if ui.checkbox(&mut on, label).changed() {
+                    let result = if player == 1 {
+                        state.bindings.toggle_pad_p2(game.id, action.id, name)
+                    } else {
+                        state.bindings.toggle_pad(game.id, action.id, name)
+                    };
+                    match result {
+                        Ok(change) => state.save(change),
+                        Err(e) => state.message = format!("Not changed: {e}"),
+                    }
+                }
+            }
+        })
+        .response
+        .on_hover_text("Choose or remove buttons from a list");
+    });
+}
+
+/// Movement X and Y (aim or steering) for a player who uses a controller,
+/// joystick, mouse or light gun: click, then move the axis.
+fn movement_rows(
+    ui: &mut egui::Ui,
+    state: &mut ControlsUi,
+    game: &'static controls::Game,
+    player: usize,
+    method: settings::InputMethod,
+) {
+    let Some(spec) = game.movement else {
+        return;
+    };
+    if method == settings::InputMethod::KeyboardMouse {
+        return;
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new("Movement").strong());
+    egui::Grid::new(("movement", game.id, player))
+        .num_columns(2)
         .spacing([16.0, 6.0])
         .striped(true)
         .show(ui, |ui| {
-            if two_player {
-                ui.label("");
-                ui.label(RichText::new("Player 1: keys").small());
-                ui.label(RichText::new("Player 1 🎮").small());
-                ui.label(RichText::new("Player 2 🎮").small())
-                    .on_hover_text("Player two's own controller buttons (used when player two plays on a controller)");
-                ui.end_row();
-            }
-            for action in game.actions {
-                ui.label(action.label);
-                let waiting = matches!(state.capturing,
-                            Some((g, a, _)) if g == game.id && a == action.id);
-                let keys = state.bindings.keys(game.id, action.id).join(", ");
+            for which in 0..2 {
+                ui.label(spec.labels[which]);
+                let axes = state.bindings.movement(game.id, player, which);
+                let named: Vec<String> = axes
+                    .iter()
+                    .filter_map(|a| controls::axis_label(method, a))
+                    .collect();
+                let waiting = state.pad_capture.as_ref().is_some_and(|c| {
+                    c.game == game.id
+                        && c.player == player
+                        && matches!(c.want, capture::Want::Axis { which: w, .. } if w == which)
+                });
                 let text = if waiting {
-                    "Press a key… (Esc cancels)".to_owned()
-                } else if keys.is_empty() {
-                    "unbound".to_owned()
+                    "Move it…".to_owned()
+                } else if named.is_empty() {
+                    if axes.is_empty() { "unbound".to_owned() } else { format!("not a {} axis", method.label()) }
                 } else {
-                    keys
+                    named.join(", ")
                 };
-                let button = egui::Button::new(RichText::new(text).monospace())
-                    .min_size(egui::vec2(170.0, 0.0));
-                if action.pad_only {
-                    ui.add_enabled(false, button)
-                        .on_disabled_hover_text("Controller only: choose buttons with 🎮");
-                } else if ui
-                    .add(button)
-                    .on_hover_text("Click, then press the new key")
-                    .clicked()
-                {
-                    state.capturing = Some((game.id, action.id, false));
-                    state.message = format!("Press a key for {}.", action.label);
-                }
                 ui.horizontal(|ui| {
-                    ui.menu_button("🎮", |ui| {
-                        ui.label(RichText::new("Controller buttons (Xbox layout)").small());
-                        for (name, _, label) in controls::PAD_BUTTONS {
-                            let mut bound = state
-                                .bindings
-                                .keys(game.id, action.id)
-                                .iter()
-                                .any(|k| k == name);
-                            if ui.checkbox(&mut bound, *label).changed() {
-                                match state.bindings.toggle_pad(game.id, action.id, name) {
-                                    Ok(change) => state.save(change),
-                                    Err(e) => state.message = format!("Not changed: {e}"),
+                    let button = egui::Button::new(RichText::new(text).monospace()).min_size(egui::vec2(170.0, 0.0));
+                    let mut start = None;
+                    if ui
+                        .add(button)
+                        .on_hover_text("Click, then move the stick, axis or pointer (replaces). Click again or press Esc to cancel.")
+                        .clicked()
+                    {
+                        if waiting {
+                            state.pad_capture = None;
+                            state.message = "Binding cancelled.".into();
+                        } else {
+                            start = Some(false);
+                        }
+                    }
+                    if ui.small_button("+").on_hover_text("Add a second axis").clicked() {
+                        start = Some(true);
+                    }
+                    if let Some(append) = start {
+                        let capture = capture::Capture::new(game.id, player, method, capture::Want::Axis { which, append });
+                        state.message = capture.prompt(spec.labels);
+                        state.capturing = None;
+                        state.pad_capture = Some(capture);
+                    }
+                    if ui.small_button("×").on_hover_text("Unbind").clicked() {
+                        match state.bindings.set_movement(game.id, player, which, &[]) {
+                            Ok(change) => state.save(change),
+                            Err(e) => state.message = format!("Not changed: {e}"),
+                        }
+                    }
+                    ui.menu_button("List", |ui| {
+                        ui.label(RichText::new(format!("{} axes (at most two)", method.label())).small());
+                        for axis in banana_input::pad::Axis::ALL {
+                            for name in [axis.name().to_owned(), format!("{}-", axis.name())] {
+                                let Some(label) = controls::axis_label(method, &name) else {
+                                    continue;
+                                };
+                                let mut on = axes.contains(&name);
+                                if ui.checkbox(&mut on, label).changed() {
+                                    let mut next = axes.clone();
+                                    if on {
+                                        next.retain(|a| a.trim_end_matches('-') != axis.name());
+                                        next.truncate(1);
+                                        next.push(name.clone());
+                                    } else {
+                                        next.retain(|a| a != &name);
+                                    }
+                                    match state.bindings.set_movement(game.id, player, which, &next) {
+                                        Ok(change) => state.save(change),
+                                        Err(e) => state.message = format!("Not changed: {e}"),
+                                    }
                                 }
                             }
                         }
                     })
                     .response
-                    .on_hover_text("Add or remove controller buttons");
-                    if action.single || action.pad_only {
-                        return;
-                    }
-                    if ui
-                        .small_button("+")
-                        .on_hover_text("Add another key")
-                        .clicked()
-                    {
-                        state.capturing = Some((game.id, action.id, true));
-                        state.message = format!("Press an extra key for {}.", action.label);
-                    }
-                    if ui.small_button("×").on_hover_text("Unbind").clicked() {
-                        match state.bindings.clear(game.id, action.id) {
-                            Ok(()) => state.save(format!("{} unbound", action.label)),
-                            Err(e) => state.message = format!("Not changed: {e}"),
+                    .on_hover_text("Choose axes from a list");
+                });
+                ui.end_row();
+            }
+        });
+}
+
+/// Player one's menu (every player's menu in one-player games).
+fn player_controls(
+    ui: &mut egui::Ui,
+    state: &mut ControlsUi,
+    game: &'static controls::Game,
+    two_player: bool,
+    method: settings::InputMethod,
+) {
+    ui.small(game.note);
+    ui.add_space(4.0);
+    let buttons = method != settings::InputMethod::KeyboardMouse;
+    egui::Grid::new(("controls", game.id, 0))
+        .num_columns(3)
+        .spacing([16.0, 6.0])
+        .striped(true)
+        .show(ui, |ui| {
+            for action in game.actions {
+                // Start 2 and Coin 2 are player two's, in player two's menu.
+                if two_player && matches!(controls::player_two_role(game, action), controls::PlayerTwo::Hidden) {
+                    continue;
+                }
+                ui.label(action.label);
+                ui.horizontal(|ui| {
+                    if action.pad_only {
+                        ui.add_enabled(false, egui::Button::new("controller only"));
+                    } else {
+                        let keys: Vec<String> = state
+                            .bindings
+                            .keys(game.id, action.id)
+                            .iter()
+                            .filter(|k| !controls::is_pad(k))
+                            .cloned()
+                            .collect();
+                        key_button(ui, state, game, action, 0, &keys);
+                        if !action.single {
+                            if ui.small_button("+").on_hover_text("Add another key").clicked() {
+                                state.capturing = Some((game.id, action.id, true, 0));
+                                state.message = format!("Press an extra key for {}.", action.label);
+                            }
+                            if ui.small_button("×").on_hover_text("Unbind").clicked() {
+                                let pads: Vec<String> = state
+                                    .bindings
+                                    .keys(game.id, action.id)
+                                    .iter()
+                                    .filter(|k| controls::is_pad(k))
+                                    .cloned()
+                                    .collect();
+                                let refs: Vec<&str> = pads.iter().map(String::as_str).collect();
+                                let mut next = state.bindings.clone();
+                                match next.set(game.id, action.id, &refs).and_then(|()| next.validate()) {
+                                    Ok(()) => {
+                                        state.bindings = next;
+                                        state.save(format!("{} keys unbound", action.label));
+                                    }
+                                    Err(e) => state.message = format!("Not changed: {e}"),
+                                }
+                            }
                         }
                     }
                 });
-                if two_player {
-                    player_two_pad_cell(ui, state, game, action);
+                if buttons {
+                    pad_menu(ui, state, game, action, 0, method);
+                } else {
+                    ui.label("");
                 }
                 ui.end_row();
             }
         });
-    if two_player {
-        ui.horizontal(|ui| {
-            if state.bindings.p2_custom(game.id) {
-                ui.small("Player 2 has its own controller buttons.");
-                if ui.button("Use player 1's buttons").clicked() {
-                    state.bindings.reset_p2(game.id);
-                    state.save(format!("{} player 2 uses player 1's buttons", game.title));
-                }
-            } else {
-                ui.small("Player 2's controller uses player 1's buttons until you change one.");
-            }
-        });
+    if !buttons {
+        ui.small("Controller buttons are hidden while this player uses the keyboard and mouse.");
     }
+    movement_rows(ui, state, game, 0, method);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if ui.button("Reset to defaults").clicked() {
+        if ui.button("Reset player 1 to defaults").clicked() {
             state.capturing = None;
-            state.bindings.reset_game(game.id);
-            state.save(format!("{} controls reset", game.title));
+            state.bindings.reset_player_one(game.id);
+            state.save(format!("{} player 1 controls reset", game.title));
         }
         ui.small(state.path.display().to_string());
     });
@@ -802,39 +1155,97 @@ fn controls_panel(ui: &mut egui::Ui, state: &mut ControlsUi, game_id: &str) {
     }
 }
 
-/// Player two's controller buttons for one action (two-player games). Rows
-/// that already are player two's (Start 2, Coin 2) are left empty: player
-/// two's start and coin are set on player one's rows.
-fn player_two_pad_cell(
+/// Player two's menu: its Start and Coin keys, its own keys for the gun
+/// actions, shared keys for the rest, and its own controller buttons.
+fn player_two_controls(
     ui: &mut egui::Ui,
     state: &mut ControlsUi,
     game: &'static controls::Game,
-    action: &'static controls::Action,
+    method: settings::InputMethod,
 ) {
-    if game.player_two.iter().any(|(_, target)| *target == action.target) {
-        ui.label("");
-        return;
-    }
-    let pads = state.bindings.p2_pads(game.id, action.id);
-    let text = if pads.is_empty() {
-        "🎮 none".to_owned()
-    } else {
-        format!("🎮 {}", pads.join(", "))
-    };
-    ui.menu_button(RichText::new(text).monospace(), |ui| {
-        ui.label(RichText::new("Player 2's controller buttons (Xbox layout)").small());
-        for (name, _, label) in controls::PAD_BUTTONS {
-            let mut bound = pads.iter().any(|k| k == name);
-            if ui.checkbox(&mut bound, *label).changed() {
-                match state.bindings.toggle_pad_p2(game.id, action.id, name) {
-                    Ok(change) => state.save(change),
-                    Err(e) => state.message = format!("Not changed: {e}"),
+    ui.small("Player 2's own controls. Test, service and menu keys are shared with player 1.");
+    ui.add_space(4.0);
+    let buttons = method != settings::InputMethod::KeyboardMouse;
+    egui::Grid::new(("controls", game.id, 1))
+        .num_columns(3)
+        .spacing([16.0, 6.0])
+        .striped(true)
+        .show(ui, |ui| {
+            for action in game.actions {
+                let role = controls::player_two_role(game, action);
+                if matches!(role, controls::PlayerTwo::Hidden) {
+                    continue;
                 }
+                let label = match role {
+                    controls::PlayerTwo::Linked(linked) => linked.label.to_owned(),
+                    _ => action.label.replace("player one", "player two").replace("Player 1", "Player 2"),
+                };
+                ui.label(label);
+                ui.horizontal(|ui| match role {
+                    controls::PlayerTwo::Linked(linked) => {
+                        let keys: Vec<String> = state
+                            .bindings
+                            .keys(game.id, linked.id)
+                            .iter()
+                            .filter(|k| !controls::is_pad(k))
+                            .cloned()
+                            .collect();
+                        key_button(ui, state, game, linked, 0, &keys);
+                    }
+                    controls::PlayerTwo::Own(_) if !action.pad_only => {
+                        let keys = state.bindings.p2_keys(game.id, action.id);
+                        key_button(ui, state, game, action, 1, &keys);
+                        if ui.small_button("×").on_hover_text("Unbind").clicked() {
+                            state.bindings.clear_p2_keys(game.id, action.id);
+                            state.save(format!("{} player 2 {} keys unbound", game.title, action.id));
+                        }
+                    }
+                    controls::PlayerTwo::Own(_) => {
+                        ui.add_enabled(false, egui::Button::new("controller only"));
+                    }
+                    _ => {
+                        let keys = state
+                            .bindings
+                            .keys(game.id, action.id)
+                            .iter()
+                            .filter(|k| !controls::is_pad(k))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        ui.add_enabled(
+                            false,
+                            egui::Button::new(RichText::new(format!("shared: {keys}")).monospace()),
+                        )
+                        .on_disabled_hover_text("Set in the Player 1 controls above");
+                    }
+                });
+                if buttons {
+                    pad_menu(ui, state, game, action, 1, method);
+                } else {
+                    ui.label("");
+                }
+                ui.end_row();
             }
+        });
+    if !buttons {
+        ui.small("Controller buttons are hidden while player 2 uses the keyboard and mouse. The mouse aims and fires for player 2.");
+    }
+    movement_rows(ui, state, game, 1, method);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if state.bindings.p2_custom(game.id) {
+            if ui.button("Reset player 2 to player 1's buttons").clicked() {
+                state.capturing = None;
+                state.bindings.reset_p2(game.id);
+                state.save(format!("{} player 2 uses player 1's buttons", game.title));
+            }
+        } else {
+            ui.small("Player 2's controller uses player 1's buttons until you change one.");
         }
-    })
-    .response
-    .on_hover_text("Player two's controller buttons for this action");
+    });
+    if !state.message.is_empty() {
+        ui.small(state.message.as_str());
+    }
 }
 
 #[derive(Clone, Copy)]

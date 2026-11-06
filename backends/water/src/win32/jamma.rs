@@ -144,6 +144,8 @@ struct Controller {
     inputs: pad::Inputs,
     /// Each player's controller buttons (controls.cfg; `[big_buck.p2]`).
     bindings: [Vec<(u32, u32)>; pad::MAX_PLAYERS],
+    /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
+    moves: [pad::Movement; pad::MAX_PLAYERS],
     /// Pad-held state per bound target, for press/release edges.
     held: Vec<(u32, bool)>,
     last: std::time::Instant,
@@ -181,9 +183,9 @@ pub fn players() -> usize {
 /// Gun one's trigger and pump switches belong to whoever has the mouse:
 /// with player two on keyboard and mouse they become gun two's.
 fn follow_mouse(index: usize) -> usize {
-    match (index, inputs().mouse) {
-        (1, 1) => GUN2_TRIGGER,
-        (3, 1) => GUN2_PUMP,
+    match (index, inputs().mouse()) {
+        (1, Some(1)) => GUN2_TRIGGER,
+        (3, Some(1)) => GUN2_PUMP,
         _ => index,
     }
 }
@@ -191,13 +193,15 @@ fn follow_mouse(index: usize) -> usize {
 /// One message-loop pass: XInput crosshairs, shots, pumps and switches.
 pub unsafe fn controller_frame(focused: bool) {
     let c = (*ptr::addr_of_mut!(CONTROLLER)).get_or_insert_with(|| {
-        if !xinput::available() {
+        if inputs().uses(pad::Method::XInput) && !xinput::available() {
             eprintln!("[water] XInput unavailable; controllers disabled");
         }
         if players() > 1 {
             eprintln!(
-                "[water] two players: the mouse aims gun {}",
-                inputs().mouse + 1
+                "[water] two players ({}, {}); the system mouse aims {}",
+                inputs().methods[0].label(),
+                inputs().methods[1].label(),
+                inputs().mouse().map_or("no gun".to_owned(), |g| format!("gun {}", g + 1))
             );
         }
         Controller {
@@ -206,19 +210,25 @@ pub unsafe fn controller_frame(focused: bool) {
                 parse_pad("ARCADE_PAD", DEFAULT_PAD),
                 parse_pad("ARCADE_PAD_P2", DEFAULT_PAD_P2),
             ],
+            moves: ["ARCADE_MOVE", "ARCADE_MOVE_P2"].map(|name| {
+                let text = std::env::var(name).ok();
+                pad::Movement::parse(text.as_deref().map(str::as_bytes), pad::Movement::STICKS)
+            }),
             held: Vec::new(),
             last: std::time::Instant::now(),
             connected: 0,
         }
     });
     let states = if focused {
-        xinput::read_players(&c.inputs)
+        let [c1, c2] = controllers::read_players(&c.inputs);
+        let [r1, r2] = rawinput::read_players(&c.inputs);
+        [c1.merge(r1), c2.merge(r2)]
     } else {
         [pad::Pad::default(); pad::MAX_PLAYERS]
     };
-    if focused && xinput::connected() != c.connected {
-        c.connected = xinput::connected();
-        eprintln!("[water] {} XInput controller(s) connected", c.connected);
+    if focused && controllers::connected() != c.connected {
+        c.connected = controllers::connected();
+        eprintln!("[water] {} controller(s) connected (XInput + DirectInput)", c.connected);
     }
     if states.iter().any(|s| s.held(pad::BACK) && s.held(pad::START)) {
         release();
@@ -231,7 +241,13 @@ pub unsafe fn controller_frame(focused: bool) {
     for gun in 0..c.inputs.players {
         let (x, y) = aim_position(gun);
         let mut cursor = pad::Cursor::new(x, y);
-        if cursor.step(states[gun].aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
+        // A mouse or light gun of the player's own points directly.
+        if let Some((px, py)) = states[gun].pointer_moved(&c.moves[gun], 640, 480) {
+            if (px, py) != (x, y) {
+                cursor = pad::Cursor::new(px, py);
+                aim_gun(gun, px, py, false);
+            }
+        } else if cursor.step(states[gun].movement(&c.moves[gun]), elapsed, CROSSHAIR_SPEED, 640, 480) {
             aim_gun(gun, cursor.x, cursor.y, false);
         }
         cursors[gun] = (cursor.x, cursor.y);
@@ -276,7 +292,9 @@ pub unsafe fn aim_position(gun: usize) -> (i32, i32) {
 
 /// The mouse's aim: gun one, or gun two when player two has the mouse.
 pub unsafe fn aim(x: i32, y: i32, shoot: bool) {
-    aim_gun(inputs().mouse, x, y, shoot);
+    if let Some(gun) = inputs().mouse() {
+        aim_gun(gun, x, y, shoot);
+    }
 }
 
 /// Shot (1) or move (9), with the gun number (0 = gun one) in bits 8-11 as
@@ -305,6 +323,9 @@ unsafe fn aim_gun(gun: usize, x: i32, y: i32, shoot: bool) {
     }
 }
 pub unsafe fn mouse(button: i32, down: bool, x: i32, y: i32) {
+    if inputs().mouse().is_none() {
+        return; // every mouse and light gun is read through Raw Input
+    }
     aim(x, y, button == 0 && down);
     switch(follow_mouse(if button == 0 { 1 } else { 3 }), down);
 }

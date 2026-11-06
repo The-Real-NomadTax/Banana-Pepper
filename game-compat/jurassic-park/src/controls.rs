@@ -1,13 +1,14 @@
 //! Cabinet actions and default bindings, rendered by the shared controls UI.
 #[allow(unused_imports)]
-use banana_input::controls::{any, one, pad, Game, KeySpace};
+use banana_input::controls::{any, one, pad, Game, KeySpace, MovementSpec};
 
 pub static CONTROLS: Game = Game {
         id: "jurassic",
         title: "Jurassic Park 2015",
         keys: KeySpace::Sdl,
         mouse_buttons: true,
-        note: "Mouse movement always aims for player one. Controllers: either stick moves the aim. Two players: controller 2 aims and fires for player two.",
+        note: "The mouse aims for the keyboard-and-mouse player (player one unless player two picks it). Controllers: either stick moves the aim. Mice and light guns on Raw Input aim their own player directly.",
+        movement: Some(MovementSpec::AIM),
         player_two: &[("start1", 372), ("coin1", 380), ("fire", 343), ("secondary", 344)],
         actions: &[
             any("start1", "Player 1 Start", 371, &["1", "PadStart"]),

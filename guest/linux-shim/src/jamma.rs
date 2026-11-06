@@ -113,7 +113,7 @@ fn parse_keys(value: &str) -> Result<Vec<(u8, usize)>, String> {
             ))
         });
         match parsed {
-            Some((index @ (1 | 5 | 6 | 7 | 8 | 10 | 11), key))
+            Some((index @ (1 | 2 | 5 | 6 | 7 | 8 | 10 | 11), key))
                 if (1..128).contains(&key) && key != 27 =>
             {
                 keys.push((key.to_ascii_lowercase(), index));
@@ -142,15 +142,15 @@ pub fn key(key: u8, down: bool) {
     let Some(index) = switch_for(key) else {
         return;
     };
-    set_switch(follow_mouse(index, inputs().mouse), down);
+    set_switch(follow_mouse(index, inputs().mouse()), down);
 }
 
-/// Gun one's trigger and pump switches belong to whoever has the mouse:
-/// with player two on keyboard and mouse they become gun two's.
-fn follow_mouse(index: usize, mouse: usize) -> usize {
+/// Gun one's trigger and pump switches belong to whoever has the system
+/// mouse: with player two on keyboard and mouse they become gun two's.
+fn follow_mouse(index: usize, mouse: Option<usize>) -> usize {
     match (index, mouse) {
-        (1, 1) => GUN2_TRIGGER,
-        (3, 1) => GUN2_PUMP,
+        (1, Some(1)) => GUN2_TRIGGER,
+        (3, Some(1)) => GUN2_PUMP,
         _ => index,
     }
 }
@@ -225,6 +225,8 @@ struct Controller {
     inputs: crate::pad::Inputs,
     /// Each player's controller buttons (controls.cfg; `[big_buck.p2]`).
     bindings: [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS],
+    /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
+    moves: [crate::pad::Movement; crate::pad::MAX_PLAYERS],
     edges: crate::evdev_pad::Edges,
     last: std::time::Instant,
 }
@@ -247,13 +249,10 @@ pub fn controller_frame() {
         let inputs = inputs();
         if inputs.players > 1 {
             eprintln!(
-                "[arcade] two players: the mouse aims gun {}; controllers drive {}",
-                inputs.mouse + 1,
-                match (inputs.pad_drives(0), inputs.pad_drives(1)) {
-                    (true, true) => "gun one (controller 1) and gun two (controller 2)",
-                    (true, false) => "gun one",
-                    _ => "gun two",
-                }
+                "[arcade] two players ({}, {}); the system mouse aims {}",
+                inputs.methods[0].label(),
+                inputs.methods[1].label(),
+                inputs.mouse().map_or("no gun".to_owned(), |g| format!("gun {}", g + 1))
             );
         }
         Controller {
@@ -263,6 +262,7 @@ pub fn controller_frame() {
                 crate::evdev_pad::bindings(DEFAULT_PAD),
                 crate::evdev_pad::bindings_p2(DEFAULT_PAD_P2),
             ],
+            moves: [0, 1].map(|p| crate::evdev_pad::movement(p, crate::pad::Movement::STICKS)),
             edges: Default::default(),
             last: std::time::Instant::now(),
         }
@@ -281,7 +281,13 @@ pub fn controller_frame() {
     for gun in 0..c.inputs.players {
         let (x, y) = aim_position(gun);
         let mut cursor = crate::pad::Cursor::new(x, y);
-        if cursor.step(states[gun].aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
+        // A mouse or light gun of the player's own points directly.
+        if let Some((px, py)) = states[gun].pointer_moved(&c.moves[gun], 640, 480) {
+            if (px, py) != (x, y) {
+                cursor = crate::pad::Cursor::new(px, py);
+                aim_gun(gun, px, py, false);
+            }
+        } else if cursor.step(states[gun].movement(&c.moves[gun]), elapsed, CROSSHAIR_SPEED, 640, 480) {
             aim_gun(gun, cursor.x, cursor.y, false);
         }
         cursors[gun] = (cursor.x, cursor.y);
@@ -317,9 +323,12 @@ pub fn aim_position(gun: usize) -> (c_int, c_int) {
     (x.load(Ordering::Relaxed), y.load(Ordering::Relaxed))
 }
 
-/// The mouse's aim: gun one, or gun two when player two has the mouse.
+/// The system mouse's aim: gun one, or gun two when player two has the
+/// mouse; nobody's while every mouse is read directly (Raw Input).
 pub fn aim(x: c_int, y: c_int, shoot: bool) {
-    aim_gun(inputs().mouse, x, y, shoot);
+    if let Some(gun) = inputs().mouse() {
+        aim_gun(gun, x, y, shoot);
+    }
 }
 
 /// The gun callback's event code: shot (1) or move (9), with the gun number
@@ -359,13 +368,17 @@ fn aim_gun(gun: usize, x: c_int, y: c_int, shoot: bool) {
 }
 
 pub fn mouse(button: c_int, down: bool, x: c_int, y: c_int) {
+    let mouse = inputs().mouse();
+    if mouse.is_none() {
+        return; // every mouse and light gun is read directly
+    }
     aim(x, y, button == 0 && down);
     let index = match button {
         0 => 1,
         2 => 3,
         _ => return,
     };
-    let index = follow_mouse(index, inputs().mouse);
+    let index = follow_mouse(index, mouse);
     let mut switches = SWITCHES.lock().unwrap_or_else(|e| e.into_inner());
     switches.set(index, down);
     BITS.store(switches.held >> 1, Ordering::Relaxed);
@@ -410,9 +423,10 @@ mod tests {
 
     #[test]
     fn mouse_trigger_and_pump_follow_the_mouse_player() {
-        assert_eq!((follow_mouse(1, 0), follow_mouse(3, 0)), (1, 3));
-        assert_eq!((follow_mouse(1, 1), follow_mouse(3, 1)), (2, 4));
-        assert_eq!((follow_mouse(5, 1), follow_mouse(11, 1)), (5, 11));
+        assert_eq!((follow_mouse(1, Some(0)), follow_mouse(3, Some(0))), (1, 3));
+        assert_eq!((follow_mouse(1, Some(1)), follow_mouse(3, Some(1))), (2, 4));
+        assert_eq!((follow_mouse(5, Some(1)), follow_mouse(11, Some(1))), (5, 11));
+        assert_eq!(follow_mouse(1, None), 1);
     }
 
     #[test]

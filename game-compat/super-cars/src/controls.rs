@@ -1,6 +1,6 @@
 //! Cabinet actions and default bindings, rendered by the shared controls UI.
 #[allow(unused_imports)]
-use banana_input::controls::{any, one, pad, Game, KeySpace};
+use banana_input::controls::{any, one, pad, Game, KeySpace, MovementSpec};
 
 pub static CONTROLS: Game = Game {
         id: "super_cars",
@@ -8,6 +8,7 @@ pub static CONTROLS: Game = Game {
         keys: KeySpace::DirectInput,
         mouse_buttons: false,
         note: "Steering ramps while held and recentres on release; gas and brake keys are on/off. Controllers (XInput): left stick steers, triggers bound to gas/brake are analog. Targets are the cabinet I/O board's input codes.",
+        movement: Some(MovementSpec::STEER),
         player_two: &[],
         actions: &[
             any("steer_left", "Steer left", 1, &["Left", "PadLeft"]),

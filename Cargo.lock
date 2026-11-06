@@ -335,6 +335,9 @@ dependencies = [
 [[package]]
 name = "banana-input"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "banana-linux-shim"

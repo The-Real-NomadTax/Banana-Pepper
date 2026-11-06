@@ -51,7 +51,7 @@ fn two_players_only_for_two_player_games() {
     let s = Settings::parse("[jurassic]\nplayers = 2\n[big_buck]\nplayers = 2\n").unwrap();
     assert_eq!(s.game("jurassic").players, 2);
     assert!(s.game("jurassic").guest_env().contains(&("ARCADE_PLAYERS", "2".into())));
-    assert!(s.game("jurassic").summary().ends_with("2 players"));
+    assert!(s.game("jurassic").summary().ends_with("2 players (P1 XInput, P2 XInput)"));
     assert_eq!(Settings::parse(&s.to_text()).unwrap(), s);
     // One player (the default) sets nothing for the guest.
     let one = Settings::default();
@@ -65,26 +65,40 @@ fn two_players_only_for_two_player_games() {
 }
 
 #[test]
-fn players_choose_controller_or_keyboard_and_mouse() {
+fn players_choose_their_input_method() {
     setup();
-    let s = Settings::parse("[big_buck]\nplayers = 2\np2_input = keyboard_mouse\n").unwrap();
+    let s = Settings::parse("[big_buck]\nplayers = 2\np1_input = dinput\np2_input = keyboard_mouse\n").unwrap();
     let g = s.game("big_buck");
-    assert_eq!(g.inputs, [PlayerInput::Controller, PlayerInput::KeyboardMouse]);
-    assert!(g.guest_env().contains(&("ARCADE_INPUTS", "pad,kbm".into())));
-    assert!(g.summary().ends_with("(P2 keyboard & mouse)"));
+    assert_eq!(g.inputs, [InputMethod::DirectInput, InputMethod::KeyboardMouse]);
+    assert!(g.guest_env().contains(&("ARCADE_INPUTS", "dinput,keyboard_mouse".into())));
+    assert!(g.summary().ends_with("2 players (P1 DirectInput, P2 Keyboard & mouse)"));
     assert_eq!(Settings::parse(&s.to_text()).unwrap(), s);
+    // The older words still load.
+    let old = Settings::parse("[jurassic]\nplayers = 2\np1_input = controller\np2_input = keyboard_mouse\n").unwrap();
+    assert_eq!(old.game("jurassic").inputs, [InputMethod::XInput, InputMethod::KeyboardMouse]);
     // Only one player can have the keyboard and mouse.
     let s = Settings::parse(
         "[jurassic]\nplayers = 2\np2_input = keyboard_mouse\np1_input = keyboard_mouse\n",
     )
     .unwrap();
-    assert_eq!(s.game("jurassic").inputs_env(), "kbm,pad");
-    // Inputs only reach the game with two players.
-    let one = Settings::parse("[aliens]\np2_input = keyboard_mouse\n").unwrap();
-    assert!(!one.game("aliens").guest_env().iter().any(|e| e.0 == "ARCADE_INPUTS"));
+    assert_eq!(s.game("jurassic").inputs, [InputMethod::KeyboardMouse, InputMethod::XInput]);
+    // Two light guns.
+    let guns = Settings::parse("[aliens]\nplayers = 2\np1_input = rawinput\np2_input = rawinput\n").unwrap();
+    assert_eq!(guns.game("aliens").input_assignment().mouse(), None);
+    // Player one's method applies with one player too; the default sets nothing.
+    let solo = Settings::parse("[aliens]\np1_input = rawinput\n").unwrap();
+    assert!(solo.game("aliens").guest_env().contains(&("ARCADE_INPUTS", "rawinput,xinput".into())));
+    assert!(!Settings::default().game("aliens").guest_env().iter().any(|e| e.0 == "ARCADE_INPUTS"));
+    // Racers: one player, keyboard / XInput / DirectInput (wheels).
+    let wheel = Settings::parse("[super_cars]\np1_input = dinput\n").unwrap();
+    assert!(wheel.game("super_cars").guest_env().contains(&("ARCADE_INPUTS", "dinput,xinput".into())));
+    assert!(Settings::parse("[ford]\np1_input = rawinput\n").is_err());
+    assert!(Settings::parse("[ford]\np2_input = xinput\n").is_err());
     assert!(Settings::parse("[aliens]\np1_input = gamepad\n").is_err());
-    assert!(Settings::parse("[ford]\np2_input = keyboard_mouse\n").is_err());
-    assert_eq!(Settings::default().game("aliens").inputs_env(), "pad,pad");
+    // Racers write only p1_input; gun games write both.
+    let text = Settings::default().to_text();
+    assert_eq!(text.matches("p1_input =").count(), 5);
+    assert_eq!(text.matches("p2_input =").count(), 3);
 }
 
 #[test]

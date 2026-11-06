@@ -497,7 +497,7 @@ fn x_keysym(sdl: u32) -> Option<u32> {
         279 => 0xff57,
         280 => 0xff55,
         281 => 0xff56,
-        282..=293 => 0xffbe + (sdl - 282),
+        282..=296 => 0xffbe + (sdl - 282), // F1-F15
         303 => 0xffe2,
         304 => 0xffe1,
         305 => 0xffe4,
@@ -519,6 +519,9 @@ const DEFAULT_PAD_KEYS_P2: &str = "50:16,50:4096,54:32,57:8192,273:1,274:2";
 /// player two has the mouse.
 const Q_FIRE_KEY: u32 = 113;
 const W_SECONDARY_KEY: u32 = 119;
+/// Player one's fire and secondary keys while nobody has the system mouse
+/// (SDL F13/F14; the preparer's `NO_MOUSE_FIRE_KEYS`).
+const F13_FIRE_KEYS: [u32; 2] = [294, 295];
 /// Pointer speed at full stick deflection, in screen pixels per second.
 const POINTER_SPEED: i32 = 1200;
 const KEY_PRESS: u8 = 2;
@@ -591,8 +594,19 @@ impl GunAim {
             .unwrap_or((1360, 768));
         Ok(Self {
             axes: GUN_AXES[player.min(1)],
-            get: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(i32) -> *mut Analog>(RAW_ANALOG) },
-            set: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(*mut Analog, f32)>(SET_ANALOG) },
+            // Absolute addresses in the game image, not symbols of this
+            // position-independent library: keep the calls indirect, or i686
+            // folds them into relative calls that miss the image (SIGSEGV).
+            get: unsafe {
+                std::mem::transmute::<usize, unsafe extern "C" fn(i32) -> *mut Analog>(
+                    std::hint::black_box(RAW_ANALOG),
+                )
+            },
+            set: unsafe {
+                std::mem::transmute::<usize, unsafe extern "C" fn(*mut Analog, f32)>(
+                    std::hint::black_box(SET_ANALOG),
+                )
+            },
             cursor: crate::pad::Cursor::new(width / 2, height / 2),
             width,
             height,
@@ -602,9 +616,15 @@ impl GunAim {
     /// Moves the player's aim and stores it in window pixels, scaled exactly
     /// like the mouse: copy the mouse record's flags and ranges, then set the
     /// raw value through the game's own setter.
-    fn update(&mut self, aim: (i32, i32), elapsed: u32) {
-        self.cursor
-            .step(aim, elapsed, POINTER_SPEED, self.width, self.height);
+    fn update(&mut self, state: &crate::pad::Pad, moves: &crate::pad::Movement, elapsed: u32) {
+        // A mouse or light gun of the player's own points directly.
+        match state.pointer_moved(moves, self.width, self.height) {
+            Some((x, y)) => self.cursor = crate::pad::Cursor::new(x, y),
+            None => {
+                self.cursor
+                    .step(state.movement(moves), elapsed, POINTER_SPEED, self.width, self.height);
+            }
+        }
         let values = [self.cursor.x as f32, self.cursor.y as f32];
         for ((mouse, gun), value) in MOUSE_AXES.into_iter().zip(self.axes).zip(values) {
             let (mouse, gun) = unsafe { ((self.get)(mouse), (self.get)(gun)) };
@@ -633,6 +653,8 @@ struct Controller {
     cursor: crate::pad::Cursor,
     /// Controller-only aim per player (players without the mouse).
     guns: [Option<GunAim>; crate::pad::MAX_PLAYERS],
+    /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
+    moves: [crate::pad::Movement; crate::pad::MAX_PLAYERS],
     last: Instant,
 }
 
@@ -677,26 +699,36 @@ impl Controller {
                 }
             }
         }
-        // The mouse's player fires with the mouse buttons; the other player
-        // with Q/W (the prepared image gives those keys to that player).
-        add(BUTTON_PRESS, 1, inputs.mouse, crate::pad::RT);
-        add(BUTTON_PRESS, 3, inputs.mouse, crate::pad::LT);
+        // The system mouse's player fires with the mouse buttons (RT/LT click
+        // them). The prepared image gives every other player fire keys of its
+        // own: player two Q/W, player one Q/W or (nobody on the system mouse)
+        // F13/F14; see the preparer's `sources`.
+        if let Some(mouse) = inputs.mouse() {
+            add(BUTTON_PRESS, 1, mouse, crate::pad::RT);
+            add(BUTTON_PRESS, 3, mouse, crate::pad::LT);
+        }
         let mut guns = [None, None];
         for (player, gun) in guns.iter_mut().enumerate() {
-            if !inputs.pad_aims(player) {
+            if !inputs.own_aim(player) {
                 continue;
             }
-            for (sdl, mask) in [(Q_FIRE_KEY, crate::pad::RT), (W_SECONDARY_KEY, crate::pad::LT)] {
-                if let Some(keycode) = x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
-                    add(KEY_PRESS, keycode, player, mask);
+            let fire = if player == 0 && inputs.mouse().is_none() {
+                F13_FIRE_KEYS
+            } else {
+                [Q_FIRE_KEY, W_SECONDARY_KEY]
+            };
+            for (sdl, mask) in fire.into_iter().zip([crate::pad::RT, crate::pad::LT]) {
+                match x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
+                    Some(keycode) => add(KEY_PRESS, keycode, player, mask),
+                    None => eprintln!("[aliens] player {}: no X key for SDL key {sdl}", player + 1),
                 }
             }
             match GunAim::new(player) {
                 Ok(aim) => {
                     eprintln!(
-                        "[aliens] two players: a controller aims player {}; the mouse aims player {}",
+                        "[aliens] player {} aims with its {}",
                         player + 1,
-                        inputs.mouse + 1
+                        inputs.methods[player].label()
                     );
                     *gun = Some(aim);
                 }
@@ -710,23 +742,24 @@ impl Controller {
             outputs,
             cursor: crate::pad::Cursor::new(1 << 20, 1 << 20),
             guns,
+            moves: [0, 1].map(|p| crate::evdev_pad::movement(p, crate::pad::Movement::STICKS)),
             last: Instant::now(),
         })
     }
 
     fn frame(&mut self, watcher: &Watcher) {
         let states = self.reader.read_players(&self.inputs);
-        // The controller moves the mouse pointer only for the mouse's player.
-        let pointer = if self.inputs.pad_drives(self.inputs.mouse) {
-            states[self.inputs.mouse]
-        } else {
-            crate::pad::Pad::default()
-        };
+        // A controller moves the system pointer only for the system mouse's player.
+        let (pointer, pointer_moves) = self
+            .inputs
+            .mouse()
+            .map_or((crate::pad::Pad::default(), crate::pad::Movement::STICKS), |m| (states[m], self.moves[m]));
         let elapsed = self.last.elapsed().as_millis() as u32;
         self.last = Instant::now();
         let any = states
             .iter()
-            .any(|s| s.buttons != 0 || s.aim() != (0, 0));
+            .zip(self.moves)
+            .any(|(s, m)| s.buttons != 0 || s.movement(&m) != (0, 0) || s.pointer.is_some());
         let pressed = self.outputs.iter().any(|o| o.3);
         if !any && !pressed {
             return;
@@ -744,9 +777,9 @@ impl Controller {
             }
         }
         let mut sent = false;
-        for (gun, state) in self.guns.iter_mut().zip(states) {
+        for ((gun, state), moves) in self.guns.iter_mut().zip(states).zip(self.moves) {
             if focused && let Some(gun) = gun {
-                gun.update(state.aim(), elapsed);
+                gun.update(&state, &moves, elapsed);
             }
         }
         for output in &mut self.outputs {
@@ -759,7 +792,7 @@ impl Controller {
             }
         }
         let (old_x, old_y) = (self.cursor.x, self.cursor.y);
-        if focused && self.cursor.step(pointer.aim(), elapsed, POINTER_SPEED, 1 << 21, 1 << 21) {
+        if focused && self.cursor.step(pointer.movement(&pointer_moves), elapsed, POINTER_SPEED, 1 << 21, 1 << 21) {
             let (dx, dy) = (self.cursor.x - old_x, self.cursor.y - old_y);
             // Relative motion (detail 1). The virtual canvas keeps sub-pixel
             // remainders; recentre it only when it nears an edge.

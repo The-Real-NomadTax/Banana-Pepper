@@ -18,6 +18,27 @@ from arcade_audio import sdl_audio_args
 from arcade_settings import guest_env_args, pad_args, resolution
 
 
+def prepare_save_mounts(game, output):
+    """Use one persistent save tree for original and materialized ZAR layouts."""
+    saves = output / "pmuser"
+    if not saves.exists():
+        shutil.copytree(game / "pmuser", saves, symlinks=True)
+    args = ["--bind", str(saves), "/pm/pmuser",
+            "--bind", str(saves), "/pmuser"]
+    # Folder sources use a link to /pmuser. Archives may materialize it as a
+    # directory or omit it entirely (older converters skipped broken links).
+    nested = game / "g5/dino/pmuser"
+    if not nested.is_symlink():
+        if not nested.exists():
+            # A missing mountpoint cannot be created inside read-only /pm.
+            # Rebuild just its parent in a private tmpfs, keeping assets read-only.
+            args += ["--tmpfs", "/pm/g5/dino"]
+            for child in sorted(nested.parent.iterdir()):
+                args += ["--ro-bind", str(child), f"/pm/g5/dino/{child.name}"]
+        args += ["--bind", str(saves), "/pm/g5/dino/pmuser"]
+    return args
+
+
 def stage_shader_overrides(game, output):
     """Keep color/bloom output conventions consistent in runtime-only copies."""
     overrides = []
@@ -82,8 +103,7 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         output = runtime / ("desktop" if options.launch else "exploration")
         output.mkdir(exist_ok=True)
-        if not (output / "pmuser").exists():
-            shutil.copytree(game / "pmuser", output / "pmuser", symlinks=True)
+        save_mounts = prepare_save_mounts(game, output)
         for name in ["jurassic-explore.gdb", "jurassic-explore-guest.sh"]:
             shutil.copyfile(root / "scripts" / name, output / name)
         rules = output / "usb.rules"
@@ -119,9 +139,7 @@ def main():
             "--setenv", "ARCADE_JURASSIC", "1",
             "--setenv", "PATH", "/work/bin:/usr/bin:/bin",
             "--bind", str(output), "/work",
-            "--bind", str(output / "pmuser"), "/pm/pmuser",
-            # The supplied g5/dino/pmuser symlink resolves to /pmuser in the guest.
-            "--bind", str(output / "pmuser"), "/pmuser",
+            *save_mounts,
             "--dir", "/etc/udev/rules.d",
             "--ro-bind", str(rules), "/etc/udev/rules.d/10-usb-automount.rules",
             "--ro-bind", str(xvfb), "/Xvfb",

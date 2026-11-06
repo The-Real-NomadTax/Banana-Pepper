@@ -11,7 +11,8 @@
 //! one supported `sdaemon.exe` build; the original files are not modified.
 //! Bindings come from `ARCADE_SUPERCARS_KEYS` (`target:dik,...`, written by
 //! the Rust launcher from controls.cfg). Controllers are read through XInput
-//! (`xinput.rs`) with bindings from `ARCADE_PAD` (`target:mask,...`): the left
+//! or DirectInput, as settings.cfg `p1_input` picks (`controllers.rs`), with
+//! bindings from `ARCADE_PAD` (`target:mask,...`): the left
 //! stick steers, triggers bound to gas/brake are analog, and Back + Start
 //! together exit like Escape.
 #![allow(non_snake_case)]
@@ -23,6 +24,10 @@ mod pad;
 mod rt;
 #[path = "../../../../guest/win32/xinput.rs"]
 mod xinput;
+#[path = "../../../../guest/win32/dinput.rs"]
+mod dinput;
+#[path = "../../../../guest/win32/controllers.rs"]
+mod controllers;
 
 use core::{mem::transmute, ptr};
 
@@ -125,6 +130,8 @@ struct State {
     button_count: usize,
     trampoline: usize,
     steer: i32, // -4096..=4096
+    /// Controller steering (X) and gas up / brake down (Y) axes (ARCADE_MOVE).
+    moves: pad::Movement,
     last_tick: u32,
     log: isize,
     real_create: usize,
@@ -146,6 +153,7 @@ static mut STATE: State = State {
     button_count: 0,
     trampoline: 0,
     steer: 0,
+    moves: pad::Movement::STEERING,
     last_tick: 0,
     log: -1,
     real_create: 0,
@@ -310,11 +318,11 @@ fn after_poll(s: &mut State) {
             }
         }
     }
-    let pad = xinput::read();
-    let pads = xinput::connected();
+    let pad = controllers::read();
+    let pads = controllers::connected();
     if pads != s.pads_seen {
         s.pads_seen = pads;
-        log_number(b"XInput controllers connected: ", pads);
+        log_number(b"Controllers connected (XInput + DirectInput): ", pads);
     }
     let pad_exit = pad.held(pad::BACK) && pad.held(pad::START);
     if !down(DIK_ESCAPE as u8) && !pad_exit {
@@ -358,7 +366,7 @@ fn after_poll(s: &mut State) {
         _ => 0,
     };
     let rate = if goal == 0 { CENTER_RATE } else { STEER_RATE } * elapsed;
-    let stick = pad::Pad::axis(pad.lx);
+    let (stick, pedals) = pad.movement(&s.moves);
     if goal == 0 && stick != 0 {
         // The stick is an absolute wheel position.
         s.steer = stick;
@@ -371,10 +379,17 @@ fn after_poll(s: &mut State) {
         let keys = s.bindings[..s.binding_count]
             .iter()
             .any(|&(t, k)| t == target && down(k));
+        // Movement Y: up = gas, down = brake.
+        let axis = match target {
+            T_GAS => (-pedals).max(0),
+            T_BRAKE => pedals.max(0),
+            _ => 0,
+        } * ANALOG_MAX
+            / pad::AXIS_MAX;
         if keys {
             ANALOG_MAX
         } else {
-            i32::from(pad::target_level(&pad, pad_bindings, target)) * ANALOG_MAX / 255
+            (i32::from(pad::target_level(&pad, pad_bindings, target)) * ANALOG_MAX / 255).max(axis)
         }
     };
     let steer = (ANALOG_MAX + 1) / 2 + s.steer * (ANALOG_MAX / 2) / 4096;
@@ -439,6 +454,11 @@ unsafe fn install() {
     let configured = n > 0 || unsafe { GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), pad_env.as_mut_ptr(), 0) } == 1;
     let text = if n < pad_env.len() && configured { &pad_env[..n] } else { DEFAULT_PAD };
     s.pad_count = pad::parse_bindings(text, &mut s.pad_bindings);
+    let mut move_env = [0u8; 256];
+    let n = unsafe {
+        GetEnvironmentVariableA(b"ARCADE_MOVE\0".as_ptr(), move_env.as_mut_ptr(), move_env.len() as u32)
+    } as usize;
+    s.moves = pad::Movement::parse((n < move_env.len()).then(|| &move_env[..n]), pad::Movement::STEERING);
     collect_buttons();
 
     // Trampoline: the two displaced instructions, then back into the poll.

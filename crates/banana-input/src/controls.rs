@@ -58,6 +58,63 @@ pub struct Game {
     /// target instead, and every other action (test, menus) stays shared.
     /// Empty for one-player games.
     pub player_two: &'static [(&'static str, u32)],
+    /// What movement X/Y drive (aim, steering), if the game has analog movement.
+    pub movement: Option<MovementSpec>,
+}
+
+/// A game's two movement directions (`move_x`, `move_y`): their labels and
+/// default axes.
+#[derive(Debug, Clone, Copy)]
+pub struct MovementSpec {
+    pub labels: [&'static str; 2],
+    pub defaults: [&'static [&'static str]; 2],
+}
+
+impl MovementSpec {
+    /// Gun games: aim, with either stick by default.
+    pub const AIM: Self = Self {
+        labels: ["Aim X (right)", "Aim Y (down)"],
+        defaults: [&["AxisLX", "AxisRX"], &["AxisLY", "AxisRY"]],
+    };
+    /// Racers: steering on the left stick; Y (up = gas, down = brake) unbound.
+    pub const STEER: Self = Self {
+        labels: ["Steering (right)", "Gas up / brake down"],
+        defaults: [&["AxisLX"], &[]],
+    };
+}
+
+/// The controls.cfg ids of movement X and Y.
+pub const MOVE_IDS: [&str; 2] = ["move_x", "move_y"];
+
+/// A movement axis name in canonical form (`AxisLX`, `AxisLY-` inverted).
+pub fn normalize_axis(name: &str) -> Option<String> {
+    let bind = crate::pad::AxisBind::parse(name.trim().as_bytes())?;
+    Some(format!("{}{}", bind.axis.name(), if bind.invert { "-" } else { "" }))
+}
+
+/// What an axis is called for a player's input method; `None` when the
+/// method's devices have no such axis (pointers are Raw Input's only).
+pub fn axis_label(method: crate::pad::Method, name: &str) -> Option<String> {
+    use crate::pad::{Axis, Method};
+    let bind = crate::pad::AxisBind::parse(name.as_bytes())?;
+    let label = match (method, bind.axis) {
+        (Method::RawInput, Axis::PointerX) => "Pointer X",
+        (Method::RawInput, Axis::PointerY) => "Pointer Y",
+        (Method::RawInput, _) | (_, Axis::PointerX | Axis::PointerY) => return None,
+        (Method::DirectInput, Axis::LeftX) => "X axis",
+        (Method::DirectInput, Axis::LeftY) => "Y axis",
+        (Method::DirectInput, Axis::RightX) => "Z axis",
+        (Method::DirectInput, Axis::RightY) => "Rz axis",
+        (Method::DirectInput, Axis::LeftTrigger) => "Brake axis",
+        (Method::DirectInput, Axis::RightTrigger) => "Gas axis",
+        (_, Axis::LeftX) => "Left stick X",
+        (_, Axis::LeftY) => "Left stick Y",
+        (_, Axis::RightX) => "Right stick X",
+        (_, Axis::RightY) => "Right stick Y",
+        (_, Axis::LeftTrigger) => "Left trigger",
+        (_, Axis::RightTrigger) => "Right trigger",
+    };
+    Some(if bind.invert { format!("{label} (inverted)") } else { label.to_owned() })
 }
 
 pub const fn one(
@@ -122,6 +179,40 @@ pub fn games() -> &'static [&'static Game] {
 
 pub fn game(id: &str) -> Option<&'static Game> {
     games().iter().copied().find(|g| g.id == id)
+}
+
+/// How an action appears in player two's controls menu.
+#[derive(Debug, Clone, Copy)]
+pub enum PlayerTwo {
+    /// Test, service and menus: player one's keys, plus player two's own
+    /// controller buttons.
+    Shared,
+    /// Player one's start/coin: player two's is this other action (Start 2,
+    /// Coin 2), whose keys are player two's keys.
+    Linked(&'static Action),
+    /// Fire, trigger, pump...: player two has its own keys and controller
+    /// buttons, driving this player-two target.
+    Own(u32),
+    /// Already a player-two action (Start 2, Coin 2): shown on player one's
+    /// matching row in player two's menu, and only in player two's menu.
+    Hidden,
+}
+
+/// The role of `action` in `game`'s player-two menu.
+pub fn player_two_role(game: &Game, action: &Action) -> PlayerTwo {
+    let is_target = |target: u32| game.actions.iter().find(|a| a.target == target && a.id != action.id);
+    if game.player_two.iter().any(|&(id, target)| id != action.id && target == action.target)
+        && game.player_two.iter().all(|(id, _)| *id != action.id)
+    {
+        return PlayerTwo::Hidden;
+    }
+    match game.player_two.iter().find(|(id, _)| *id == action.id) {
+        Some(&(_, target)) => match is_target(target) {
+            Some(linked) => PlayerTwo::Linked(linked),
+            None => PlayerTwo::Own(target),
+        },
+        None => PlayerTwo::Shared,
+    }
 }
 
 /// Where controller 2's binding for `action` goes in a two-player game.
@@ -255,6 +346,45 @@ pub const PAD_BUTTONS: &[(&str, u32, &str)] = &[
     ("PadLeft", 0x0004, "D-pad left"),
     ("PadRight", 0x0008, "D-pad right"),
 ];
+/// What a controller button is called for a player's input method:
+/// DirectInput numbers its buttons ([`crate::pad::DINPUT_BUTTONS`]), a Raw
+/// Input mouse or light gun has five ([`crate::pad::MOUSE_BUTTONS`]). `None`
+/// when the method's devices have no such button.
+pub fn pad_label(method: crate::pad::Method, name: &str) -> Option<&'static str> {
+    use crate::pad::Method;
+    const DINPUT: [&str; 12] = [
+        "Button 1", "Button 2", "Button 3", "Button 4", "Button 5", "Button 6", "Button 7",
+        "Button 8", "Button 9", "Button 10", "Button 11", "Button 12",
+    ];
+    const MOUSE: [&str; 5] = ["Left button", "Right button", "Middle button", "Side button", "Extra button"];
+    let &(_, mask, label) = PAD_BUTTONS.iter().find(|(n, _, _)| *n == name)?;
+    match method {
+        Method::XInput | Method::KeyboardMouse => Some(label),
+        Method::DirectInput => crate::pad::DINPUT_BUTTONS
+            .iter()
+            .position(|&m| m == mask)
+            .map(|i| DINPUT[i])
+            .or_else(|| Some(label.replace_by_hat())),
+        Method::RawInput => crate::pad::MOUSE_BUTTONS.iter().position(|&m| m == mask).map(|i| MOUSE[i]),
+    }
+}
+
+trait HatLabel {
+    fn replace_by_hat(self) -> &'static str;
+}
+impl HatLabel for &'static str {
+    /// D-pad directions are DirectInput's POV hat.
+    fn replace_by_hat(self) -> &'static str {
+        match self {
+            "D-pad up" => "Hat up",
+            "D-pad down" => "Hat down",
+            "D-pad left" => "Hat left",
+            "D-pad right" => "Hat right",
+            other => other,
+        }
+    }
+}
+
 pub const PAD_LT: u32 = 0x1_0000;
 pub const PAD_RT: u32 = 0x2_0000;
 
@@ -495,6 +625,9 @@ pub struct Bindings {
     /// Player two's own controller buttons, for games with a `[game.p2]`
     /// section. A game without entries here mirrors player one's buttons.
     p2: BTreeMap<(String, String), Vec<String>>,
+    /// Player one's movement axes (`move_x`, `move_y`); player two's are in
+    /// `p2` under the same ids.
+    moves: BTreeMap<(String, String), Vec<String>>,
 }
 
 impl Default for Bindings {
@@ -508,9 +641,21 @@ impl Default for Bindings {
                 );
             }
         }
+        let mut moves = BTreeMap::new();
+        for game in games() {
+            if let Some(spec) = game.movement {
+                for (id, axes) in MOVE_IDS.into_iter().zip(spec.defaults) {
+                    moves.insert(
+                        (game.id.to_owned(), id.to_owned()),
+                        axes.iter().map(|a| (*a).to_owned()).collect(),
+                    );
+                }
+            }
+        }
         Self {
             keys,
             p2: BTreeMap::new(),
+            moves,
         }
     }
 }
@@ -553,12 +698,140 @@ impl Bindings {
                 self.keys.insert((g, a), keys);
             }
         }
+        for ((g, a), axes) in defaults.moves {
+            if g == game {
+                self.moves.insert((g, a), axes);
+            }
+        }
         self.reset_p2(game);
     }
 
-    /// True if player two has its own controller buttons in `game`.
+    /// Player one's keys and buttons go back to the defaults; player two's
+    /// own controls are kept.
+    pub fn reset_player_one(&mut self, game: &str) {
+        let p2 = self.p2.clone();
+        self.reset_game(game);
+        self.p2 = p2;
+    }
+
+    /// A player's (0 or 1) axes for movement X (`which` 0) or Y (1). Player
+    /// two mirrors player one until it has its own controls.
+    pub fn movement(&self, game: &str, player: usize, which: usize) -> Vec<String> {
+        let id = MOVE_IDS[which.min(1)];
+        if player == 1 && self.p2_custom(game) {
+            return self.p2.get(&(game.to_owned(), id.to_owned())).cloned().unwrap_or_default();
+        }
+        self.moves.get(&(game.to_owned(), id.to_owned())).cloned().unwrap_or_default()
+    }
+
+    /// Replace a player's axes for movement X or Y (at most two; invalid
+    /// names are refused). Player two gets its own controls on first change.
+    pub fn set_movement(&mut self, game: &str, player: usize, which: usize, axes: &[String]) -> Result<String, String> {
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        let spec = g.movement.ok_or_else(|| format!("{} has no movement axes", g.title))?;
+        if player == 1 && g.player_two.is_empty() {
+            return Err(format!("{} is a one-player game", g.title));
+        }
+        if axes.len() > 2 {
+            return Err("at most two axes per direction".into());
+        }
+        let mut canonical = Vec::new();
+        for axis in axes {
+            let name = normalize_axis(axis).ok_or_else(|| format!("unknown axis \"{axis}\""))?;
+            if !canonical.contains(&name) {
+                canonical.push(name);
+            }
+        }
+        let id = MOVE_IDS[which.min(1)];
+        let key = (game.to_owned(), id.to_owned());
+        if player == 1 {
+            self.materialize_p2(g);
+            self.p2.insert(key, canonical.clone());
+        } else {
+            self.moves.insert(key, canonical.clone());
+        }
+        let shown = if canonical.is_empty() { "unbound".to_owned() } else { canonical.join(", ") };
+        Ok(format!("{} player {} {} = {shown}", g.title, player + 1, spec.labels[which.min(1)]))
+    }
+
+    /// `x=...;y=...` for `ARCADE_MOVE` (player 0) / `ARCADE_MOVE_P2` (1);
+    /// empty for games without movement axes.
+    pub fn move_env_value(&self, game: &str, player: usize) -> String {
+        if self::game(game).and_then(|g| g.movement).is_none() {
+            return String::new();
+        }
+        format!(
+            "x={};y={}",
+            self.movement(game, player, 0).join(","),
+            self.movement(game, player, 1).join(",")
+        )
+    }
+
+    /// True if player two has its own controls in `game`.
     pub fn p2_custom(&self, game: &str) -> bool {
         self.p2.keys().any(|(g, _)| g == game)
+    }
+
+    /// Player two's own keyboard keys for an action (gun actions only).
+    pub fn p2_keys(&self, game: &str, action: &str) -> Vec<String> {
+        self.p2
+            .get(&(game.to_owned(), action.to_owned()))
+            .map(|k| k.iter().filter(|k| !is_pad(k)).cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Gives player two its own layout (a copy of player one's controller
+    /// buttons) if it has none yet.
+    fn materialize_p2(&mut self, g: &Game) {
+        if !self.p2_custom(g.id) {
+            let mut copy: Vec<_> = g.actions.iter().map(|a| (a.id, self.p2_pads(g.id, a.id))).collect();
+            if g.movement.is_some() {
+                for (which, id) in MOVE_IDS.into_iter().enumerate() {
+                    copy.push((id, self.movement(g.id, 0, which)));
+                }
+            }
+            for (id, pads) in copy {
+                self.p2.insert((g.id.to_owned(), id.to_owned()), pads);
+            }
+        }
+    }
+
+    /// Bind a keyboard key to one of player two's own actions (replacing its
+    /// keys, or adding with `append`). A key player one or another player-two
+    /// action already uses is refused.
+    pub fn rebind_p2(&mut self, game: &str, action: &str, key: &str, append: bool) -> Result<String, String> {
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        let a = g
+            .actions
+            .iter()
+            .find(|a| a.id == action)
+            .ok_or_else(|| format!("unknown {} action \"{action}\"", g.title))?;
+        if !matches!(player_two_role(g, a), PlayerTwo::Own(_)) || a.pad_only {
+            return Err(format!("{} has no player-two keys for \"{}\"", g.title, a.label));
+        }
+        let key = check_key(g, a, key)?;
+        if is_pad(&key) || key.starts_with("Mouse") {
+            return Err(format!("{key}: player two's keys are keyboard keys (mouse buttons follow the keyboard-and-mouse player)"));
+        }
+        let mut next = self.clone();
+        next.materialize_p2(g);
+        let entry = next.p2.get_mut(&(game.to_owned(), action.to_owned())).expect("materialized");
+        if !append {
+            entry.retain(|k| is_pad(k));
+        }
+        if !entry.contains(&key) {
+            entry.insert(0, key.clone());
+        }
+        next.validate()?;
+        *self = next;
+        Ok(format!("{} player 2 {action} = {}", g.title, self.p2_keys(game, action).join(", ")))
+    }
+
+    /// Remove player two's own keys from an action.
+    pub fn clear_p2_keys(&mut self, game: &str, action: &str) {
+        if let Some(entry) = self.p2.get_mut(&(game.to_owned(), action.to_owned())) {
+            entry.retain(|k| is_pad(k));
+        }
     }
 
     /// Player two's controller buttons for an action: its own, or player
@@ -568,7 +841,7 @@ impl Bindings {
             return self
                 .p2
                 .get(&(game.to_owned(), action.to_owned()))
-                .cloned()
+                .map(|k| k.iter().filter(|k| is_pad(k)).cloned().collect())
                 .unwrap_or_default();
         }
         self.keys(game, action)
@@ -598,12 +871,7 @@ impl Bindings {
             .filter(|b| is_pad(b))
             .ok_or_else(|| format!("unknown controller button \"{button}\""))?;
         let mut next = self.clone();
-        if !next.p2_custom(game) {
-            let copy: Vec<_> = g.actions.iter().map(|a| (a.id, next.p2_pads(game, a.id))).collect();
-            for (id, pads) in copy {
-                next.p2.insert((game.to_owned(), id.to_owned()), pads);
-            }
-        }
+        next.materialize_p2(g);
         let key = (game.to_owned(), action.to_owned());
         let had = next.p2[&key].contains(&button);
         for pads in next
@@ -743,12 +1011,30 @@ impl Bindings {
                 if game.player_two.is_empty() {
                     return Err(format!("{} has no player-two controls", game.title));
                 }
+                if MOVE_IDS.contains(&action.as_str()) {
+                    if game.movement.is_none() || pads.len() > 2 || pads.iter().any(|a| normalize_axis(a).as_ref() != Some(a)) {
+                        return Err(format!("{}: player two's {action} = {} is not valid", game.title, pads.join(", ")));
+                    }
+                    continue;
+                }
+                let a = game.actions.iter().find(|a| a.id == action).ok_or_else(|| {
+                    format!("{}: unknown player-two action \"{action}\"", game.title)
+                })?;
                 for pad in pads {
                     if !is_pad(pad) {
-                        return Err(format!(
-                            "{}: player two's \"{action}\" can only use controller buttons, not {pad}",
-                            game.title
-                        ));
+                        let own = matches!(player_two_role(game, a), PlayerTwo::Own(_)) && !a.pad_only;
+                        if !own || pad.starts_with("Mouse") || check_key(game, a, pad).is_err() {
+                            return Err(format!(
+                                "{}: player two's \"{action}\" cannot use {pad}",
+                                game.title
+                            ));
+                        }
+                        if let Some(other) = seen.get(pad) {
+                            return Err(format!(
+                                "{}: {pad} is bound to player one's \"{other}\" and player two's \"{action}\"",
+                                game.title
+                            ));
+                        }
                     }
                     if let Some(other) = seen_p2.insert(pad, action) {
                         return Err(format!(
@@ -771,6 +1057,14 @@ impl Bindings {
         for action in g.actions {
             for key in self.keys(game, action.id).iter().filter(|k| !is_pad(k)) {
                 pairs.push((action.target, code(g.keys, key).expect("validated key")));
+            }
+        }
+        // Player two's own keys, on player two's targets.
+        for action in g.actions {
+            if let PlayerTwo::Own(target) = player_two_role(g, action) {
+                for key in self.p2_keys(game, action.id) {
+                    pairs.push((target, code(g.keys, &key).expect("validated key")));
+                }
             }
         }
         Ok(pairs)
@@ -943,6 +1237,13 @@ impl Bindings {
                     for a in g.actions {
                         bindings.p2.insert((g.id.to_owned(), a.id.to_owned()), Vec::new());
                     }
+                    // Movement absent from the section keeps player one's.
+                    if g.movement.is_some() {
+                        for (which, id) in MOVE_IDS.into_iter().enumerate() {
+                            let axes = bindings.movement(g.id, 0, which);
+                            bindings.p2.insert((g.id.to_owned(), id.to_owned()), axes);
+                        }
+                    }
                 }
                 section = Some(g);
                 player_two = p2;
@@ -957,20 +1258,38 @@ impl Bindings {
                 .map(str::trim)
                 .filter(|k| !k.is_empty())
                 .collect();
+            if MOVE_IDS.contains(&action.trim()) {
+                let which = usize::from(action.trim() == "move_y");
+                let axes: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
+                if player_two {
+                    // The section already holds every action; set it directly.
+                    let mut canonical = Vec::new();
+                    for axis in &axes {
+                        canonical.push(normalize_axis(axis).ok_or_else(|| at(format!("unknown axis \"{axis}\"")))?);
+                    }
+                    bindings.p2.insert((g.id.to_owned(), action.trim().to_owned()), canonical);
+                } else {
+                    bindings.set_movement(g.id, 0, which, &axes).map_err(at)?;
+                }
+                continue;
+            }
             if player_two {
                 let action = action.trim();
                 if !g.actions.iter().any(|a| a.id == action) {
                     return Err(at(format!("unknown {} action \"{action}\"", g.title)));
                 }
+                let a = g.actions.iter().find(|a| a.id == action).expect("checked");
                 let mut pads = Vec::new();
                 for key in keys {
-                    let pad = normalize(key).filter(|k| is_pad(k)).ok_or_else(|| {
-                        at(format!("player two's section takes controller buttons, not \"{key}\""))
-                    })?;
-                    if !pads.contains(&pad) {
-                        pads.push(pad);
+                    let name = normalize(key)
+                        .filter(|k| is_pad(k))
+                        .map_or_else(|| check_key(g, a, key), Ok)
+                        .map_err(|e| at(format!("player two: {e}")))?;
+                    if !pads.contains(&name) {
+                        pads.push(name);
                     }
                 }
+                pads.sort_by_key(|k| is_pad(k));
                 bindings.p2.insert((g.id.to_owned(), action.to_owned()), pads);
                 continue;
             }
@@ -995,18 +1314,33 @@ impl Bindings {
                     action.label
                 );
             }
+            if let Some(spec) = game.movement {
+                for (which, id) in MOVE_IDS.into_iter().enumerate() {
+                    out += &format!(
+                        "{id} = {}  # {} (controller axes: AxisLX/LY/RX/RY/LT/RT, PointerX/Y; - inverts)\n",
+                        self.movement(game.id, 0, which).join(", "),
+                        spec.labels[which]
+                    );
+                }
+            }
             if self.p2_custom(game.id) {
                 out += &format!(
-                    "\n[{}.p2]  # Player two's controller buttons. Delete this section to use player one's.\n",
+                    "\n[{}.p2]  # Player two's own controls. Delete this section to use player one's controller buttons.\n",
                     game.id
                 );
                 for action in game.actions {
-                    out += &format!(
-                        "{} = {}  # {}\n",
-                        action.id,
-                        self.p2_pads(game.id, action.id).join(", "),
-                        action.label
-                    );
+                    let mut keys = self.p2_keys(game.id, action.id);
+                    keys.extend(self.p2_pads(game.id, action.id));
+                    out += &format!("{} = {}  # {}\n", action.id, keys.join(", "), action.label);
+                }
+                if let Some(spec) = game.movement {
+                    for (which, id) in MOVE_IDS.into_iter().enumerate() {
+                        out += &format!(
+                            "{id} = {}  # {}\n",
+                            self.movement(game.id, 1, which).join(", "),
+                            spec.labels[which]
+                        );
+                    }
                 }
             }
         }

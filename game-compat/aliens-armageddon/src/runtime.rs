@@ -18,7 +18,7 @@ pub fn run(root: &Path, launch: bool) -> Result<String, String> {
         &root.join("linux based/Aliens Armageddon/game"),
         &output.join("game-native"),
         &controls.codes("aliens")?,
-        crate::prepare::TwoPlayer::from_settings(settings.players, settings.inputs_env()),
+        &settings.input_assignment(),
     )?;
     // The harness only runs the image this preparer just wrote.
     std::fs::write(output.join("game-native.sha256"), format!("{prepared}\n"))

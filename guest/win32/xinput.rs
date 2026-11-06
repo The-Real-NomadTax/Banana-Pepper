@@ -88,17 +88,11 @@ pub fn connected() -> u32 {
     reader().connected.iter().filter(|c| **c).count() as u32
 }
 
-/// Current state of all connected controllers, merged.
-pub fn read() -> Pad {
-    read_players(&super::pad::Inputs::ONE_PLAYER)[0]
-}
-
-/// Connected controllers per player (`pad::Inputs::pad_player`, in slot order): with
-/// two players the first connected controller drives player one and the rest
-/// player two.
+/// Connected controllers per player (`pad::Inputs::device_player`, in slot
+/// order). Nothing is read while no player uses XInput.
 pub fn read_players(inputs: &super::pad::Inputs) -> [Pad; super::pad::MAX_PLAYERS] {
     let mut out = [Pad::default(); super::pad::MAX_PLAYERS];
-    if !available() {
+    if inputs.device_player(super::pad::Device::XInput, 0).is_none() || !available() {
         return out;
     }
     let r = reader();
@@ -117,7 +111,9 @@ pub fn read_players(inputs: &super::pad::Inputs) -> [Pad; super::pad::MAX_PLAYER
         let result = unsafe { get(slot as u32, &mut state) };
         r.connected[slot] = result == 0;
         if result == 0 {
-            let player = inputs.pad_player(index);
+            let Some(player) = inputs.device_player(super::pad::Device::XInput, index) else {
+                continue;
+            };
             index += 1;
             out[player] = out[player].merge(Pad::from_xinput(
                 state.buttons,

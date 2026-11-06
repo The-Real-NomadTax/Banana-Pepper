@@ -1,13 +1,14 @@
 //! Cabinet actions and default bindings, rendered by the shared controls UI.
 #[allow(unused_imports)]
-use banana_input::controls::{any, one, pad, Game, KeySpace};
+use banana_input::controls::{any, one, pad, Game, KeySpace, MovementSpec};
 
 pub static CONTROLS: Game = Game {
         id: "aliens",
         title: "Aliens Armageddon",
         keys: KeySpace::Sdl,
         mouse_buttons: false,
-        note: "Mouse aim and fire use the game's own desktop mouse controls. One key per action (plus any controller buttons). Controllers: either stick moves the pointer, RT = left click, LT = right click. Two players: controller 2 aims player two, RT/LT = Q/W (the game's player-two fire keys).",
+        note: "Aim and fire use the game's own desktop mouse controls for the keyboard-and-mouse player. One key per action (plus any controller buttons). Controllers: either stick moves the aim, RT/LT fire (left/right click for the mouse's player, Q/W for the other).",
+        movement: Some(MovementSpec::AIM),
         player_two: &[("start1", 0x155), ("coin1", 0x14d)],
         actions: &[
             one("start1", "Player 1 Start / menu confirm", 0x154, &["1", "PadStart", "PadA"]),

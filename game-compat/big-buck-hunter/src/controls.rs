@@ -1,13 +1,14 @@
 //! Cabinet actions and default bindings, rendered by the shared controls UI.
 #[allow(unused_imports)]
-use banana_input::controls::{any, one, pad, Game, KeySpace};
+use banana_input::controls::{any, one, pad, Game, KeySpace, MovementSpec};
 
 pub static CONTROLS: Game = Game {
         id: "big_buck",
         title: "Big Buck Hunter Pro",
         keys: KeySpace::Glut,
         mouse_buttons: false,
-        note: "Left mouse fires and right mouse pumps. Letters, digits, Space, Enter, Tab, Backspace and punctuation only. Controllers: either stick moves the crosshair. Two players: controller 2 is the second gun.",
+        note: "Left mouse fires and right mouse pumps for the keyboard-and-mouse player. Letters, digits, Space, Enter, Tab, Backspace and punctuation only. Controllers: either stick moves the crosshair. Mice and light guns on Raw Input aim their own gun directly.",
+        movement: Some(MovementSpec::AIM),
         player_two: &[
             ("start1", 6),
             ("coin1", 8),

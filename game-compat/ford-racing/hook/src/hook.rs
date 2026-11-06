@@ -8,6 +8,10 @@ mod pad;
 mod rt;
 #[path = "../../../../guest/win32/xinput.rs"]
 mod xinput;
+#[path = "../../../../guest/win32/dinput.rs"]
+mod dinput;
+#[path = "../../../../guest/win32/controllers.rs"]
+mod controllers;
 use core::{mem::transmute, ptr};
 #[link(
     name = "kernel32",
@@ -71,8 +75,11 @@ static mut PAD: pad::Pad = pad::Pad {
     ry: 0,
     lt: 0,
     rt: 0,
+    pointer: None,
 };
 static mut PADS_SEEN: u32 = 0;
+/// Controller steering (X) and gas up / brake down (Y) axes (ARCADE_MOVE).
+static mut MOVES: pad::Movement = pad::Movement::STEERING;
 /// controls.cfg's default controller buttons for Ford.
 const DEFAULT_PAD: &[u8] = b"1:4,2:8,3:131072,4:65536,5:16,5:4096,6:32768,7:512,8:256,9:32";
 unsafe fn pad_bindings() {
@@ -82,6 +89,23 @@ unsafe fn pad_bindings() {
     let set = n > 0 || GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), bytes.as_mut_ptr(), 0) == 1;
     let text = if set && n < bytes.len() { &bytes[..n] } else { DEFAULT_PAD };
     PAD_COUNT = pad::parse_bindings(text, &mut *ptr::addr_of_mut!(PAD_BINDINGS));
+    let mut moves = [0u8; 256];
+    let n = GetEnvironmentVariableA(b"ARCADE_MOVE\0".as_ptr(), moves.as_mut_ptr(), moves.len() as u32)
+        as usize;
+    MOVES = pad::Movement::parse((n < moves.len()).then(|| &moves[..n]), pad::Movement::STEERING);
+}
+/// Movement Y as pedal travel 0..=255: up = gas, down = brake.
+unsafe fn axis_pedal(target: u32, focused: bool) -> u8 {
+    if !focused {
+        return 0;
+    }
+    let (_, y) = (*ptr::addr_of!(PAD)).movement(&*ptr::addr_of!(MOVES));
+    let travel = match target {
+        3 => -y,
+        4 => y,
+        _ => 0,
+    };
+    (travel.max(0) * 255 / pad::AXIS_MAX) as u8
 }
 unsafe fn pad_bound() -> &'static [(u32, u32)] {
     core::slice::from_raw_parts(ptr::addr_of!(PAD_BINDINGS).cast::<(u32, u32)>(), PAD_COUNT)
@@ -91,7 +115,7 @@ unsafe fn pedal(target: u32, focused: bool) -> u8 {
     if key_action(target, focused) {
         255
     } else if focused {
-        pad::target_level(&*ptr::addr_of!(PAD), pad_bound(), target)
+        pad::target_level(&*ptr::addr_of!(PAD), pad_bound(), target).max(axis_pedal(target, focused))
     } else {
         0
     }
@@ -229,12 +253,12 @@ unsafe extern "C" fn poll(packet: *mut u8) -> i32 {
     let mut pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
     let focused = pid == GetCurrentProcessId();
-    let state = xinput::read();
+    let state = controllers::read();
     PAD = state;
-    let pads = xinput::connected();
+    let pads = controllers::connected();
     if pads != PADS_SEEN {
         PADS_SEEN = pads;
-        log(b"arcade-ford: XInput controller count changed:");
+        log(b"arcade-ford: controller count changed (XInput + DirectInput):");
         hex(pads);
     }
     let pad_exit = focused && state.held(pad::BACK) && state.held(pad::START);
@@ -247,7 +271,7 @@ unsafe extern "C" fn poll(packet: *mut u8) -> i32 {
     LAST_TICK = now;
     let left = action(1, focused);
     let right = action(2, focused);
-    let stick = if focused { pad::Pad::axis(state.lx) } else { 0 };
+    let stick = if focused { state.movement(&*ptr::addr_of!(MOVES)).0 } else { 0 };
     if left == right && stick != 0 {
         // The stick is an absolute wheel position.
         STEER = (128 + stick * 127 / pad::AXIS_MAX).clamp(0, 255);

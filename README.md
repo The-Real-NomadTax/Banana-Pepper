@@ -13,7 +13,7 @@ establish macOS/Android or ARM CPU support.
 
 A Rust arcade compatibility project, starting on Linux with an egui/eframe desktop workbench. No TeknoParrot code, profiles or loaders are used by this application.
 
-The workbench also builds natively on Windows. Minecraft Dungeons Arcade has native Linux and Windows-to-WSL2 runners, library preparation, snapshot import repair and diagnostics. With dongle seeds captured locally, `scripts/minecraft-seeded.py` boots it to the Mojang Studios screen with four virtual joysticks; factory setup and card scanners still block attract mode and gameplay. See [Linux setup and results](docs/minecraft-linux.md) or [Windows setup](docs/minecraft-windows.md).
+The workbench also builds natively on Windows. Minecraft Dungeons Arcade has native Linux and Windows-to-WSL2 runners, library preparation, snapshot import repair and diagnostics. With dongle seeds captured locally and libraries prepared, **Play game** in the main UI uses the seeded runner with virtual joysticks, keyboard controls and card scanners. Coin, loadout, level selection and level startup have been reached; HUD issues and full gameplay verification remain. See [Linux setup and results](docs/minecraft-linux.md) or [Windows setup](docs/minecraft-windows.md).
 
 **Current status:** Aliens Armageddon and Jurassic Park reach desktop gameplay with mouse controls. Big Buck Hunter Pro fully loads into scored gameplay with working score saving and verified PCM audio output through PulseAudio/PipeWire. Aliens and Jurassic audio now play through the desktop sound server (pending listening confirmation). Full playthroughs and physical cabinet hardware are unverified; Fast and Furious Super Cars (a Windows build) runs under Wine and reaches races with keyboard driving controls. See the per-game notes below for build requirements and limitations.
 
@@ -29,7 +29,7 @@ From the project root:
 cargo run -p banana-desktop
 ```
 
-The game source defaults to the `games` folder relative to the working directory. Enter a folder or ZArchive path in **Game folder or ZArchive**. Inspection runs on a worker thread. Export JSON saves `arcade-report.json` in the working directory.
+Configure each game’s folder or ZArchive in its **Settings → Game folder or ZArchive** field. Each game source is saved separately; unconfigured games use the default `games` folder relative to the working directory. Inspection runs on a worker thread. Export JSON saves `arcade-report.json` in the working directory.
 
 Interactive Big Buck Hunter on your own display:
 
@@ -139,7 +139,7 @@ Graphics and audio choices are saved to `settings.cfg` in the project root, one 
 
 ### Controllers
 
-Xbox and other XInput-compatible controllers work in every desktop game except Minecraft. Each action in `controls.cfg` can list controller buttons beside its keys, named `PadA`, `PadB`, `PadX`, `PadY`, `PadLB`, `PadRB`, `PadLT`, `PadRT`, `PadBack`, `PadStart`, `PadLS`, `PadRS`, `PadUp`, `PadDown`, `PadLeft` and `PadRight` (Xbox layout). For example, `start1 = 1, PadStart, PadA`. In the workbench, use the **🎮** menu next to an action. **Back + Start** together exit any game.
+Xbox-style (XInput) and other (DirectInput) controllers work in every desktop game except Minecraft, and the gun games also take Raw Input mice and light guns (see Input methods below). Each action in `controls.cfg` can list controller buttons beside its keys, named `PadA`, `PadB`, `PadX`, `PadY`, `PadLB`, `PadRB`, `PadLT`, `PadRT`, `PadBack`, `PadStart`, `PadLS`, `PadRS`, `PadUp`, `PadDown`, `PadLeft` and `PadRight` (Xbox layout). For example, `start1 = 1, PadStart, PadA`. In the workbench, bind them the same way as keys: click an action's **🎮** button, then press the button on the device (**List** picks from a list, or removes buttons). **Back + Start** together exit any game.
 
 | Game | Controller defaults | Built-in analog behaviour |
 | --- | --- | --- |
@@ -148,30 +148,37 @@ Xbox and other XInput-compatible controllers work in every desktop game except M
 | Jurassic Park | RT = fire, LT = secondary, Start, Back = coin, D-pad + A/B for menus | Either stick moves the aim |
 | Aliens | Start/A = start, Back = coin, B = service/back, D-pad = volume/menu | Either stick moves the pointer. RT/LT click the left/right mouse buttons |
 
-#### Two players
+#### Input methods and player menus
 
-Aliens, Jurassic Park and Big Buck Hunter are two-player cabinets. Pick **2 players** at the top of the game's **Settings → Controls** tab, or set `players = 2` in that game's `settings.cfg` section. Then choose what each player uses, **Controller** or **Keyboard & mouse** (`p1_input` / `p2_input = controller | keyboard_mouse`). Only one player can have the keyboard and mouse:
+Each game's **Settings → Controls** tab has a menu per player. Two-player games (Aliens, Jurassic Park, Big Buck Hunter) show **1 player / 2 players** and the **Player 1** and **Player 2** menus. The racers (Super Cars, Ford) show player 1's menu. In each menu, pick that player's **input method** (`p1_input` / `p2_input` in `settings.cfg`). Then set that player's own keys and buttons:
 
-| Player 1 | Player 2 | Who plays with what |
-| --- | --- | --- |
-| Controller | Controller (default) | Controller 1 plays player one and controller 2 plays player two, in the order they were connected. The mouse and keyboard also play player one |
-| Controller | Keyboard & mouse | Every controller plays player one. The mouse aims and fires for player two, and Start 2 / Coin 2 keys are player two's |
-| Keyboard & mouse | Controller | The mouse and keyboard play player one. Every controller plays player two |
+| Method | Reads | Linux (gun games) | Windows / Wine |
+| --- | --- | --- | --- |
+| **Keyboard & mouse** (`keyboard_mouse`) | The desktop keyboard and system mouse. Only one player can have it. The racers call it **Keyboard** | X11 / SDL / GLUT events | Window messages |
+| **XInput** (`xinput`, the default) | Xbox-style controllers | evdev gamepads with the Xbox layout | XInput |
+| **DirectInput** (`dinput`) | Other controllers: generic USB pads, arcade sticks, wheels. Buttons are numbered: button 1 = A ... button 8 = RT, button 10 = Start, POV hat = d-pad | evdev joysticks | DirectInput 8 (system `dinput8.dll`); controllers named Xbox are left to XInput |
+| **Raw Input** (`rawinput`, gun games) | A mouse or light gun of the player's own, so two can be told apart. Left button = RT (fire), right = LT, middle = A, side = Start, extra = Back. Absolute light guns point directly; ordinary mice move the aim | evdev mice and absolute pointers | Raw Input (Water) |
 
-Each player has its own controller buttons. Player one's are the 🎮 buttons in the Controls table. Player two's are in the **Player 2 🎮** column, saved as a `[game.p2]` section in `controls.cfg` (`fire = PadA`, and so on). Until you change one of player two's buttons, player two uses player one's layout, and **Use player 1's buttons** goes back to that. Player two's Start and Coin are set on the Player 1 Start and Coin 1 rows. Test, service and menu buttons work from either controller. With the default `players = 1`, every controller, the mouse and the keyboard play player one, as before. The racing games are single-seat and Minecraft Dungeons has its own four-player setup, so they have no Players setting.
+Devices of one kind go to the players using that method in connection order. If both players pick it, player 1 gets the first device and player 2 the rest. The menu lists the connected devices of the chosen kind on Linux. The system mouse aims for the keyboard-and-mouse player, or player one when nobody picked it. While any player uses Raw Input, every mouse is read directly. In that case Raw Input players come first, any other mouse goes to the keyboard-and-mouse player, and the system pointer only drives menus. On Linux, each sandbox gets only the device nodes its methods need. Keyboards and touchpads are never exposed.
+
+**Player 2's menu** has its own controls. Its Start and Coin rows are the Start 2 / Coin 2 keys plus player 2's controller buttons. Fire, secondary, trigger and pump get player 2's own keyboard keys and buttons. Test, service and menu keys are shared with player 1, but player 2's controller can have its own buttons for them. They're saved as a `[game.p2]` section in `controls.cfg` (`fire = K, PadA`). Until you change one of player 2's buttons, its controller uses player 1's layout, and **Reset player 2 to player 1's buttons** goes back to that. With `players = 1`, only player 1's menu applies.
+
+**Press to bind.** Controller, joystick, mouse and light-gun buttons are bound like keys. Click the action's **🎮** button, then press the button on a device of that player's input method. That adds the button; clicking again or Esc cancels, and nothing pressed for 15 seconds cancels too. The app reads the devices the way the game will. On Linux that's evdev for every method. On Windows the app reads XInput controllers; pick DirectInput and Raw Input buttons from **List** there.
+
+**Movement X and Y.** Every method except keyboard & mouse has a **Movement** section in the player's menu. In the gun games that's Aim X (right) and Aim Y (down); in the racers it's Steering (right) and Gas up / brake down. Click a direction, then move the stick, axis, pedal or light gun that way. Moving it the opposite way binds it inverted. **+** adds a second axis (the more deflected one wins), **×** unbinds and **List** picks from a list. They're saved as `move_x` / `move_y` in `controls.cfg`: `AxisLX`, `AxisLY`, `AxisRX`, `AxisRY`, `AxisLT`, `AxisRT` (for DirectInput: X, Y, Z, Rz, brake and gas axes) and `PointerX`, `PointerY` (Raw Input), with `-` for inverted. Defaults: either stick aims; the left stick steers, and Y is unbound in the racers. A racer's Y axis adds to the gas and brake bindings, so a combined pedal axis or a stick can drive both.
 
 | Game | Player two |
 | --- | --- |
-| Big Buck Hunter | Second gun: its own crosshair in the other colour, and gun-two shots, trigger and pump. With player two on keyboard and mouse, the mouse, its buttons and the keyboard trigger key move gun two. Linux and Water |
-| Jurassic Park | Player two's controller drives the player-two gun inputs and its trigger/secondary. With player two on keyboard and mouse, the mouse and its fire/secondary bindings drive player two, and player one's controller aims through the player-one gun inputs. The game draws each player's reticle |
-| Aliens | The two-player image gives the controller-aimed player the gun inputs. The mouse's player fires with the mouse buttons (RT/LT click them); the other player fires with **Q**/**W** (RT/LT press them). With player two on keyboard and mouse, the image swaps these between the players |
+| Big Buck Hunter | Second gun: its own crosshair in the other colour, and gun-two shots, trigger and pump. The mouse, its buttons and the keyboard trigger key move the keyboard-and-mouse player's gun. Linux and Water |
+| Jurassic Park | Each player who aims without the system mouse aims through that player's gun inputs (controller stick, own mouse or light gun). The keyboard-and-mouse player aims with the mouse. The game draws each player's reticle |
+| Aliens | The prepared image gives every player who aims without the system mouse its gun inputs. The mouse's player fires with the mouse buttons (RT/LT click them). Player 2 otherwise fires with **Q**/**W**. Player 1 fires with Q/W when player 2 has the mouse, or F13/F14 when nobody does (Raw Input) |
 
-Two-player mode was built from the games' own input tables and is covered by unit tests. No mode has yet been played in any game.
+The input methods were built from the games' own input tables and the platform APIs, and are covered by unit tests. The Controls menus were checked on screen. No method has been played in a game yet, and the Windows DirectInput and Raw Input readers have only been compiled. DirectInput wheels steer with the X axis. A combined pedal axis can drive gas and brake through Movement Y; separate pedals that report as two axes still need gas and brake bound to wheel buttons.
 
-How controllers are read:
+How devices are read:
 
-- **Windows and Wine** (Super Cars, Ford, and Big Buck through Water): XInput. The adapters load `xinput1_4`, `xinput1_3` or `xinput9_1_0` the first time they need it and merge up to four controllers (with two players, the first connected controller is player one and the others player two). Under Wine, Wine's own XInput exposes your Linux controllers.
-- **Linux** (Aliens, Jurassic, Big Buck): evdev, with the kernel's Xbox layout. Wired `xpad` and Bluetooth `hid-microsoft` axis layouts are both handled. Each sandbox gets only controller device nodes. These are devices that report gamepad buttons and no letter keys, so keyboards are never exposed. Your user needs read access to them, which you get from `uaccess` or the `input` group. **Connect controllers before you start a game.** Aliens sends its controller input as XTest events to the focused game window, which needs `libxcb-xtest` (32-bit).
+- **Windows and Wine** (Super Cars, Ford, and Big Buck through Water): XInput (`xinput1_4`, `xinput1_3` or `xinput9_1_0`) and DirectInput 8, loaded the first time a player needs them. Water also reads Raw Input mice. Under Wine, Wine's XInput and DirectInput expose your Linux controllers.
+- **Linux** (Aliens, Jurassic, Big Buck): evdev. Xbox-style pads use the kernel's Xbox layout (wired `xpad` and Bluetooth `hid-microsoft` axis layouts are both handled), other joysticks the DirectInput numbering, and mice/light guns their buttons and X/Y. Your user needs read access to the device nodes, which you get from `uaccess` or the `input` group. **Connect devices before you start a game.** Aliens sends controller input as XTest events to the focused game window, which needs `libxcb-xtest` (32-bit).
 
 Keyboard bindings for Aliens, Jurassic Park and Big Buck Hunter live in `controls.cfg` in the project root. Edit them in the workbench's **Controls** section (click an action, then press the new key; **+** adds an extra key, **×** unbinds, Esc cancels), or edit the file directly. Changes apply the next time a game starts. A key already used by another action moves to the new action, and the other action takes the replaced key, so swapping two keys takes one click. Escape is reserved for exiting.
 

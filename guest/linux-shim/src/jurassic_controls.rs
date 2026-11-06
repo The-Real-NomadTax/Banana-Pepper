@@ -70,6 +70,10 @@ const GUN_MAPS: [&[InputMap]; 2] = [
     &[map(351, 331), map(352, 332)],
     &[map(353, 341), map(354, 342)],
 ];
+/// The menu pointer only (nobody aims with the system mouse).
+const MENU_POINTER_MAPS: &[InputMap] = &[map(324, 387), map(325, 388), map(326, 391), map(326, 392)];
+/// SDL mouse button sources (left, right).
+const MOUSE_BUTTONS: [i32; 2] = [326, 327];
 /// Gun x/y sources per player.
 const GUN_AXES: [[i32; 2]; 2] = [[351, 352], [353, 354]];
 /// Player one's trigger/secondary, and player two's: keyboard and mouse
@@ -121,10 +125,16 @@ fn build_maps(
         Some(value) => parse_buttons(value)?,
         None => DEFAULT_BUTTONS.to_vec(),
     };
-    // Keyboard and mouse fire/secondary belong to the mouse's player.
+    // Keyboard and mouse fire/secondary belong to the system mouse's player.
+    // While nobody has the system mouse (Raw Input), its buttons fire nobody:
+    // every mouse and light gun fires through its own player's bindings.
+    let mouse = inputs.mouse();
+    if mouse.is_none() {
+        maps.retain(|m| !MOUSE_BUTTONS.contains(&m.source));
+    }
     for entry in &mut maps {
         if let Some(i) = GUN_TARGETS[0].iter().position(|&t| t == entry.target) {
-            entry.target = GUN_TARGETS[inputs.mouse.min(1)][i];
+            entry.target = GUN_TARGETS[mouse.unwrap_or(0).min(1)][i];
         }
     }
     // Controller buttons arrive as private world keysyms (jurassic_pad.rs).
@@ -134,13 +144,13 @@ fn build_maps(
         }
     }
     // Pointer maps last so they win over any analog destination overlap.
-    maps.extend_from_slice(if inputs.mouse == 1 {
-        MOUSE_PLAYER_TWO_MAPS
-    } else {
-        POINTER_MAPS
+    maps.extend_from_slice(match mouse {
+        Some(0) => POINTER_MAPS,
+        Some(_) => MOUSE_PLAYER_TWO_MAPS,
+        None => MENU_POINTER_MAPS,
     });
     for (player, guns) in GUN_MAPS.iter().enumerate() {
-        if inputs.pad_aims(player) {
+        if inputs.own_aim(player) {
             maps.extend_from_slice(guns);
         }
     }
@@ -237,8 +247,14 @@ unsafe fn gun_aim(player: usize) {
     let Some((x, y)) = crate::jurassic_pad::gun_aim(player) else {
         return;
     };
-    let get: unsafe extern "C" fn(i32) -> *mut Analog = unsafe { std::mem::transmute(RAW_ANALOG) };
-    let set: unsafe extern "C" fn(*mut Analog, f32) = unsafe { std::mem::transmute(SET_ANALOG) };
+    // These are absolute addresses in the fingerprint-verified game image,
+    // not symbols in this position-independent shared library. Keep the calls
+    // indirect: folding a constant pointer into a relative call on i686 adds
+    // the shim's load address and jumps outside the game image (SIGSEGV).
+    let get: unsafe extern "C" fn(i32) -> *mut Analog =
+        unsafe { std::mem::transmute(std::hint::black_box(RAW_ANALOG)) };
+    let set: unsafe extern "C" fn(*mut Analog, f32) =
+        unsafe { std::mem::transmute(std::hint::black_box(SET_ANALOG)) };
     for ((mouse, gun), value) in MOUSE_AXES.into_iter().zip(GUN_AXES[player]).zip([x, y]) {
         let (mouse, gun) = unsafe { (get(mouse), get(gun)) };
         if mouse.is_null() || gun.is_null() {
@@ -273,7 +289,7 @@ pub unsafe fn update() {
     }
     if let Some(inputs) = INPUTS.get() {
         for player in 0..inputs.players.min(2) {
-            if inputs.pad_aims(player) {
+            if inputs.own_aim(player) {
                 unsafe { gun_aim(player) };
             }
         }
@@ -342,7 +358,7 @@ mod tests {
 
     #[test]
     fn two_players_add_controller_two_aim_and_buttons() {
-        let pads = crate::pad::Inputs::parse(Some(b"2"), Some(b"pad,pad"));
+        let pads = crate::pad::Inputs::parse(Some(b"2"), Some(b"xinput,xinput"));
         let two = build_maps(None, &[(343, 168), (372, 169)], pads).unwrap();
         assert!(two.ends_with(GUN_MAPS[1]));
         assert!(two.contains(&map(168, 343)) && two.contains(&map(169, 372)));
@@ -354,7 +370,7 @@ mod tests {
 
     #[test]
     fn keyboard_and_mouse_can_play_player_two() {
-        let inputs = crate::pad::Inputs::parse(Some(b"2"), Some(b"pad,kbm"));
+        let inputs = crate::pad::Inputs::parse(Some(b"2"), Some(b"xinput,keyboard_mouse"));
         let maps = build_maps(None, &[(333, 160)], inputs).unwrap();
         // The mouse aims and fires for player two...
         assert!(maps.contains(&map(324, 341)) && maps.contains(&map(325, 342)));
@@ -364,8 +380,21 @@ mod tests {
         assert!(maps.ends_with(GUN_MAPS[0]));
         assert!(maps.contains(&map(160, 333)));
         // Player one on keyboard and mouse: player two's controller aims.
-        let inputs = crate::pad::Inputs::parse(Some(b"2"), Some(b"kbm,pad"));
+        let inputs = crate::pad::Inputs::parse(Some(b"2"), Some(b"keyboard_mouse,dinput"));
         let maps = build_maps(None, &[], inputs).unwrap();
         assert!(maps.contains(&map(324, 331)) && maps.ends_with(GUN_MAPS[1]));
+    }
+
+    #[test]
+    fn raw_input_players_aim_through_their_guns() {
+        let inputs = crate::pad::Inputs::parse(Some(b"2"), Some(b"rawinput,rawinput"));
+        let maps = build_maps(None, &[(333, 160), (343, 161)], inputs).unwrap();
+        // The system mouse only drives the menu pointer; its buttons fire nobody.
+        assert!(!maps.iter().any(|m| [331, 332, 341, 342].contains(&m.target) && m.source == 324));
+        assert!(!maps.contains(&map(326, 333)) && !maps.contains(&map(327, 334)));
+        assert!(maps.contains(&map(324, 387)) && maps.contains(&map(326, 391)));
+        // Each light gun fires through its player's bindings and aims through its gun.
+        assert!(maps.contains(&map(160, 333)) && maps.contains(&map(161, 343)));
+        assert!(GUN_MAPS.iter().all(|g| g.iter().all(|m| maps.contains(m))));
     }
 }

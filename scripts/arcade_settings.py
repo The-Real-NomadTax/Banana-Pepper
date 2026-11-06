@@ -22,7 +22,7 @@ def pad_args():
     (never keyboards). Empty for diagnostic runs."""
     args = []
     for key in ('ARCADE_PAD', 'ARCADE_PAD_P2', 'ARCADE_PAD_KEYS', 'ARCADE_PAD_KEYS_P2',
-                'ARCADE_PAD_DEVICES'):
+                'ARCADE_MOVE', 'ARCADE_MOVE_P2', 'ARCADE_PAD_DEVICES'):
         if key in os.environ:
             args += ['--setenv', key, os.environ[key]]
     for device in os.environ.get('ARCADE_PAD_DEVICES', '').split(':'):

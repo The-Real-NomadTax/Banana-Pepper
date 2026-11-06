@@ -176,6 +176,7 @@ unsafe extern "system" fn wndproc(window: HWND, message: u32, w: WPARAM, l: LPAR
             return 0;
         }
         WM_KILLFOCUS => jamma::release(),
+        WM_INPUT => rawinput::input(l),
         // The drawn crosshair replaces the pointer inside the window.
         WM_SETCURSOR if (l & 0xffff) as u32 == HTCLIENT && crosshair::enabled() => {
             SetCursor(ptr::null_mut());
@@ -256,6 +257,7 @@ unsafe extern "C" fn create(_title: *const i8) -> i32 {
         );
         ExitProcess(125);
     }
+    rawinput::register(WINDOW);
     DC = GetDC(WINDOW);
     let format = PIXELFORMATDESCRIPTOR {
         nSize: std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16,

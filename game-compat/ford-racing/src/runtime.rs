@@ -102,6 +102,8 @@ pub fn launch(root: &Path) -> Result<String, String> {
         command
             .current_dir(output.join("FordRacing"))
             .env_remove("ARCADE_FORD_PROBE")
+            // Player one's input method (keyboard, XInput or DirectInput).
+            .env("ARCADE_INPUTS", settings.inputs_env())
             .env(
                 "ARCADE_FORD_KEYS",
                 banana_input::controls::Bindings::load(&project.join("controls.cfg"))?

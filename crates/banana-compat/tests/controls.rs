@@ -115,6 +115,47 @@ fn player_two_has_its_own_controller_layout() {
 }
 
 #[test]
+fn player_two_menu_roles_and_own_keys() {
+    setup();
+    let role = |g: &str, a: &str| {
+        let g = game(g).unwrap();
+        player_two_role(g, g.actions.iter().find(|x| x.id == a).unwrap())
+    };
+    assert!(matches!(role("jurassic", "start1"), PlayerTwo::Linked(a) if a.id == "start2"));
+    assert!(matches!(role("jurassic", "coin1"), PlayerTwo::Linked(a) if a.id == "coin2"));
+    assert!(matches!(role("jurassic", "start2"), PlayerTwo::Hidden));
+    assert!(matches!(role("jurassic", "fire"), PlayerTwo::Own(343)));
+    assert!(matches!(role("jurassic", "test"), PlayerTwo::Shared));
+    assert!(matches!(role("big_buck", "trigger"), PlayerTwo::Own(2)));
+    assert!(matches!(role("aliens", "start1"), PlayerTwo::Linked(a) if a.id == "start2"));
+
+    let mut b = Bindings::default();
+    // Player two fires with K; it reaches the game on player two's target.
+    b.rebind_p2("jurassic", "fire", "K", false).unwrap();
+    assert_eq!(b.p2_keys("jurassic", "fire"), ["K"]);
+    assert!(b.codes("jurassic").unwrap().contains(&(343, 107)));
+    // Player two's controller buttons are kept (copied from player one).
+    assert_eq!(b.p2_pads("jurassic", "fire"), ["PadRT"]);
+    // Keys player one uses, mouse buttons and shared actions are refused.
+    assert!(b.rebind_p2("jurassic", "secondary", "T", false).is_err());
+    assert!(b.rebind_p2("jurassic", "secondary", "MouseRight", false).is_err());
+    assert!(b.rebind_p2("jurassic", "test", "L", false).is_err());
+    assert!(b.rebind_p2("big_buck", "fire", "L", false).is_err()); // controller only
+    // ...and player one cannot take player two's key.
+    assert!(b.rebind("jurassic", "test", "K", false).is_err());
+    // Saved and read back.
+    let text = b.to_text();
+    assert!(text.contains("fire = K, PadRT"));
+    assert_eq!(Bindings::parse(&text).unwrap(), b);
+    b.clear_p2_keys("jurassic", "fire");
+    assert!(b.p2_keys("jurassic", "fire").is_empty());
+    // Big Buck's keyboard trigger for gun two.
+    b.rebind_p2("big_buck", "trigger", "L", false).unwrap();
+    assert!(b.codes("big_buck").unwrap().contains(&(2, 108)));
+    assert!(Bindings::parse("[jurassic.p2]\ntest = L\n").is_err());
+}
+
+#[test]
 fn round_trip_and_overrides() {
     setup();
     let mut b = Bindings::default();
@@ -224,3 +265,64 @@ fn rejects_bad_bindings() {
     Bindings::parse("[jurassic]\nsecondary =\n").unwrap();
 }
 
+
+#[test]
+fn buttons_are_named_for_each_input_method() {
+    setup();
+    use banana_input::pad::Method;
+    assert_eq!(pad_label(Method::XInput, "PadRT"), Some("Right trigger"));
+    assert_eq!(pad_label(Method::DirectInput, "PadA"), Some("Button 1"));
+    assert_eq!(pad_label(Method::DirectInput, "PadRT"), Some("Button 8"));
+    assert_eq!(pad_label(Method::DirectInput, "PadUp"), Some("Hat up"));
+    assert_eq!(pad_label(Method::RawInput, "PadRT"), Some("Left button"));
+    assert_eq!(pad_label(Method::RawInput, "PadStart"), Some("Side button"));
+    assert_eq!(pad_label(Method::RawInput, "PadY"), None);
+    let mut b = Bindings::default();
+    b.rebind_p2("jurassic", "fire", "K", false).unwrap();
+    b.rebind("jurassic", "test", "F", false).unwrap();
+    b.reset_player_one("jurassic");
+    assert_eq!(b.keys("jurassic", "test"), ["T"]);
+    assert_eq!(b.p2_keys("jurassic", "fire"), ["K"]);
+}
+
+#[test]
+fn movement_axes_are_bindable_per_player() {
+    setup();
+    use banana_input::pad::Method;
+    let mut b = Bindings::default();
+    // Defaults: either stick aims; the left stick steers with Y unbound.
+    assert_eq!(b.move_env_value("jurassic", 0), "x=AxisLX,AxisRX;y=AxisLY,AxisRY");
+    assert_eq!(b.move_env_value("super_cars", 0), "x=AxisLX;y=");
+    assert_eq!(b.move_env_value("jurassic", 1), b.move_env_value("jurassic", 0));
+    // Player one aims with the right stick only, inverted Y.
+    b.set_movement("jurassic", 0, 0, &["axisrx".into()]).unwrap();
+    b.set_movement("jurassic", 0, 1, &["AxisRY-".into()]).unwrap();
+    assert_eq!(b.move_env_value("jurassic", 0), "x=AxisRX;y=AxisRY-");
+    // Player two still mirrors player one until it gets its own.
+    assert_eq!(b.move_env_value("jurassic", 1), "x=AxisRX;y=AxisRY-");
+    b.set_movement("jurassic", 1, 0, &["PointerY".into()]).unwrap();
+    assert!(b.p2_custom("jurassic"));
+    assert_eq!(b.move_env_value("jurassic", 1), "x=PointerY;y=AxisRY-");
+    // A racer's gas/brake on a pedal axis.
+    b.set_movement("super_cars", 0, 1, &["AxisRY".into()]).unwrap();
+    assert_eq!(b.move_env_value("super_cars", 0), "x=AxisLX;y=AxisRY");
+    // Saved and read back.
+    let text = b.to_text();
+    assert!(text.contains("move_x = AxisRX  #") && text.contains("move_x = PointerY  #"));
+    assert_eq!(Bindings::parse(&text).unwrap(), b);
+    // Refused: unknown axes, too many, games without movement, P2 on a racer.
+    assert!(b.set_movement("jurassic", 0, 0, &["Wheel".into()]).is_err());
+    assert!(b.set_movement("jurassic", 0, 0, &["AxisLX".into(), "AxisRX".into(), "AxisLT".into()]).is_err());
+    assert!(b.set_movement("ford", 1, 0, &["AxisLX".into()]).is_err());
+    assert!(Bindings::parse("[jurassic]\nmove_x = Wheel\n").is_err());
+    // Resetting player one restores the default axes.
+    b.reset_player_one("jurassic");
+    assert_eq!(b.move_env_value("jurassic", 0), "x=AxisLX,AxisRX;y=AxisLY,AxisRY");
+    // Names per method.
+    assert_eq!(axis_label(Method::XInput, "AxisLY").as_deref(), Some("Left stick Y"));
+    assert_eq!(axis_label(Method::DirectInput, "AxisRX").as_deref(), Some("Z axis"));
+    assert_eq!(axis_label(Method::DirectInput, "AxisLX-").as_deref(), Some("X axis (inverted)"));
+    assert_eq!(axis_label(Method::RawInput, "PointerX").as_deref(), Some("Pointer X"));
+    assert_eq!(axis_label(Method::RawInput, "AxisLX"), None);
+    assert_eq!(axis_label(Method::XInput, "PointerX"), None);
+}

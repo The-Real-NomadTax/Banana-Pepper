@@ -49,6 +49,8 @@ struct State {
     cursor: Cursor,
     /// Controller-only aim per player (see [`GUN_AIM`]).
     guns: [Option<Cursor>; crate::pad::MAX_PLAYERS],
+    /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
+    moves: [crate::pad::Movement; crate::pad::MAX_PLAYERS],
     /// The controller moved the pointer more recently than the mouse.
     aiming: bool,
     last_real: (i32, i32),
@@ -103,8 +105,10 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
         let inputs = inputs();
         if inputs.players > 1 {
             eprintln!(
-                "[jurassic] two players: the mouse aims for player {}",
-                inputs.mouse + 1
+                "[jurassic] two players ({}, {}); the system mouse aims for {}",
+                inputs.methods[0].label(),
+                inputs.methods[1].label(),
+                inputs.mouse().map_or("nobody".to_owned(), |p| format!("player {}", p + 1))
             );
         }
         State {
@@ -118,6 +122,7 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
                 HEIGHT.load(Ordering::Relaxed) / 2,
             ),
             guns: [None; crate::pad::MAX_PLAYERS],
+            moves: [0, 1].map(|p| crate::evdev_pad::movement(p, crate::pad::Movement::STICKS)),
             aiming: false,
             last_real: (-1, -1),
             last: Instant::now(),
@@ -158,11 +163,10 @@ pub fn frame() {
         }
         // The controller moves the mouse pointer only for a player who also
         // has the mouse (one player, or player one with both on controllers).
-        let pointer = if s.inputs.pad_drives(s.inputs.mouse) {
-            states[s.inputs.mouse]
-        } else {
-            crate::pad::Pad::default()
-        };
+        let (pointer, pointer_moves) = s
+            .inputs
+            .mouse()
+            .map_or((crate::pad::Pad::default(), crate::pad::Movement::STICKS), |m| (states[m], s.moves[m]));
         let mut changes = Vec::new();
         let players: Vec<(crate::pad::Pad, &[(u32, u32)])> = (0..s.inputs.players)
             .map(|p| (states[p], s.bindings[p].as_slice()))
@@ -185,17 +189,24 @@ pub fn frame() {
             return;
         }
         for player in 0..s.inputs.players {
-            if !s.inputs.pad_aims(player) {
+            if !s.inputs.own_aim(player) {
                 continue;
             }
             let gun = s.guns[player].get_or_insert_with(|| Cursor::new(width / 2, height / 2));
-            gun.step(states[player].aim(), elapsed, width * SPEED_PER_WIDTH, width, height);
+            // A mouse or light gun of the player's own points directly.
+            match states[player].pointer_moved(&s.moves[player], width, height) {
+                Some((x, y)) => *gun = Cursor::new(x, y),
+                None => {
+                    let aim = states[player].movement(&s.moves[player]);
+                    gun.step(aim, elapsed, width * SPEED_PER_WIDTH, width, height);
+                }
+            }
             GUN_AIM[player][0].store(gun.x.clamp(0, width - 1), Ordering::Relaxed);
             GUN_AIM[player][1].store(gun.y.clamp(0, height - 1), Ordering::Relaxed);
         }
         let (old_x, old_y) = (s.cursor.x, s.cursor.y);
         if s.cursor
-            .step(pointer.aim(), elapsed, width * SPEED_PER_WIDTH, width, height)
+            .step(pointer.movement(&pointer_moves), elapsed, width * SPEED_PER_WIDTH, width, height)
         {
             s.aiming = true;
             s.queue.push_back(motion_event(

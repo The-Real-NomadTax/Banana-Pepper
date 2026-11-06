@@ -5,4 +5,6 @@
 //! through [`controls::install`]; this crate names no individual game.
 pub mod controls;
 pub mod crosshair;
+#[cfg(target_os = "linux")]
+pub mod evdev;
 pub mod pad;

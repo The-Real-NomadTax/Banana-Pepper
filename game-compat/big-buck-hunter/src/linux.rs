@@ -237,7 +237,7 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
         for (key, value) in banana_runtime::pad_env(&project, "big_buck")? {
             command.args(["--setenv", key]).arg(value);
         }
-        for device in banana_runtime::pad_devices() {
+        for device in banana_runtime::pad_devices(&settings.input_assignment()) {
             command.arg("--dev-bind").arg(&device).arg(&device);
         }
         // Window size, fullscreen, vsync and renderer from settings.cfg.

@@ -122,6 +122,8 @@ pub struct Profile {
     pub crosshair: Option<Crosshair>,
     /// Most simultaneous players the game's adapter supports (1 or 2).
     pub max_players: u8,
+    /// Input methods a player may pick (empty: no choice, e.g. Minecraft).
+    pub input_methods: &'static [InputMethod],
     /// Execution backends the user may pick between on Windows hosts.
     /// Empty or a single entry hides the backend selector.
     pub backends: &'static [Backend],
@@ -205,55 +207,54 @@ pub struct GameSettings {
     /// 1, or 2 in two-player games: each controller then drives its own
     /// player (controller 1 = player one, controller 2 = player two).
     pub players: u8,
-    /// With two players: what each player uses. At most one player has the
-    /// keyboard and mouse ([`GameSettings::set_input`] keeps it that way).
-    pub inputs: [PlayerInput; 2],
+    /// Each player's input method (`p1_input`, `p2_input`). At most one
+    /// player has the keyboard and mouse ([`GameSettings::set_input`] keeps it
+    /// that way); player two's applies with two players.
+    pub inputs: [InputMethod; 2],
 }
 
-/// What one player plays with in a two-player game.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlayerInput {
-    /// A controller (both on controllers: controller 1 is player one and
-    /// controller 2 player two; the mouse still aims for player one).
-    Controller,
-    /// The mouse aims and fires for this player; every controller plays the
-    /// other player.
-    KeyboardMouse,
-}
+/// What a player plays with: keyboard & mouse, XInput, DirectInput or Raw
+/// Input (see [`banana_input::pad::Method`]).
+pub use banana_input::pad::Method as InputMethod;
 
-impl PlayerInput {
-    pub const ALL: [Self; 2] = [Self::Controller, Self::KeyboardMouse];
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Controller => "controller",
-            Self::KeyboardMouse => "keyboard_mouse",
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Controller => "Controller",
-            Self::KeyboardMouse => "Keyboard & mouse",
-        }
-    }
-}
+/// Input methods for single-seat racers: the keyboard, or an XInput or
+/// DirectInput controller or wheel (no aim, so no Raw Input).
+pub const RACING_INPUTS: &[InputMethod] = &[
+    InputMethod::KeyboardMouse,
+    InputMethod::XInput,
+    InputMethod::DirectInput,
+];
 
 impl GameSettings {
     /// Set what a player (0 or 1) uses. Giving one player the keyboard and
-    /// mouse puts the other on controllers.
-    pub fn set_input(&mut self, player: usize, input: PlayerInput) {
+    /// mouse moves the other off it (to XInput).
+    pub fn set_input(&mut self, player: usize, input: InputMethod) {
         let player = player.min(1);
         self.inputs[player] = input;
-        if input == PlayerInput::KeyboardMouse {
-            self.inputs[1 - player] = PlayerInput::Controller;
+        if input == InputMethod::KeyboardMouse && self.inputs[1 - player] == input {
+            self.inputs[1 - player] = InputMethod::XInput;
         }
     }
 
-    /// `ARCADE_INPUTS` for the adapters (`pad,pad`, `pad,kbm` or `kbm,pad`).
-    pub fn inputs_env(&self) -> &'static str {
-        match self.inputs {
-            [PlayerInput::Controller, PlayerInput::KeyboardMouse] => "pad,kbm",
-            [PlayerInput::KeyboardMouse, _] => "kbm,pad",
-            _ => "pad,pad",
+    /// Who plays with which device, as the adapters will see it.
+    pub fn input_assignment(&self) -> banana_input::pad::Inputs {
+        banana_input::pad::Inputs {
+            players: usize::from(self.players.clamp(1, 2)),
+            methods: self.inputs,
+        }
+    }
+
+    /// `ARCADE_INPUTS` for the adapters: each player's method, comma-separated.
+    pub fn inputs_env(&self) -> String {
+        format!("{},{}", self.inputs[0].id(), self.inputs[1].id())
+    }
+
+    /// The input methods actually in play (player two's only with two players).
+    fn methods_label(&self) -> String {
+        if self.players > 1 {
+            format!("P1 {}, P2 {}", self.inputs[0].label(), self.inputs[1].label())
+        } else {
+            self.inputs[0].label().to_owned()
         }
     }
 
@@ -269,7 +270,7 @@ impl GameSettings {
             crosshair: profile.crosshair.clone().unwrap_or(Crosshair(None)),
             crosshair_size: banana_input::crosshair::SIZE_DEFAULT,
             players: 1,
-            inputs: [PlayerInput::Controller; 2],
+            inputs: [InputMethod::XInput; 2],
         }
     }
 
@@ -293,11 +294,10 @@ impl GameSettings {
             },
             self.vsync.label().to_ascii_lowercase(),
             if self.audio { "on" } else { "off" },
-        ) + match (self.players > 1, self.inputs_env()) {
-            (false, _) => "",
-            (true, "pad,kbm") => " · 2 players (P2 keyboard & mouse)",
-            (true, "kbm,pad") => " · 2 players (P1 keyboard & mouse)",
-            (true, _) => " · 2 players",
+        ) + &match (self.players > 1, self.inputs == [InputMethod::XInput; 2]) {
+            (false, true) => String::new(),
+            (false, false) => format!(" · {}", self.methods_label()),
+            (true, _) => format!(" · 2 players ({})", self.methods_label()),
         }
     }
 
@@ -315,7 +315,9 @@ impl GameSettings {
         }
         if self.players > 1 {
             env.push(("ARCADE_PLAYERS", self.players.to_string()));
-            env.push(("ARCADE_INPUTS", self.inputs_env().into()));
+        }
+        if self.players > 1 || self.inputs[0] != InputMethod::XInput {
+            env.push(("ARCADE_INPUTS", self.inputs_env()));
         }
         match self.vsync {
             VSync::Default => {}
@@ -396,12 +398,11 @@ impl GameSettings {
                 }
             }
             "p1_input" | "p2_input" => {
-                let input = PlayerInput::ALL
-                    .into_iter()
-                    .find(|i| i.id().eq_ignore_ascii_case(value))
-                    .ok_or_else(|| {
-                        format!("{key} must be controller or keyboard_mouse, not \"{value}\"")
-                    })?;
+                let input = InputMethod::parse(value.to_ascii_lowercase().as_bytes()).ok_or_else(|| {
+                    format!(
+                        "{key} must be keyboard_mouse, xinput, dinput or rawinput, not \"{value}\""
+                    )
+                })?;
                 self.set_input(usize::from(key == "p2_input"), input);
             }
             _ => return Err(format!("unknown setting \"{key}\"")),
@@ -477,11 +478,18 @@ impl Settings {
             {
                 return Err(at(format!("[{id}] has no crosshair setting")));
             }
-            if matches!(key.trim(), "players" | "p1_input" | "p2_input")
+            if matches!(key.trim(), "players" | "p2_input")
                 && value.trim() != "1"
                 && profile(id).is_some_and(|p| p.max_players < 2)
             {
                 return Err(at(format!("[{id}] is a one-player game")));
+            }
+            if matches!(key.trim(), "p1_input" | "p2_input")
+                && let Some(p) = profile(id)
+                && let Some(method) = InputMethod::parse(value.trim().to_ascii_lowercase().as_bytes())
+                && !p.input_methods.contains(&method)
+            {
+                return Err(at(format!("[{id}] cannot use {}", method.label())));
             }
             settings
                 .games
@@ -528,12 +536,11 @@ impl Settings {
                     "players = {}  # 1 | 2 (controller 2 drives player two)\n",
                     g.players
                 );
-                for (player, input) in g.inputs.iter().enumerate() {
-                    out += &format!(
-                        "p{}_input = {}  # controller | keyboard_mouse, when two play\n",
-                        player + 1,
-                        input.id()
-                    );
+            }
+            if !p.input_methods.is_empty() {
+                let choices = p.input_methods.iter().map(|m| m.id()).collect::<Vec<_>>().join(" | ");
+                for (player, input) in g.inputs.iter().enumerate().take(usize::from(p.max_players)) {
+                    out += &format!("p{}_input = {}  # {choices}\n", player + 1, input.id());
                 }
             }
         }

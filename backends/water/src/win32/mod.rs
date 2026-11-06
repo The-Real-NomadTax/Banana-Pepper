@@ -4,11 +4,17 @@
 mod crt;
 mod display;
 mod jamma;
+mod rawinput;
 mod sound;
-/// XInput controllers (shared with the Super Cars and Ford adapter DLLs).
+/// XInput and DirectInput controllers (shared with the Super Cars and Ford
+/// adapter DLLs).
 #[path = "../../../../guest/win32/xinput.rs"]
-#[allow(dead_code)] // Water reads per player; the hook DLLs use the merged read.
 mod xinput;
+#[path = "../../../../guest/win32/dinput.rs"]
+mod dinput;
+#[path = "../../../../guest/win32/controllers.rs"]
+#[allow(dead_code)] // Water reads every player; the hook DLLs read player one.
+mod controllers;
 use banana_input::pad;
 
 use goblin::elf::{Elf, program_header::PT_LOAD};

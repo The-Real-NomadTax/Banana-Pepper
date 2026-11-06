@@ -31,57 +31,55 @@ const PLAYER_TWO_AIM_SITES: &[(usize, u32, u32)] = &[
     (0x0808199c, 0x145, 0x184),
 ];
 
-/// Player-two-has-the-mouse images: player one's desktop aim maps read the
-/// player-one gun sources 0x181/0x182 (filled from player one's controller
-/// by the shim), and player one's mouse-button fire maps trade sources with
-/// player two's Q/W/E key maps. (address, original source, new source); the
-/// preceding `mov [esp+4], target` operand is checked too.
-const MOUSE_PLAYER_TWO_SITES: &[(usize, u32, u32, u32)] = &[
-    (0x08081870, 0x14b, 0x144, 0x181), // P1 aim x: mouse x -> P1 gun x
-    (0x08081884, 0x14c, 0x145, 0x182), // P1 aim y
-    (0x08081898, 0x14d, 0x146, 0x71),  // P1 trigger: left button -> Q
-    (0x080818ac, 0x14e, 0x147, 0x77),  // P1 secondary: right button -> W
-    (0x080818c0, 0x14f, 0x148, 0x65),  // P1 third: middle button -> E
-    (0x080818fc, 0x157, 0x71, 0x146),  // P2 trigger: Q -> left button
-    (0x08081910, 0x158, 0x77, 0x147),  // P2 secondary: W -> right button
-    (0x08081924, 0x159, 0x65, 0x148),  // P2 third: E -> middle button
+/// The desktop map sites that decide each player's aim and fire: (address,
+/// target, original source). The preceding `mov [esp+4], target` operand is
+/// checked too. See [`sources`] for what each becomes.
+const AIM_FIRE_SITES: &[(usize, u32, u32)] = &[
+    (0x08081870, 0x14b, 0x144), // P1 aim x (mouse x)
+    (0x08081884, 0x14c, 0x145), // P1 aim y (mouse y)
+    (0x08081898, 0x14d, 0x146), // P1 trigger (left button)
+    (0x080818ac, 0x14e, 0x147), // P1 secondary (right button)
+    (0x080818c0, 0x14f, 0x148), // P1 third (middle button)
+    (0x080818fc, 0x157, 0x71),  // P2 trigger (Q)
+    (0x08081910, 0x158, 0x77),  // P2 secondary (W)
+    (0x08081924, 0x159, 0x65),  // P2 third (E)
 ];
 
-/// How a two-player image routes aim (settings.cfg `players`, `p1_input`,
-/// `p2_input`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TwoPlayer {
-    /// One player: the engine's own desktop maps, unchanged.
-    Off,
-    /// Player two aims with a controller (the player-two gun sources); the
-    /// mouse stays player one's.
-    ControllerPlayerTwo,
-    /// Player two has the mouse and its buttons; player one aims with a
-    /// controller (the player-one gun sources) and fires with Q/W/E.
-    MousePlayerTwo,
-}
+/// Player one's fire keys while nobody aims with the system mouse (Raw
+/// Input in use): SDL F13/F14/F15, which the shim presses for player one.
+pub const NO_MOUSE_FIRE_KEYS: [u32; 3] = [294, 295, 296];
 
-impl TwoPlayer {
-    /// From settings: `players` and `ARCADE_INPUTS` ([`GameSettings::inputs_env`]).
-    ///
-    /// [`GameSettings::inputs_env`]: banana_settings::GameSettings::inputs_env
-    pub fn from_settings(players: u8, inputs: &str) -> Self {
-        match (players > 1, inputs) {
-            (false, _) => Self::Off,
-            (true, "pad,kbm") => Self::MousePlayerTwo,
-            (true, _) => Self::ControllerPlayerTwo,
-        }
-    }
+/// New sources for [`AIM_FIRE_SITES`]:
+/// * The system mouse's player fires with the mouse buttons and, if that is
+///   player one, also aims with the mouse (the engine's own maps).
+/// * A player aiming without the system mouse aims through its gun sources
+///   (P1 0x181/0x182; player two's are [`PLAYER_TWO_AIM_SITES`]), which the
+///   shim fills from its controller, mouse or light gun.
+/// * Player two always fires with Q/W/E unless it has the mouse; player one
+///   then takes Q/W/E, or F13-F15 while nobody has the system mouse.
+fn sources(inputs: &banana_input::pad::Inputs) -> [u32; 8] {
+    let p1_aim = if inputs.mouse() == Some(0) { [0x144, 0x145] } else { [0x181, 0x182] };
+    let [f13, f14, f15] = NO_MOUSE_FIRE_KEYS;
+    let (p1_fire, p2_fire) = match inputs.mouse() {
+        Some(0) => ([0x146, 0x147, 0x148], [0x71, 0x77, 0x65]),
+        Some(_) => ([0x71, 0x77, 0x65], [0x146, 0x147, 0x148]),
+        None => ([f13, f14, f15], [0x71, 0x77, 0x65]),
+    };
+    [
+        p1_aim[0], p1_aim[1], p1_fire[0], p1_fire[1], p1_fire[2], p2_fire[0], p2_fire[1], p2_fire[2],
+    ]
 }
 
 /// Writes a separate runtime image and returns its SHA-256. `keys` holds
 /// (cabinet switch source, SDL key symbol) pairs from [`crate::controls`].
-/// `two_player` routes each player's aim and fire ([`TwoPlayer`]).
+/// `inputs` (settings.cfg `players`, `p1_input`, `p2_input`) routes each
+/// player's aim and fire ([`sources`]); one player on the system mouse
+/// leaves the engine's own desktop maps unchanged.
 pub fn prepare(
     source: &Path,
     destination: &Path,
     keys: &[(u32, u32)],
-    two_player: TwoPlayer,
+    inputs: &banana_input::pad::Inputs,
 ) -> Result<String, String> {
     let mut bytes = fs::read(source).map_err(|e| e.to_string())?;
     if format!("{:x}", Sha256::digest(&bytes)) != ORIGINAL_SHA256 {
@@ -175,11 +173,11 @@ pub fn prepare(
         {
             return Err("Unsupported Aliens player-two aim mapping; no snapshot written".into());
         }
-        if two_player == TwoPlayer::ControllerPlayerTwo {
+        if inputs.own_aim(1) {
             patched.push((offset + 3, gun));
         }
     }
-    for &(address, target, original, replacement) in MOUSE_PLAYER_TWO_SITES {
+    for (&(address, target, original), replacement) in AIM_FIRE_SITES.iter().zip(sources(inputs)) {
         let offset = address - 0x08048000;
         if offset < 8
             || bytes.get(offset - 8..offset - 4) != Some(&[0xc7, 0x44, 0x24, 0x04])
@@ -187,9 +185,9 @@ pub fn prepare(
             || bytes.get(offset..offset + 3) != Some(&[0xc7, 0x04, 0x24])
             || bytes.get(offset + 3..offset + 7) != Some(original.to_le_bytes().as_slice())
         {
-            return Err("Unsupported Aliens player-one aim mapping; no snapshot written".into());
+            return Err("Unsupported Aliens aim/fire mapping; no snapshot written".into());
         }
-        if two_player == TwoPlayer::MousePlayerTwo {
+        if replacement != original {
             patched.push((offset + 3, replacement));
         }
     }
@@ -266,14 +264,28 @@ mod tests {
         let keys = banana_input::controls::Bindings::default()
             .codes("aliens")
             .unwrap();
-        assert!(prepare(&source, &destination, &keys, TwoPlayer::MousePlayerTwo).is_err());
-        assert_eq!(TwoPlayer::from_settings(1, "pad,kbm"), TwoPlayer::Off);
-        assert_eq!(TwoPlayer::from_settings(2, "pad,pad"), TwoPlayer::ControllerPlayerTwo);
-        assert_eq!(TwoPlayer::from_settings(2, "kbm,pad"), TwoPlayer::ControllerPlayerTwo);
-        assert_eq!(TwoPlayer::from_settings(2, "pad,kbm"), TwoPlayer::MousePlayerTwo);
+        let inputs = banana_input::pad::Inputs::ONE_PLAYER;
+        assert!(prepare(&source, &destination, &keys, &inputs).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"unknown game");
         assert_eq!(fs::read(&destination).unwrap(), b"existing snapshot");
         assert!(!destination.with_extension("preparing").exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn each_input_layout_routes_aim_and_fire() {
+        use banana_input::pad::Inputs;
+        let original: Vec<u32> = AIM_FIRE_SITES.iter().map(|s| s.2).collect();
+        // One player on the system mouse: the engine's own maps.
+        assert_eq!(sources(&Inputs::ONE_PLAYER).to_vec(), original);
+        assert_eq!(sources(&Inputs::parse(Some(b"2"), Some(b"xinput,dinput"))).to_vec(), original);
+        // Player two has the mouse: player one aims with its gun and fires with Q/W/E.
+        let p2 = sources(&Inputs::parse(Some(b"2"), Some(b"xinput,keyboard_mouse")));
+        assert_eq!(p2, [0x181, 0x182, 0x71, 0x77, 0x65, 0x146, 0x147, 0x148]);
+        // Raw Input: nobody has the system mouse; player one fires with F13-F15.
+        let raw = sources(&Inputs::parse(Some(b"2"), Some(b"rawinput,rawinput")));
+        assert_eq!(raw, [0x181, 0x182, 294, 295, 296, 0x71, 0x77, 0x65]);
+        let solo = sources(&Inputs::parse(None, Some(b"rawinput")));
+        assert_eq!(&solo[..5], &[0x181, 0x182, 294, 295, 296]);
     }
 }
