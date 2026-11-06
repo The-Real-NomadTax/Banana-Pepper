@@ -167,7 +167,7 @@ mod tests {
         std::fs::write(&config, br#""old library""#).unwrap();
         let mut prefs = load_from(&config).unwrap();
         assert_eq!(prefs.root, "old library");
-        for id in ["aliens", "jurassic", "big-buck", "super-cars", "minecraft"] {
+        for id in arcade_core::profiles().into_iter().map(|p| p.id) {
             let folder = temp.join(format!("{id} game files"));
             std::fs::create_dir_all(&folder).unwrap();
             prefs
