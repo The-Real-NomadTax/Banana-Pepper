@@ -8,8 +8,8 @@ cabinet input report without a physical USB board or kernel port driver.
 
 ```powershell
 rustup target add i686-pc-windows-msvc
-cargo build -p arcade-ford-hook --target i686-pc-windows-msvc --release
-cargo run -p arcade-desktop -- --launch-ford "C:\path\to\Ford Racing"
+cargo build -p banana-ford-hook --target i686-pc-windows-msvc --release
+cargo run -p banana-desktop -- --launch-ford "C:\path\to\Ford Racing"
 # Or:
 .\scripts\run-windows.ps1 -Game ford -Mode launch -GamesRoot "C:\path\to\Ford Racing"
 ```

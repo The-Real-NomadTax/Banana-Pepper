@@ -1,0 +1,9 @@
+[package]
+name = "banana-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Unified, capability-driven settings for Banana Pepper"
+
+[dependencies]
+banana-input.workspace = true

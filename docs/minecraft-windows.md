@@ -32,7 +32,7 @@ implementation.
 Build with a current Rust MSVC toolchain and Visual Studio C++ build tools:
 
 ```powershell
-cargo build -p arcade-desktop
+cargo build -p banana-desktop
 ```
 
 Pass either the actual game directory or a library root containing

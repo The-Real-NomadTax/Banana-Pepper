@@ -1,0 +1,29 @@
+[package]
+name = "banana-desktop"
+description = "Banana Pepper desktop frontend (egui)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+banana-api.workspace = true
+banana-compat.workspace = true
+banana-content.workspace = true
+banana-core.workspace = true
+banana-input.workspace = true
+banana-runtime.workspace = true
+banana-settings.workspace = true
+eframe.workspace = true
+serde_json.workspace = true
+rfd = "0.17.2"
+
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+tempfile = "3.20.0"
+zarchive-rs = "0.1.1"
+
+[[bin]]
+# Binary name kept for existing scripts, docs and the WSL launcher.
+name = "arcade-desktop"
+path = "src/main.rs"

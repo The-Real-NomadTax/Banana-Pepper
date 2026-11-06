@@ -7,8 +7,8 @@ Status: Aliens opens on the user's display and reaches playable 3D gameplay. The
 From the project root:
 
 ```sh
-cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu --offline
-cargo run -p arcade-desktop --offline -- --launch-aliens games
+cargo build -p banana-linux-shim --target i686-unknown-linux-gnu --offline
+cargo run -p banana-desktop --offline -- --launch-aliens games
 ```
 
 The egui workbench also has **Open Aliens on my display**. Click the game window, press **1**, then use the mouse and left click to choose a game mode. **T** opens the operator test menu (T select, 9 back, Up/Down move). **Esc** or the window's close button quits. Keys are customizable in the workbench or `controls.cfg`. The copied cabinet settings currently select Spanish: **MODO HISTORIA** is Story Mode. Basic desktop aiming and firing were confirmed by the user. Additional control configuration and audio can follow separately.
@@ -71,7 +71,7 @@ Verified: rendered attract scenes, mode selection and active gameplay on the des
 The original first-probe black-window/null-configuration failure is resolved. Individual captures during transitions can still be black. The supplied/copied save settings use Spanish. Audio quality, advanced control behavior, two-player play, a full playthrough and cabinet-device protocols remain unverified.
 
 ```sh
-cargo run -p arcade-desktop --offline -- --probe-aliens games
+cargo run -p banana-desktop --offline -- --probe-aliens games
 python3 scripts/aliens-run.py --games-root games --debug
 ```
 

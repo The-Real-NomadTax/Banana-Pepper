@@ -6,7 +6,7 @@
 
 Add Minecraft Dungeons Arcade from the global library, set its game folder or ZArchive in Settings, then click **Play game**. Play and `--launch-minecraft` use the seeded runner with the same seeds, libraries, virtual controls and save directory as the command-line script. **Prepare libraries** and `--probe-minecraft` retain their setup and diagnostic behavior.
 
-Before the first launch, capture `runtime/minecraft/seeds.json` as described in [seed capture](minecraft-seed-capture.md), click **Prepare libraries**, and build the Linux adapter with `cargo build -p arcade-minecraft-io --offline`. The runner requires Python evdev, access to uinput and host input devices, Bubblewrap and gamescope as described below. On Windows these guest dependencies and the Linux adapter must be available inside WSL2. Missing prerequisites appear in the session error output.
+Before the first launch, capture `runtime/minecraft/seeds.json` as described in [seed capture](minecraft-seed-capture.md), click **Prepare libraries**, and build the Linux adapter with `cargo build -p banana-minecraft-io --offline`. The runner requires Python evdev, access to uinput and host input devices, Bubblewrap and gamescope as described below. On Windows these guest dependencies and the Linux adapter must be available inside WSL2. Missing prerequisites appear in the session error output.
 
 ## Cabinet type, 60 Hz and level start (2026-11-05)
 
@@ -24,7 +24,7 @@ Before the first launch, capture `runtime/minecraft/seeds.json` as described in 
 ## Virtual card scanners
 
 ```sh
-cargo build -p arcade-minecraft-io --offline
+cargo build -p banana-minecraft-io --offline
 python3 scripts/minecraft-seeded.py 'games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
 ```
 
@@ -46,7 +46,7 @@ python3 scripts/minecraft-cards.py a10g0000 --player 1
 
 That example scans Red Snake. The sender requires a running seeded session and does not carry events into the next launch. `--no-cards` keeps the original physical-camera implementation.
 
-The scanners are USB cameras feeding ZBar QR decoding, separate from the executable's PC/SC interface. The x86-64 Rust `arcade-minecraft-io` library replaces the QR worker and camera-ready/preview functions. It writes decoded scans to the game's four native 12-byte result slots under the game's own pthread mutexes. Each virtual scanner has a fixed player assignment, so physical brightness calibration is unnecessary. Ready status is advertised after native card initialization; this preserves startup's physical-camera enumeration. No fake V4L2 devices or copied TP implementation are involved. Camera preview/snapshot diagnostics are not implemented.
+The scanners are USB cameras feeding ZBar QR decoding, separate from the executable's PC/SC interface. The x86-64 Rust `banana-minecraft-io` library (`game-compat/minecraft-dungeons/io`) replaces the QR worker and camera-ready/preview functions. It writes decoded scans to the game's four native 12-byte result slots under the game's own pthread mutexes. Each virtual scanner has a fixed player assignment, so physical brightness calibration is unnecessary. Ready status is advertised after native card initialization; this preserves startup's physical-camera enumeration. No fake V4L2 devices or copied TP implementation are involved. Camera preview/snapshot diagnostics are not implemented.
 
 The runner checks the complete source SHA256; the adapter checks all patched entry points, mutex ABI entry points, and the scanner-configuration getter before changing memory. Only `game.seeded` receives hooks; child helper processes are excluded. Card events and copied libraries stay in ignored `runtime/minecraft-seeded/`; game originals and captured seed files are unchanged.
 
@@ -57,8 +57,8 @@ Measured validation: six Rust parser/mapping tests, Clippy, runner/import-recons
 From the project root:
 
 ```sh
-cargo run -p arcade-desktop -- --setup-minecraft-libs games
-cargo run -p arcade-desktop -- --probe-minecraft games
+cargo run -p banana-desktop -- --setup-minecraft-libs games
+cargo run -p banana-desktop -- --probe-minecraft games
 ```
 
 Named folders such as `games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]` are discovered automatically. Linux uses the native ELF64 guest inside Bubblewrap; Windows uses WSL2. The separate Windows translation-engine prototype is not used or changed here.

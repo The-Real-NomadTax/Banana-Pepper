@@ -1,0 +1,9 @@
+[package]
+name = "banana-wsl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows Subsystem for Linux execution backend for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true

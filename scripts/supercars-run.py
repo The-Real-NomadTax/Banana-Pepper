@@ -5,7 +5,7 @@ The game is a Windows build. This harness keeps a private Wine prefix in
 runtime/supercars/prefix, maps the supplied game directory into it as
 C:\\rawart (large assets are symlinks, small writable files such as prefs and
 audits are private copies), installs the Banana pepper input adapter
-(dinput8.dll, built from crates/arcade-wine-hook), and starts sdaemon.exe.
+(dinput8.dll, built from game-compat/super-cars/hook), and starts sdaemon.exe.
 Original files are never written.
 
 Rendering uses Wine's built-in D3D8 (WineD3D over OpenGL on the GPU). DXVK
@@ -95,7 +95,7 @@ def main():
         raise SystemExit('Unsupported or missing Super Cars sdaemon.exe build')
     hook = root / 'target/i686-pc-windows-msvc/release/arcade_wine_hook.dll'
     if not hook.is_file():
-        raise SystemExit('Build the input adapter first: cargo build -p arcade-wine-hook '
+        raise SystemExit('Build the input adapter first: cargo build -p banana-super-cars-hook '
                          '--target i686-pc-windows-msvc --release')
     wine = os.environ.get('ARCADE_WINE') or shutil.which('wine')
     if not wine:

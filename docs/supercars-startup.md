@@ -11,13 +11,13 @@ Verified: attract mode, coin-up, start, stage select, a full race with keyboard 
 
 ```sh
 rustup target add i686-pc-windows-msvc
-cargo build -p arcade-wine-hook --target i686-pc-windows-msvc --release
+cargo build -p banana-super-cars-hook --target i686-pc-windows-msvc --release
 ```
 
 ## Run
 
 ```sh
-cargo run -p arcade-desktop -- --launch-super-cars games
+cargo run -p banana-desktop -- --launch-super-cars games
 ```
 
 You can also use **Open Super Cars on my display** in the workbench. `scripts/supercars-run.py` checks `sdaemon.exe` against SHA-256 `0cddbdbf1d107d27dc668897d7851b6ac96b4349320551d800504b1c50b195ba`, then:
@@ -44,7 +44,7 @@ You can also use **Open Super Cars on my display** in the workbench. `scripts/su
 
 Esc always exits. The operator menu is navigated with Volume +/- and View 1/View 3, selected with Test or Start, and left with Service or Music. Four coins make one credit with the supplied `prefs`.
 
-## How the adapter works (`crates/arcade-wine-hook`)
+## How the adapter works (`game-compat/super-cars/hook`)
 
 The game reads cabinet controls through a Raw Thrills I/O library ("RTIO") that names each input (`start1`, `coin1`, `adc1`, …) and posts events to the sink at `0x4a9510(code, state)`. The adapter is a freestanding `no_std` Rust DLL (no CRT, `raw-dylib` imports, linked by `lld-link`). It:
 

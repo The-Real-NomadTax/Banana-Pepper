@@ -1,0 +1,18 @@
+[package]
+name = "banana-game-big-buck-hunter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Big Buck Hunter Pro compatibility for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true
+banana-core.workspace = true
+banana-input.workspace = true
+banana-runtime.workspace = true
+banana-settings.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+banana-wsl.workspace = true

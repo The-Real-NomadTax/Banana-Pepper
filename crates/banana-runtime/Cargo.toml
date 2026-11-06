@@ -1,0 +1,13 @@
+[package]
+name = "banana-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Game preparation, launch dispatch and process orchestration for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true
+banana-content.workspace = true
+banana-core.workspace = true
+banana-input.workspace = true
+banana-settings.workspace = true

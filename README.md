@@ -1,6 +1,6 @@
 # Banana pepper
 
-**[Water](crates/arcade-water/README.md) — Water Adapts The ELF Runtime** is our
+**[Water](backends/water/README.md) — Water Adapts The ELF Runtime** is our
 Linux-to-Windows compatibility layer: Linux executables, Windows APIs.
 
 Ford Racing Full Blown now has a native Windows runner and a shared Windows/Wine
@@ -26,7 +26,7 @@ Requires a current Rust toolchain and desktop graphics development libraries. On
 From the project root:
 
 ```sh
-cargo run -p arcade-desktop
+cargo run -p banana-desktop
 ```
 
 The game source defaults to the `games` folder relative to the working directory. Enter a folder or ZArchive path in **Game folder or ZArchive**. Inspection runs on a worker thread. Export JSON saves `arcade-report.json` in the working directory.
@@ -34,7 +34,7 @@ The game source defaults to the `games` folder relative to the working directory
 Interactive Big Buck Hunter on your own display:
 
 ```sh
-cargo run -p arcade-desktop -- --launch-big-buck games
+cargo run -p banana-desktop -- --launch-big-buck games
 ```
 
 Or use **Play on my display** in the workbench. T = test, 1 = start, left mouse = fire, right mouse = pump, Esc = exit (keys are customizable, see below). An on-screen crosshair follows the mouse or controller aim. Choose it under the game's **Settings → Graphics → Crosshair**, or with `crosshair = off | p1 | p1_large | p2 | p2_large` in `settings.cfg`. The choices are red P1 or blue P2, each in a normal or large size, and the default is red P1. Set its size with the slider or `crosshair_size` (10–200 percent, default 50). Choose **Off** to remove it completely and keep the normal mouse pointer. The crosshair replaces the mouse pointer inside the game window. It works on Linux and in Water; the WSL backend does not draw it yet. Desktop mode has no automatic inputs or timeout. Its logs and save files live in `runtime/big-buck-desktop/`.
@@ -42,13 +42,13 @@ Or use **Play on my display** in the workbench. T = test, 1 = start, left mouse 
 Headless inspection (no display required):
 
 ```sh
-cargo run -p arcade-desktop -- --scan games
+cargo run -p banana-desktop -- --scan games
 ```
 
 To build/test only the portable core without desktop dependencies:
 
 ```sh
-cargo test -p arcade-core
+cargo test -p banana-compat
 ```
 
 ## ZArchived game folders
@@ -61,7 +61,7 @@ supported individual game folder or the usual multi-game library folder.
 Use the separate **Arcade ZAR Converter** app to create compatible archives:
 
 ```sh
-cargo run -p arcade-zar
+cargo run -p banana-zar
 ```
 
 Choose a game folder (or the whole `games` library), choose a `.zar` destination
@@ -80,19 +80,19 @@ during finalization or verification waits for that operation to finish.
 For conversion without a window:
 
 ```sh
-cargo run -p arcade-zar -- --convert "games/Big Buck Hunter Pro" "Big Buck Hunter Pro.zar"
-cargo run -p arcade-zar -- --convert "games" "games.zar"
+cargo run -p banana-zar -- --convert "games/Big Buck Hunter Pro" "Big Buck Hunter Pro.zar"
+cargo run -p banana-zar -- --convert "games" "games.zar"
 ```
 
-Build a standalone executable with `cargo build --release -p arcade-zar`. Run
+Build a standalone executable with `cargo build --release -p banana-zar`. Run
 `target/release/arcade-zar` on Linux or `target\release\arcade-zar.exe` on Windows.
 It uses the same desktop build dependencies as the workbench. Each conversion
 creates one archive; selecting a library packs all of its games into that archive.
 Select the resulting `.zar` in the workbench, or pass it to the existing commands:
 
 ```sh
-cargo run -p arcade-desktop -- --scan "games.zar"
-cargo run -p arcade-desktop -- --launch-big-buck "Big Buck Hunter Pro.zar"
+cargo run -p banana-desktop -- --scan "games.zar"
+cargo run -p banana-desktop -- --launch-big-buck "Big Buck Hunter Pro.zar"
 ```
 
 Archives are checked for integrity and extracted into `runtime/archive-cache/`
@@ -178,7 +178,7 @@ Aliens defaults: **T** opens the operator test menu, where T selects, **9** goes
 
 ## Android (Big Buck Hunter Pro)
 
-An Android app in `android/` runs Big Buck Hunter Pro on ARM64 phones. It uses box64 with box32 x86 translation inside a bundled Debian rootfs run by proot, with touch aiming, on-screen cabinet buttons and audio through AudioTrack. Users import their own game folder from the app. Gameplay was verified on a Galaxy S24 FE. Build with `android/build-apk.sh`. [Android notes](docs/android.md) cover usage, architecture, the box64 and shim fixes, and the build.
+An Android app in `apps/android/` runs Big Buck Hunter Pro on ARM64 phones. It uses box64 with box32 x86 translation inside a bundled Debian rootfs run by proot, with touch aiming, on-screen cabinet buttons and audio through AudioTrack. Users import their own game folder from the app. Gameplay was verified on a Galaxy S24 FE. Build with `apps/android/build-apk.sh`. [Android notes](docs/android.md) cover usage, architecture, the box64 and shim fixes, and the build.
 
 ## Included profiles
 
@@ -195,11 +195,14 @@ Jurassic Park deliberately uses the supplied `game_original` rather than the act
 
 ## Layout
 
-- `crates/arcade-core`: static ELF/PE inspection, game reports, normalized cabinet input. No UI, graphics or process execution.
-- `crates/arcade-content`: verified ZArchive extraction and shared game-source caching.
-- `crates/arcade-desktop`: egui/eframe browser, Linux startup backend, report export and game settings.
-- `crates/arcade-linux-shim`: 32-bit guest library adapting cabinet fullscreen requests into an ordinary GL window.
-- `crates/arcade-wine-hook`: freestanding 32-bit Windows DLL, loaded by Wine as Super Cars' `dinput8.dll`, that feeds keyboard input to the game's cabinet I/O layer.
+See [docs/workspace.md](docs/workspace.md) for the full architecture and rules.
+
+- `crates/`: the shared framework. `banana-api` (game and backend traits plus the registry), `banana-core` (discovery, executable identification, library reports), `banana-compat` (the only place that lists the built-in games), `banana-runtime` (launch dispatch, settings and controller hand-off), `banana-settings` (`settings.cfg`), `banana-input` (`controls.cfg`, controller model, crosshairs), `banana-content` (ZArchive extraction and caching), `banana-ffi` (UniFFI API for the Android app).
+- `apps/desktop`: egui/eframe frontend (`arcade-desktop` binary). `apps/android`: the Android app.
+- `game-compat/<game>`: one crate per title with its fingerprints, preparation, controls, settings and launchers. Guest DLLs/libraries for a single game live beside it (`super-cars/hook`, `ford-racing/hook`, `minecraft-dungeons/io`).
+- `backends/`: reusable execution backends: `native`, `wine`, `water` (Linux-to-Windows, see [Water](backends/water/README.md)) and `wsl`.
+- `guest/linux-shim`: 32-bit guest library adapting cabinet fullscreen requests into an ordinary GL window. `guest/win32`: shared freestanding Windows guest runtime and XInput sources.
+- `tools/zar`: the folder-to-ZArchive converter.
 - `runtime`: generated executable copies, save data, virtual-display tools and startup captures; excluded from source control.
 - `docs/architecture.md`: platform boundaries and runtime implementation plan.
 - `games`: local game files, excluded from source control.
@@ -210,12 +213,12 @@ API references: [eframe 0.36.2](https://docs.rs/eframe/0.36.2/eframe/) and [gobl
 
 ## Jurassic Park investigation
 
-Jurassic Park now opens on the desktop with player-one mouse aiming and firing. Start reaches mission selection, and gameplay shots have produced a score of 75. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-jurassic games` or choose **Open Jurassic Park on my display**. **1** starts, **mouse** aims, **left click** fires, **T** opens test mode, and **Esc** exits. The Rust desktop profile uses the supplied plaintext scripts and omits unavailable cabinet security initialization. Main audio plays through PulseAudio/PipeWire; cabinet/rumble audio and physical cabinet I/O remain unfinished. Player two can use a second controller (see Two players above). The RIO connection overlay is suppressed in desktop mode. [Startup and control notes](docs/jurassic-startup.md) document the exact build checks and remaining work.
+Jurassic Park now opens on the desktop with player-one mouse aiming and firing. Start reaches mission selection, and gameplay shots have produced a score of 75. Build the i686 shim, then run `cargo run -p banana-desktop -- --launch-jurassic games` or choose **Open Jurassic Park on my display**. **1** starts, **mouse** aims, **left click** fires, **T** opens test mode, and **Esc** exits. The Rust desktop profile uses the supplied plaintext scripts and omits unavailable cabinet security initialization. Main audio plays through PulseAudio/PipeWire; cabinet/rumble audio and physical cabinet I/O remain unfinished. Player two can use a second controller (see Two players above). The RIO connection overlay is suppressed in desktop mode. [Startup and control notes](docs/jurassic-startup.md) document the exact build checks and remaining work.
 
 ## Aliens Armageddon desktop runtime
 
-Aliens now reaches playable 3D gameplay on the desktop; the user confirmed working controls and visuals. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-aliens games` or choose **Open Aliens on my display**. **1** starts, the native desktop mouse maps handle aiming/firing, **5** inserts a coin, **T** opens the test menu (all customizable) and **Esc** or the window's close button quits. The current copied settings are Spanish: choose **MODO HISTORIA** for Story Mode. Audio plays through PulseAudio/PipeWire; a full playthrough is unverified. Player two can use a second controller (see Two players above), which has not been played yet. [Aliens startup notes](docs/aliens-startup.md) document the validated asset seeds, graphics adapters and runtime-only changes. Original files remain unchanged.
+Aliens now reaches playable 3D gameplay on the desktop; the user confirmed working controls and visuals. Build the i686 shim, then run `cargo run -p banana-desktop -- --launch-aliens games` or choose **Open Aliens on my display**. **1** starts, the native desktop mouse maps handle aiming/firing, **5** inserts a coin, **T** opens the test menu (all customizable) and **Esc** or the window's close button quits. The current copied settings are Spanish: choose **MODO HISTORIA** for Story Mode. Audio plays through PulseAudio/PipeWire; a full playthrough is unverified. Player two can use a second controller (see Two players above), which has not been played yet. [Aliens startup notes](docs/aliens-startup.md) document the validated asset seeds, graphics adapters and runtime-only changes. Original files remain unchanged.
 
 ## Fast and Furious Super Cars (Wine)
 
-Super Cars is a Windows build. It runs under system Wine 11 with WineD3D in a private prefix (`runtime/supercars/prefix`), with the game mapped to `C:\rawart`. The bundled MohkerzLoaderz/TeknoParrot files are not used. Build the input adapter once with `rustup target add i686-pc-windows-msvc` and `cargo build -p arcade-wine-hook --target i686-pc-windows-msvc --release`. Then run `cargo run -p arcade-desktop -- --launch-super-cars games` or choose **Open Super Cars on my display**. **Left/Right** steer, **Up** = gas, **Down** = brake, **5** = coin (4 per credit), **Enter** = start, **T** = test menu and **Esc** exits. Keys are customizable, and XInput controllers drive with an analog stick and triggers (see Controllers above). The game logs a missing dongle but races still run. Non-XInput wheels, force feedback and the cabinet LED/H2O boards are not implemented. [Super Cars runtime notes](docs/supercars-startup.md) cover the adapter, graphics choices and remaining gaps.
+Super Cars is a Windows build. It runs under system Wine 11 with WineD3D in a private prefix (`runtime/supercars/prefix`), with the game mapped to `C:\rawart`. The bundled MohkerzLoaderz/TeknoParrot files are not used. Build the input adapter once with `rustup target add i686-pc-windows-msvc` and `cargo build -p banana-super-cars-hook --target i686-pc-windows-msvc --release`. Then run `cargo run -p banana-desktop -- --launch-super-cars games` or choose **Open Super Cars on my display**. **Left/Right** steer, **Up** = gas, **Down** = brake, **5** = coin (4 per credit), **Enter** = start, **T** = test menu and **Esc** exits. Keys are customizable, and XInput controllers drive with an analog stick and triggers (see Controllers above). The game logs a missing dongle but races still run. Non-XInput wheels, force feedback and the cabinet LED/H2O boards are not implemented. [Super Cars runtime notes](docs/supercars-startup.md) cover the adapter, graphics choices and remaining gaps.

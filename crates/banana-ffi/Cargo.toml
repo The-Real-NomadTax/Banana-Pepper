@@ -1,0 +1,21 @@
+[package]
+name = "banana-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Banana Pepper application API for native frontends (Android)"
+
+[dependencies]
+banana-api.workspace = true
+banana-compat.workspace = true
+banana-core.workspace = true
+banana-runtime.workspace = true
+banana-settings.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uniffi = "0.32.2"
+
+[lib]
+# cdylib for Android (loaded by the generated Kotlin bindings), lib for tests.
+crate-type = ["cdylib", "lib"]
+name = "banana_ffi"
