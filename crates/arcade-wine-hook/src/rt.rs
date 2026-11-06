@@ -65,7 +65,11 @@ pub extern "C" fn _aullrem() -> u64 {
 }
 
 fn unreachable_abort() -> ! {
-    #[link(name = "kernel32", kind = "raw-dylib", import_name_type = "undecorated")]
+    #[link(
+        name = "kernel32",
+        kind = "raw-dylib",
+        import_name_type = "undecorated"
+    )]
     unsafe extern "system" {
         fn ExitProcess(code: u32) -> !;
     }

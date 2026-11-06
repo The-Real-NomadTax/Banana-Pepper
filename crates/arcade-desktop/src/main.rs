@@ -1,7 +1,7 @@
 mod aliens_runtime;
 mod jurassic_runtime;
-mod runtime;
 mod minecraft_runtime;
+mod runtime;
 mod supercars_runtime;
 
 use arcade_core::controls::{self, Bindings};
@@ -22,10 +22,23 @@ fn main() {
 
 fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.first().is_some_and(|a| a == "--probe-minecraft" || a == "--launch-minecraft" || a == "--setup-minecraft-libs") {
-        if args.len() > 2 { return Err("Usage: arcade-desktop --probe-minecraft|--launch-minecraft|--setup-minecraft-libs [game-folder-or-library-root]".into()); }
-        let root = args.get(1).map(PathBuf::from).unwrap_or_else(|| "games".into());
-        let mode = if args[0] == "--launch-minecraft" { "launch" } else if args[0] == "--setup-minecraft-libs" { "setup" } else { "probe" };
+    if args.first().is_some_and(|a| {
+        a == "--probe-minecraft" || a == "--launch-minecraft" || a == "--setup-minecraft-libs"
+    }) {
+        if args.len() > 2 {
+            return Err("Usage: arcade-desktop --probe-minecraft|--launch-minecraft|--setup-minecraft-libs [game-folder-or-library-root]".into());
+        }
+        let root = args
+            .get(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| "games".into());
+        let mode = if args[0] == "--launch-minecraft" {
+            "launch"
+        } else if args[0] == "--setup-minecraft-libs" {
+            "setup"
+        } else {
+            "probe"
+        };
         println!("{}", minecraft_runtime::run(&root, mode)?);
         return Ok(());
     }
@@ -140,7 +153,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     }
     let initial_root = if args.first().is_some_and(|a| a == "--games-root") && args.len() == 2 {
         Some(args[1].to_string_lossy().into_owned())
-    } else { None };
+    } else {
+        None
+    };
     if !args.is_empty() && initial_root.is_none() {
         return Err(
             "Usage: arcade-desktop [--games-root PATH | --scan [PATH] | --probe-minecraft [PATH] | --launch-minecraft [PATH] | --setup-minecraft-libs [PATH] | --probe-big-buck [PATH] | --launch-big-buck [PATH] | --launch-super-cars [PATH]]".into(),
@@ -155,7 +170,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
             let mut app = ArcadeApp::default();
-            if let Some(root) = initial_root { app.root = root; app.selected = 4; }
+            if let Some(root) = initial_root {
+                app.root = root;
+                app.selected = 4;
+            }
             app.rescan(cc.egui_ctx.clone());
             Ok(Box::new(app))
         }),
@@ -677,16 +695,21 @@ impl eframe::App for ArcadeApp {
             ui.add_space(10.0);
         });
         egui::Panel::bottom("status").show(ui, |ui| {
-            egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                ui.label(&self.message);
-            });
+            egui::ScrollArea::vertical()
+                .max_height(140.0)
+                .show(ui, |ui| {
+                    ui.label(&self.message);
+                });
         });
         egui::Panel::left("library")
             .default_size(250.0)
             .show(ui, |ui| {
                 ui.add_space(12.0);
                 ui.heading("Library");
-                ui.label(format!("{} cabinet profiles", arcade_core::profiles().len()));
+                ui.label(format!(
+                    "{} cabinet profiles",
+                    arcade_core::profiles().len()
+                ));
                 ui.add_space(14.0);
                 for (i, report) in self.reports.iter().enumerate() {
                     ui.vertical(|ui| {
