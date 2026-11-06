@@ -114,6 +114,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arcade-minecraft-io"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "arcade-wine-hook"
 version = "0.1.0"
 

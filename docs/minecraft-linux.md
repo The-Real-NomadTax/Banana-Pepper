@@ -1,6 +1,50 @@
 # Minecraft Dungeons Arcade on Linux
 
-The `aspens-crap` branch was pulled and tested against the supplied 3.07 folder on CachyOS x86-64. **Minecraft is not running in-game.** Library loading and snapshot import reconstruction succeed, but protected-asset initialization remains blocked.
+**Current seeded-runner status (2026-11-05):** coin, Start, loadout, level select and the chosen level all run. The game runs in a 60 Hz gamescope window by default; at 60 Hz the player panels, Ready box, score row and gear HUD draw. Still open: the HUD and short banners are intermittent between runs (sometimes missing, or a banner such as "NIGHT IS COMING" stays up), and automated runs have not yet shown a controllable player character after pressing a button in the level. Use the seeded launch below. The later investigation sections are historical records.
+
+## Cabinet type, 60 Hz and level start (2026-11-05)
+
+- **60 Hz:** the cabinet presented vsync'd at 60 Hz and the game's UI timing depends on it. On a 165 Hz monitor the game ran at about 165 FPS (it swaps twice per frame, so `glXSwapBuffers` counted ~330/s) and panels, the Ready box and the HUD were missing. The launcher now runs the sandbox inside `gamescope -r 60` (1920×1080 window). `--no-gamescope` draws straight to the desktop. Keyboard focus accepts the `gamescope` window.
+- **Cabinet type:** `SysInfoGameCabinetType` (cached at `0x182a4ac`) is read from dongle offset `0x29` by the skipped HASP block, so it stayed 0. UI scripts branch on it with `BR_ON_PROC`: 1 = four players (`LOOP_4P`, `FADE_4P`, `MINE_4P`), 12 = two, 13 = one. The runner presets 1, matching TeknoParrot's `CabinetType=4 PLAYERS` (`--cabinet-type` overrides).
+- **RIO2 boards:** cabinet type 1 also asks the I/O layer for two RIO2 boards (`0x424650`), which stopped boot at "Press TEST to continue". The runner skips only that board-count request (`0x42466c`).
+- **Card stock:** `0x441340` reads the cards this cabinet may still dispense from dongle offset `0x32` (cap 7000) into `0x179dee4`. At 0 the game sets its lock flag (`0x179de94`) and every slot shows "GAME LOCKED / ALL DISPENSERS REPORT ERROR". The runner presets 7000 (the save can supply a different count at startup).
+- **Dispenser status bits** (`0x41a100`, per player): 0x01 ready (input `0x208`), 0x02 empty (`0x20a`, sets `P%u_CARDEMPTY`), 0x04/0x0C card at exit / held over 500 ms (`0x209`), 0x20 card low (`0x20b`). The adapter keeps reporting 0x01.
+- **Transitions:** the load-with-swipe routines (`0x50e440`/`0x50e650`) now keep their native scene unload/load and only replace the final blocking wait for `TRANSITION_OUT_DONE` (which the "transition" scene's scripts never send here) with `SetTrigger("TRANSITION_OUT_DONE")`. The previous whole-routine cut skipped scene loads. A bounded pause there (1 s wait or 60 frames) was tried and rejected: one variant exhausted the 64-byte memory pool, the other crashed at `0x442852` and started level scripts out of order.
+- **Level-select freeze:** after a level is chosen and all players are Ready, the native game-select loop (`0x433110`) waits for `GAMESEL_DONE`, which only the transition scene's logo swipe sets. The loop now waits for `LOGO_TRANSITION`, which the level-select script sets at that point. The trigger name is stored in the unreachable HASP block.
+- **Testing on a private display:** `ARCADE_GAMESCOPE_BACKEND=headless` plus `--no-host-keyboard` runs unattended; inputs go to `runtime/minecraft-seeded/key-events` (`SDL-scancode 1|0` lines) and screenshots come from the gamescope Xwayland display.
+
+**Measured result:** the full coin → loadout → level select → level flow runs at 60 Hz with player panels, Ready, score row and gear HUD drawn (reference: cabinet photos supplied by the user). Remaining: the intermittent HUD/banners above, and the player character not yet seen after pressing a button in automated runs.
+
+## Virtual card scanners
+
+```sh
+cargo build -p arcade-minecraft-io --offline
+python3 scripts/minecraft-seeded.py 'games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
+```
+
+F1–F4 scan the selected card for P1–P4 while the Minecraft window has focus. The default card is Sun's Grace (`a0000000`); choose another with `--card CODE`. Scanning is useful at the game's card-selection prompt. The game retains its own enabled-card, player-state, duplicate-card and loadout validation.
+
+Click Minecraft to focus it. `5` inserts a P1 credit and `1` sends the P1 primary action/Start; Enter and Space are additional P1 action keys. P1 uses arrows and `Z`/`X`/`C`; P2 uses `IJKL` and `U`/`O`/`P`. `2`–`4` send the other players' primary actions and `6`–`8` their coin switches. Numpad 1–8 are also supported. Focused host evdev events feed a bounded `key-events` protocol because the old SDL/XWayland path can miss keyboard delivery. Once a host key is seen, that source has one input authority, preventing duplicate SDL edges; focus loss releases held keys. The adapter marks the native input packet ready so CoreInputLoop applies the events. Keys are not also forwarded through uinput. Four virtual joysticks still provide device presence. `--no-keyboard` disables keyboard controls and scan hotkeys.
+
+The default render size is cabinet-native 1920×1080. At that size the complete scan heading is visible; a 1280-wide window could show a clipped 1920-wide layout. This alone does not solve missing player panels.
+
+The virtual adapter also reports a healthy ready/taken paper-dispenser sensor at `0x41a100`. The native dispenser task retains its queue, timing, completion callbacks and audit updates. Restored pending jobs therefore complete without physical hardware. A live test cleared all four “Cards Owed / Please take card” overlays, and the runtime save records zero owed for all four players. This represents virtual fulfillment, not physical printing. Original save files are unchanged; only the ignored runtime save is updated by the game.
+
+The Mojang stall was reproduced inside the visual swipe-transition routine: native Start was detected, but the attract task then waited inside `0x50e650`. Skipping the transition routines let the game proceed to loadout and level selection. The seeded runtime first cut between scenes by tail-calling the native trigger setter from all four load/restart variants (`0x50e440`, `0x50e540`, `0x50e650`, `0x50e760`); this is superseded by the tail-only patch described above. `TRANSITION_IN` and `TRANSITION_OUT_DONE` notifications are preserved; the earlier plain-return experiment incorrectly dropped them. `--native-transitions` restores the original routines for diagnosis. This is a visual-transition workaround; the underlying transition failure remains unresolved.
+
+Send any other eight-character, case-sensitive QR code while the game runs:
+
+```sh
+python3 scripts/minecraft-cards.py a10g0000 --player 1
+```
+
+That example scans Red Snake. The sender requires a running seeded session and does not carry events into the next launch. `--no-cards` keeps the original physical-camera implementation.
+
+The scanners are USB cameras feeding ZBar QR decoding, separate from the executable's PC/SC interface. The x86-64 Rust `arcade-minecraft-io` library replaces the QR worker and camera-ready/preview functions. It writes decoded scans to the game's four native 12-byte result slots under the game's own pthread mutexes. Each virtual scanner has a fixed player assignment, so physical brightness calibration is unnecessary. Ready status is advertised after native card initialization; this preserves startup's physical-camera enumeration. No fake V4L2 devices or copied TP implementation are involved. Camera preview/snapshot diagnostics are not implemented.
+
+The runner checks the complete source SHA256; the adapter checks all patched entry points, mutex ABI entry points, and the scanner-configuration getter before changing memory. Only `game.seeded` receives hooks; child helper processes are excluded. Card events and copied libraries stay in ignored `runtime/minecraft-seeded/`; game originals and captured seed files are unchanged.
+
+Measured validation: six Rust parser/mapping tests, Clippy, runner/import-reconstruction tests, Python syntax checks, and actual desktop captures. GDB confirmed native coin/Start detection and a successful P1 `a0000000` scan (`0`) during loadout. Earlier P1/P2 scans outside an active loadout returned ignored/not-enabled (`1`). The normal launcher also reaches card and level selection without GDB. These checks establish input and scan delivery, not full gameplay or correct rendering of equipped gear.
 
 ## Reproduce
 

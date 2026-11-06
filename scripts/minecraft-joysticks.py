@@ -35,6 +35,19 @@ KEYMAP = {
     e.KEY_2: (1, "btn", e.BTN_START, 1), e.KEY_6: (1, "btn", e.BTN_SELECT, 1),
 }
 
+# Host evdev keys -> SDL2 scancodes consumed by the native desktop adapter.
+NATIVE_KEYS = dict(zip(
+    [e.KEY_1, e.KEY_2, e.KEY_3, e.KEY_4, e.KEY_5, e.KEY_6, e.KEY_7, e.KEY_8,
+     e.KEY_Z, e.KEY_X, e.KEY_C, e.KEY_V, e.KEY_LEFT, e.KEY_RIGHT, e.KEY_UP, e.KEY_DOWN,
+     e.KEY_I, e.KEY_J, e.KEY_K, e.KEY_L, e.KEY_U, e.KEY_O, e.KEY_P, e.KEY_SEMICOLON,
+     e.KEY_F1, e.KEY_F2, e.KEY_F3, e.KEY_F4],
+    [30, 31, 32, 33, 34, 35, 36, 37, 29, 27, 6, 25, 80, 79, 82, 81,
+     12, 13, 14, 15, 24, 18, 19, 51, 58, 59, 60, 61]))
+for key, source in [(e.KEY_ENTER, 40), (e.KEY_SPACE, 44),
+                    (e.KEY_KP1, 89), (e.KEY_KP2, 90), (e.KEY_KP3, 91), (e.KEY_KP4, 92),
+                    (e.KEY_KP5, 93), (e.KEY_KP6, 94), (e.KEY_KP7, 95), (e.KEY_KP8, 96)]:
+    NATIVE_KEYS[key] = source
+
 
 def make_pads(count):
     caps = {e.EV_KEY: BUTTONS, e.EV_ABS: AXES}
@@ -44,11 +57,12 @@ def make_pads(count):
 
 def focused():
     try:
-        name = subprocess.run(["xdotool", "getactivewindow", "getwindowname"], capture_output=True,
+        name = subprocess.run(["xdotool", "getwindowfocus", "getwindowname"], capture_output=True,
                               text=True, timeout=1).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return name == "Minecraft"
+    # The game window, or the 60 Hz gamescope window it runs inside.
+    return name in ("Minecraft", "gamescope")
 
 
 def keyboards():
@@ -61,7 +75,7 @@ def keyboards():
     return result
 
 
-def run(pads, keyboard, seconds=None, stop=None):
+def run(pads, keyboard, seconds=None, stop=None, scan=None, native_key=None):
     deadline = time.monotonic() + seconds if seconds else None
     selector = selectors.DefaultSelector()
     if keyboard:
@@ -69,6 +83,7 @@ def run(pads, keyboard, seconds=None, stop=None):
             selector.register(device, selectors.EVENT_READ)
         print("Keyboard mapping active while the Minecraft window is focused", flush=True)
     held = {}
+    native_held = set()
     last_focus_check, has_focus = 0.0, False
     try:
         while (deadline is None or time.monotonic() < deadline) and not (stop and stop.is_set()):
@@ -76,6 +91,10 @@ def run(pads, keyboard, seconds=None, stop=None):
             now = time.monotonic()
             if now - last_focus_check > 0.3:
                 last_focus_check, has_focus = now, focused()
+                if not has_focus and native_key:
+                    for source in native_held:
+                        native_key(source, 0)
+                    native_held.clear()
                 if not has_focus and held:
                     for player, kind, code, _ in held.values():
                         pads[player].write(e.EV_ABS if kind == "axis" else e.EV_KEY, code, 0)
@@ -83,6 +102,20 @@ def run(pads, keyboard, seconds=None, stop=None):
                     held.clear()
             for key, _ in events:
                 for event in key.fileobj.read():
+                    if native_key:
+                        source = NATIVE_KEYS.get(event.code)
+                        if (event.type == e.EV_KEY and source is not None and event.value != 2
+                                and (has_focus or source in native_held)):
+                            native_key(source, event.value)
+                            if event.value:
+                                native_held.add(source)
+                            else:
+                                native_held.discard(source)
+                        continue
+                    if (scan and event.type == e.EV_KEY and event.value == 1 and has_focus
+                            and e.KEY_F1 <= event.code <= e.KEY_F4):
+                        scan(event.code - e.KEY_F1 + 1)
+                        continue
                     if event.type != e.EV_KEY or event.code not in KEYMAP or event.value == 2:
                         continue
                     player, kind, code, value = KEYMAP[event.code]
@@ -98,6 +131,9 @@ def run(pads, keyboard, seconds=None, stop=None):
     except KeyboardInterrupt:
         pass
     finally:
+        if native_key:
+            for source in native_held:
+                native_key(source, 0)
         for key in list(selector.get_map().values()):
             key.fileobj.close()
 
