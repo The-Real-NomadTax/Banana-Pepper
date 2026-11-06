@@ -50,6 +50,7 @@ The game reads cabinet controls through a Raw Thrills I/O library ("RTIO") that 
 
 - forwards `DirectInput8Create` to Wine's real dinput8;
 - when it loads, checks the exact bytes at the per-frame input poll (`0x4a8e90`) and at the sink. It then redirects the poll through a trampoline in memory only. On any other build it logs and does nothing;
+- checks and replaces the cabinet-availability query case at `0x4a9a6d` to report the adapter's controls as available. Car/track selection otherwise ignores the analog wheel and falls back to the suppressed developer keyboard. The real RTIO status and board polling are unchanged;
 - after each poll, reads the game's raw DirectInput keyboard buffer (`0x4780108`). It posts press/release edges for button bindings and writes steering, gas and brake into the analog table at `0x477f808` (0..0xfff; the game maps `adc1` to -1..1);
 - then clears the game's keyboard state so the developer shortcuts compiled into the game (Space, R, arrows, F-keys and others) never fire.
 
