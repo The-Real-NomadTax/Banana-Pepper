@@ -73,6 +73,10 @@ Keyboard bindings for Aliens, Jurassic Park and Big Buck Hunter live in `control
 
 Aliens defaults: **T** opens the operator test menu, where T selects, **9** goes back and **Up/Down** move. Outside the menu Up/Down change volume, as on the cabinet.
 
+## Android (Big Buck Hunter Pro)
+
+An Android app in `android/` runs Big Buck Hunter Pro on ARM64 phones. It uses box64 with box32 x86 translation inside a bundled Debian rootfs run by proot, with touch aiming, on-screen cabinet buttons and audio through AudioTrack. Users import their own game folder from the app. Gameplay was verified on a Galaxy S24 FE. Build with `android/build-apk.sh`. [Android notes](docs/android.md) cover usage, architecture, the box64 and shim fixes, and the build.
+
 ## Included profiles
 
 | Title | Inspected executable | Format observed |
