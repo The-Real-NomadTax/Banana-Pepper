@@ -11,7 +11,12 @@ pub mod vfs;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod windows;
 
-pub fn run_worker(image: &[u8], root: &std::path::Path, work: &std::path::Path, argv: &[String]) -> Result<(), String> {
+pub fn run_worker(
+    image: &[u8],
+    root: &std::path::Path,
+    work: &std::path::Path,
+    argv: &[String],
+) -> Result<(), String> {
     let plan = elf::Image::parse(image)?;
     plan.require_native_support()?;
     #[cfg(all(windows, target_arch = "x86_64"))]

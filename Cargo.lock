@@ -107,6 +107,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arcade-minecraft-io"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "arcade-water"
 version = "0.1.0"
 dependencies = [
