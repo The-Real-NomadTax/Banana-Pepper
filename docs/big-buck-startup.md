@@ -5,7 +5,7 @@ The supplied build now boots past calibration, reaches attract mode, accepts STA
 ## Interactive desktop mode
 
 ```sh
-cargo run -p arcade-desktop -- --launch-big-buck games
+cargo run -p banana-desktop -- --launch-big-buck games
 ```
 
 Or select Big Buck Hunter in the workbench and click **Play on my display**. The game opens a normal 640×480 window on the current X11/XWayland display. It runs until you close it or press Esc, with no scripted inputs or timeout. Keep the launcher/workbench running while playing.
@@ -21,11 +21,11 @@ The shim redirects a cabinet-supplied `-display :0.0` argument to the current DI
 From the project root:
 
 ```sh
-cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu
-cargo run -p arcade-desktop -- --probe-big-buck games
+cargo build -p banana-linux-shim --target i686-unknown-linux-gnu
+cargo run -p banana-desktop -- --probe-big-buck games
 ```
 
-Or start the workbench with `cargo run -p arcade-desktop`, select Big Buck Hunter Pro, and click **Test Big Buck Hunter progression**. The workbench displays the resulting still frame. The test automatically sends TEST, START, COIN and a fixed sequence of mouse shots to the private game window. The resulting still frame is not an interactive game view.
+Or start the workbench with `cargo run -p banana-desktop`, select Big Buck Hunter Pro, and click **Test Big Buck Hunter progression**. The workbench displays the resulting still frame. The test automatically sends TEST, START, COIN and a fixed sequence of mouse shots to the private game window. The resulting still frame is not an interactive game view.
 
 Requirements: Linux x86 with 32-bit glibc, GL/GLU/FreeGLUT and software Mesa; Rust's `i686-unknown-linux-gnu` target and a 32-bit linker toolchain; Bubblewrap, Bash, GNU timeout, strace, Xvfb, xdotool and ImageMagick `import`. The tested host already had the 32-bit game libraries. Xvfb was downloaded from the configured distribution mirror and extracted locally under `runtime/tools/xvfb`; no system package was installed. Other distributions will need their matching packages, not that CachyOS binary.
 
@@ -49,7 +49,7 @@ c569677c4e4bcf3449939b6e9a44afd3346c153133391c24dc06c012a58c1244
 
 Native startup of the original failed at `open("/dev/rockey", O_RDWR)`, printing `please install the key driver!` and exiting with code zero. Static examination showed a startup wrapper with a repeating four-byte XOR transform over one code region. The reconstructed entry decodes to the standard i386 CRT startup sequence and calls the game main routine.
 
-`arcade-core::big_buck::prepare` accepts only the hash above. It reconstructs bytes at file offset `0x2d80`, length `0x937c0`, using mask `84 eb 67 f1`; restores the ELF entry to `0x0804ad80`; and clears reserved ELF identification padding. All changes go to a separate runtime copy. Unknown executable hashes are rejected. The runtime copy is not an authenticated original; its behavior is validated only to the startup screen so far.
+`prepare::prepare` in `game-compat/big-buck-hunter` accepts only the hash above. It reconstructs bytes at file offset `0x2d80`, length `0x937c0`, using mask `84 eb 67 f1`; restores the ELF entry to `0x0804ad80`; and clears reserved ELF identification padding. All changes go to a separate runtime copy. Unknown executable hashes are rejected. The runtime copy is not an authenticated original; its behavior is validated only to the startup screen so far.
 
 The first graphics attempt failed because FreeGLUT cabinet game mode tries to change screen settings. Our guest-side Rust `cdylib` overrides `glutEnterGameMode`/`glutLeaveGameMode` to create and destroy a normal 640×480 GL window. It is built for i686 and preloaded only into the guest process. Software Mesa is selected for both Xvfb and the game to avoid a host NVIDIA EGL initialization crash.
 
@@ -84,7 +84,7 @@ A hunt scene renders after site selection, but a scored hit and correct pump/rel
 
 ## Audio playback
 
-`arcade-linux-shim/src/audio.rs` implements the subset of OSS playback used by this build. The game still performs its own asset loading and mixing. Its requests to open `/dev/dsp`, negotiate S16LE/stereo/24000 Hz, query fragment sizes/free space, and write PCM are translated into a blocking PulseAudio Simple API playback stream. PipeWire's PulseAudio server is supported through that same interface. The 32-bit `libpulse-simple` library and its dependencies are required.
+`guest/linux-shim/src/audio.rs` implements the subset of OSS playback used by this build. The game still performs its own asset loading and mixing. Its requests to open `/dev/dsp`, negotiate S16LE/stereo/24000 Hz, query fragment sizes/free space, and write PCM are translated into a blocking PulseAudio Simple API playback stream. PipeWire's PulseAudio server is supported through that same interface. The 32-bit `libpulse-simple` library and its dependencies are required.
 
 The launcher mounts only the selected local Pulse socket (normally `$XDG_RUNTIME_DIR/pulse/native`) and an existing Pulse cookie when present. It sets `ARCADE_BBH_AUDIO=1` and directs the guest at that socket. The current default output device is used; `ARCADE_AUDIO_SINK` can optionally name another sink. If no local socket exists, the OSS bridge is not enabled. Desktop audio connection and PCM submission are recorded in `runtime/big-buck-desktop/runner.log`.
 

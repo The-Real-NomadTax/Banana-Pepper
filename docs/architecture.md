@@ -39,7 +39,7 @@ Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A
 3. Specify its observed cabinet transport and message semantics. Implement a Rust adapter with captured, reproducible protocol tests and a diagnostic device simulator. The current mouse monitor is not that simulator.
 4. Connect normalized gun/coin/start state, add device selection, calibration and focus/disconnect release handling. Confirm boot, attract mode, credit, start, play and clean shutdown.
 5. Repeat for the next Linux titles; share only interfaces shown to be compatible.
-6. Add a Windows host backend and per-game Windows I/O adapter. On Linux, Super Cars now runs under Wine (see `supercars-startup.md`), with its I/O adapter as a freestanding Windows DLL (`crates/arcade-wine-hook`). A native Windows backend would reuse that DLL.
+6. Add a Windows host backend and per-game Windows I/O adapter. On Linux, Super Cars now runs under Wine (see `supercars-startup.md`), with its I/O adapter as a freestanding Windows DLL (`game-compat/super-cars/hook`). A native Windows backend would reuse that DLL.
 
 ## Platform support targets
 
@@ -48,7 +48,7 @@ Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A
 | Linux x86-64 | Initial target | 32-bit Linux ABI/userspace plus per-game adapters |
 | Windows x86-64 | Native workbench | Big Buck uses the Water ELF32 worker or WSL2/WSLg. Ford uses native Direct3D 9 with our adapter. Minecraft retains its WSL2 runner and its documented cabinet/asset limits. |
 | macOS (especially Apple Silicon) | Future desktop target | Linux/Windows ABI and x86 execution solution; graphics translation as needed |
-| Android (ARM64) | Big Buck Hunter app (`android/`, see `android.md`) | box64/box32 in a proot Debian rootfs; Xvfb + llvmpipe; touch input and AudioTrack bridges |
+| Android (ARM64) | Big Buck Hunter app (`apps/android/`, see `android.md`) | box64/box32 in a proot Debian rootfs; Xvfb + llvmpipe; touch input and AudioTrack bridges |
 
 Do not advertise game support on any platform until tested there. The current core avoids Unix-only APIs, but cross-compilation and device testing remain outstanding.
 

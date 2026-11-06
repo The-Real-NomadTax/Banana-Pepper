@@ -214,7 +214,7 @@ def main():
         if not args.no_cards:
             library = project / "target/debug/libarcade_minecraft_io.so"
             if not library.is_file():
-                raise RuntimeError("Build the card adapter first: cargo build -p arcade-minecraft-io --offline")
+                raise RuntimeError("Build the card adapter first: cargo build -p banana-minecraft-io --offline")
             shutil.copyfile(library, output / "cards.so")
             (output / "card-events").write_text("")
             (output / "key-events").write_text("")

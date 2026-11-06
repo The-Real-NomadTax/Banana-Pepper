@@ -1,0 +1,13 @@
+[package]
+name = "banana-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Game discovery, executable identification and library state for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true
+goblin.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

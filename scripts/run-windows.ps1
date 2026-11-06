@@ -13,14 +13,14 @@ Push-Location -LiteralPath $projectRoot
 try {
     if ($Mode -ne 'workbench' -and $Game -eq 'ford') {
         if ($Mode -ne 'launch') { throw 'Ford supports -Mode launch.' }
-        & cargo build -p arcade-ford-hook --target i686-pc-windows-msvc --release
+        & cargo build -p banana-ford-hook --target i686-pc-windows-msvc --release
         if ($LASTEXITCODE -ne 0) { throw 'Ford adapter build failed. Install rustup target i686-pc-windows-msvc and LLVM lld-link.' }
     }
     if ($Mode -ne 'workbench' -and $Game -eq 'big-buck' -and $Backend -ne 'wsl') {
-        & cargo build -p arcade-water --bin water-buck --target i686-pc-windows-msvc
+        & cargo build -p banana-water --bin water-buck --target i686-pc-windows-msvc
         if ($LASTEXITCODE -ne 0) { throw 'Water Big Buck worker build failed.' }
     }
-    & cargo build -p arcade-desktop
+    & cargo build -p banana-desktop
     if ($LASTEXITCODE -ne 0) { throw 'Banana pepper build failed.' }
     $action = if ($Mode -ne 'workbench' -and $Game -eq 'ford') { '--launch-ford' }
     elseif ($Mode -ne 'workbench' -and $Game -eq 'big-buck') {

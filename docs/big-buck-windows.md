@@ -9,8 +9,8 @@ Minecraft continues to use its existing WSL runner.
 
 ```powershell
 rustup target add i686-pc-windows-msvc
-cargo build -p arcade-water --bin water-buck --target i686-pc-windows-msvc
-cargo run -p arcade-desktop -- --launch-big-buck "C:\path\to\Big Bug Hunter Pro"
+cargo build -p banana-water --bin water-buck --target i686-pc-windows-msvc
+cargo run -p banana-desktop -- --launch-big-buck "C:\path\to\Big Bug Hunter Pro"
 # Build and run through the helper:
 .\scripts\run-windows.ps1 -Game big-buck -Backend water -Mode launch -GamesRoot "C:\path\to\Big Bug Hunter Pro"
 ```
@@ -41,7 +41,7 @@ Mouse coordinates scale to the 640×480 game space. Losing focus releases switch
 The bounded native progression probe is:
 
 ```powershell
-cargo run -p arcade-desktop -- --probe-big-buck "C:\path\to\Big Bug Hunter Pro"
+cargo run -p banana-desktop -- --probe-big-buck "C:\path\to\Big Bug Hunter Pro"
 ```
 
 It opens a visible game window for 96 seconds, uses a separate
@@ -62,7 +62,7 @@ despite the freestanding DLL target's panic setting:
 
 ```powershell
 $env:CARGO_ENCODED_RUSTFLAGS = '-C' + [char]31 + 'panic=unwind'
-cargo test -p arcade-water --bin water-buck --target i686-pc-windows-msvc
+cargo test -p banana-water --bin water-buck --target i686-pc-windows-msvc
 Remove-Item Env:CARGO_ENCODED_RUSTFLAGS
 ```
 

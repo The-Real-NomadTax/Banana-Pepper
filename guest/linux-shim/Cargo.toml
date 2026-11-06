@@ -1,0 +1,14 @@
+[package]
+name = "banana-linux-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# Artifact name kept: launch scripts preload libarcade_linux_shim.so.
+name = "arcade_linux_shim"
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "0.2"
+png = "0.18.1"

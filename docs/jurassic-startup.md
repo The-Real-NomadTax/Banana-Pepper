@@ -5,8 +5,8 @@
 ## Open on the desktop
 
 ```sh
-cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu
-cargo run -p arcade-desktop -- --launch-jurassic games
+cargo build -p banana-linux-shim --target i686-unknown-linux-gnu
+cargo run -p banana-desktop -- --launch-jurassic games
 ```
 
 The workbench also has **Open Jurassic Park on my display**. Startup may show a black loading window for roughly 15 seconds before the attract video. The game opens in a 1360×768 window; **Esc** or closing the window exits. The session remains open until exited. Main audio uses SDL's `pulseaudio` driver through your desktop sound server (`ARCADE_AUDIO=0` forces silence); cabinet/rumble audio is not implemented.
@@ -51,20 +51,20 @@ The script extracts NVIDIA's original PhysX 2.8.1 Linux libraries and Arch's arc
 Original protected build:
 
 ```sh
-cargo run -p arcade-desktop -- --probe-jurassic games
+cargo run -p banana-desktop -- --probe-jurassic games
 ```
 
 Supplied modified snapshot, without repairs:
 
 ```sh
-cargo run -p arcade-desktop -- --probe-jurassic-legacy games
+cargo run -p banana-desktop -- --probe-jurassic-legacy games
 ```
 
 Experimental native import repair:
 
 ```sh
-cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu
-cargo run -p arcade-desktop -- --probe-jurassic-native games
+cargo build -p banana-linux-shim --target i686-unknown-linux-gnu
+cargo run -p banana-desktop -- --probe-jurassic-native games
 ```
 
 These commands currently return errors deliberately: none has demonstrated a working game. They save JSON results, a syscall trace and a runner log in `runtime/jurassic/`, prefixed `original-`, `legacy-` or `native-`. The workbench also has **Diagnose repaired Jurassic Park startup** for the native-repair check. It does not display a stale Big Buck Hunter screenshot as a Jurassic result.
@@ -84,7 +84,7 @@ The supplied modified image has a normal CRT entry at `0x0813befc`, but retains 
 
 Our native mode clears exactly those nine values, enables eager symbol binding, and rebinds **474 fingerprint-verified imports** plus **thirteen caller-identified bindings/adapters** (libc 218, pthread 54, libm 37, SDL 42, core OpenGL 123). The archived Ubuntu i386 glibc 2.19-0ubuntu6.6 reference matches four independent libc import anchors and eight pthread anchors at consistent saved load bases. Matching debug symbols identify optimized string/memory implementations by their public IFUNC APIs. The reference libraries are parsed as data; they are never loaded into the game. Execution uses the current host libraries.
 
-`crates/arcade-core/src/bin/recover-jurassic-imports.rs` generates the binding tables. It requires the exact supplied snapshot hash, rejects inconsistent or ambiguous reference-library fingerprints, and checks the debug library's GNU build ID. The shim validates all PLT instruction/slot identities and resolves all replacement symbols before writing any slot. A preflight error terminates startup. Repairs affect the runtime copy and its process memory; source game files stay unchanged. This remains a build-specific compatibility repair, not a general ELF loader or a complete reconstruction of every external import.
+`game-compat/jurassic-park/src/bin/recover-jurassic-imports.rs` generates the binding tables. It requires the exact supplied snapshot hash, rejects inconsistent or ambiguous reference-library fingerprints, and checks the debug library's GNU build ID. The shim validates all PLT instruction/slot identities and resolves all replacement symbols before writing any slot. A preflight error terminates startup. Repairs affect the runtime copy and its process memory; source game files stay unchanged. This remains a build-specific compatibility repair, not a general ELF loader or a complete reconstruction of every external import.
 
 The repaired run completes initial constructors and reaches game initialization. The runner log reports:
 
@@ -131,10 +131,10 @@ VSync now uses SDL's `SDL_GL_SWAP_CONTROL` instead of sending a vendor GLX swap-
 The matching reference files currently reside under ignored `runtime/tools/jurassic/`. After extracting the Ubuntu reference and matching debug packages, regenerate libc bindings with:
 
 ```sh
-cargo run -p arcade-core --bin recover-jurassic-imports -- \
+cargo run -p banana-game-jurassic-park --bin recover-jurassic-imports -- \
   'games/linux based/Jurassic Park 2015/game_legacy_patched' \
   runtime/tools/jurassic/libc-2.19-0ubuntu6.6/lib/i386-linux-gnu/libc-2.19.so \
-  crates/arcade-linux-shim/src/jurassic_libc_bindings.rs \
+  guest/linux-shim/src/jurassic_libc_bindings.rs \
   runtime/tools/jurassic/libc-debug-2.19-0ubuntu6.6/usr/lib/debug/lib/i386-linux-gnu/libc-2.19.so
 ```
 

@@ -1,6 +1,31 @@
 [workspace]
-members = ["crates/arcade-core", "crates/arcade-content", "crates/arcade-zar", "crates/arcade-desktop", "crates/arcade-linux-shim", "crates/arcade-wine-hook", "crates/arcade-water", "crates/arcade-ford-hook", "crates/arcade-minecraft-io"]
-default-members = ["crates/arcade-desktop"]
+members = [
+    "crates/banana-api",
+    "crates/banana-core",
+    "crates/banana-compat",
+    "crates/banana-runtime",
+    "crates/banana-settings",
+    "crates/banana-input",
+    "crates/banana-content",
+    "crates/banana-ffi",
+    "apps/desktop",
+    "game-compat/aliens-armageddon",
+    "game-compat/big-buck-hunter",
+    "game-compat/jurassic-park",
+    "game-compat/super-cars",
+    "game-compat/super-cars/hook",
+    "game-compat/ford-racing",
+    "game-compat/ford-racing/hook",
+    "game-compat/minecraft-dungeons",
+    "game-compat/minecraft-dungeons/io",
+    "backends/native",
+    "backends/wine",
+    "backends/water",
+    "backends/wsl",
+    "guest/linux-shim",
+    "tools/zar",
+]
+default-members = ["apps/desktop"]
 resolver = "3"
 
 [workspace.package]
@@ -9,8 +34,29 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-arcade-core = { path = "crates/arcade-core" }
+# Shared framework
+banana-api = { path = "crates/banana-api" }
+banana-core = { path = "crates/banana-core" }
+banana-compat = { path = "crates/banana-compat" }
+banana-runtime = { path = "crates/banana-runtime" }
+banana-settings = { path = "crates/banana-settings" }
+banana-input = { path = "crates/banana-input" }
+banana-content = { path = "crates/banana-content" }
+# Game compatibility crates (referenced only by banana-compat)
+banana-game-aliens-armageddon = { path = "game-compat/aliens-armageddon" }
+banana-game-big-buck-hunter = { path = "game-compat/big-buck-hunter" }
+banana-game-jurassic-park = { path = "game-compat/jurassic-park" }
+banana-game-super-cars = { path = "game-compat/super-cars" }
+banana-game-ford-racing = { path = "game-compat/ford-racing" }
+banana-game-minecraft-dungeons = { path = "game-compat/minecraft-dungeons" }
+# Execution backends
+banana-native = { path = "backends/native" }
+banana-wine = { path = "backends/wine" }
+banana-wsl = { path = "backends/wsl" }
+banana-water = { path = "backends/water" }
+# Third party
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 goblin = "0.10.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10.9"

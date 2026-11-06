@@ -1,0 +1,15 @@
+[package]
+name = "banana-game-ford-racing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ford Racing Full Blown compatibility for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true
+banana-core.workspace = true
+banana-input.workspace = true
+banana-runtime.workspace = true
+banana-settings.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

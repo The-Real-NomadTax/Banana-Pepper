@@ -1,0 +1,12 @@
+[package]
+name = "banana-super-cars-hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 32-bit Windows guest library loaded by Wine as the game's dinput8.dll.
+# Build: cargo build -p banana-super-cars-hook --target i686-pc-windows-msvc --release
+# (linker and panic settings live in .cargo/config.toml).
+[lib]
+name = "arcade_wine_hook"
+crate-type = ["cdylib"]

@@ -1,0 +1,8 @@
+[package]
+name = "banana-input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared keyboard, controller, mouse and light-gun input for Banana Pepper"
+
+[dependencies]

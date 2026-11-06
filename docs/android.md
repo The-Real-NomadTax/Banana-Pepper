@@ -1,6 +1,6 @@
 # Android: Big Buck Hunter Pro
 
-Banana pepper has an Android app (`android/`) that runs the supplied 2008 Linux build of Big Buck Hunter Pro on ARM64 phones. Gameplay was verified on a Samsung Galaxy S24 FE (SM-S721U, Exynos 2400, Android 17, ARM64 only with no 32-bit support): attract mode, game and mode menus, a Whitetail hunt with scored shots, and initials entry. Audio reaches an active Android AudioTrack. Audibility, long sessions and other devices are not yet verified.
+Banana pepper has an Android app (`apps/android/`) that runs the supplied 2008 Linux build of Big Buck Hunter Pro on ARM64 phones. Gameplay was verified on a Samsung Galaxy S24 FE (SM-S721U, Exynos 2400, Android 17, ARM64 only with no 32-bit support): attract mode, game and mode menus, a Whitetail hunt with scored shots, and initials entry. Audio reaches an active Android AudioTrack. Audibility, long sessions and other devices are not yet verified.
 
 ## Using the app
 
@@ -35,7 +35,7 @@ Android app (Java)                      proot (Debian trixie arm64 rootfs)
 
 ### Compatibility fixes made for Android
 
-1. **box64: section-less i386 ELF.** The prepared game has no section header table. box64's 32-bit loader only found `.dynamic` and `.dynsym` through section headers, so it crashed in `old_elf_lookup` with a null hash table. `android/rootfs/patches/box64-sectionless-elf32.patch` recovers them from `PT_DYNAMIC`: `DT_SYMTAB`, `DT_STRTAB`, `DT_HASH`/`DT_GNU_HASH`, `DT_VERSYM` and `DT_PLTGOT`. It applies to box64 commit `59b3eb1`.
+1. **box64: section-less i386 ELF.** The prepared game has no section header table. box64's 32-bit loader only found `.dynamic` and `.dynsym` through section headers, so it crashed in `old_elf_lookup` with a null hash table. `apps/android/rootfs/patches/box64-sectionless-elf32.patch` recovers them from `PT_DYNAMIC`: `DT_SYMTAB`, `DT_STRTAB`, `DT_HASH`/`DT_GNU_HASH`, `DT_VERSYM` and `DT_PLTGOT`. It applies to box64 commit `59b3eb1`.
 2. **Shim raw syscalls.** box32's `syscall()` wrapper returns `ENOSYS` for i386 `openat` (295) and `ioctl` (54). The shim now falls back to the next libc symbol (`RTLD_NEXT`) after the first `ENOSYS`, so desktop behaviour is unchanged. The fallback uses libc `open`, not `openat`, because box64 substitutes an x86 `/proc/cpuinfo` there. The game reads "MHz" from that file and crashes if it's missing.
 
 ## Building
@@ -43,14 +43,14 @@ Android app (Java)                      proot (Debian trixie arm64 rootfs)
 Requirements: Android SDK (build-tools, platform 36+), JDK 17, Rust with the `i686-unknown-linux-gnu` target, and an arm64 phone with USB debugging.
 
 ```sh
-android/fetch-proot.sh               # proot for Android, from the Termux repo
-android/rootfs/setup-dev-device.sh   # one-time: Debian + box64 build on the phone
-android/rootfs/make-rootfs.sh        # build the trimmed runtime rootfs on the phone
-android/build-apk.sh                 # -> android/build/BananaPepper.apk
-adb install -r android/build/BananaPepper.apk
+apps/android/fetch-proot.sh               # proot for Android, from the Termux repo
+apps/android/rootfs/setup-dev-device.sh   # one-time: Debian + box64 build on the phone
+apps/android/rootfs/make-rootfs.sh        # build the trimmed runtime rootfs on the phone
+apps/android/build-apk.sh                 # -> apps/android/build/BananaPepper.apk
+adb install -r apps/android/build/BananaPepper.apk
 ```
 
-The rootfs is built on the phone itself, through proot over adb, so the host needs no ARM toolchain or QEMU. `make-rootfs.sh` installs only runtime packages and removes the i386 Mesa and LLVM that package dependencies pull in, since box32 uses the native GL. The archive is about 127 MB. `TRIM_ONLY=1` re-trims and repacks without reinstalling. `build-apk.sh` builds a debuggable APK, so `adb shell run-as com.bananapepper` can read `files/run/*.log`. `RELEASE=1` builds a non-debuggable one. Signing uses `android/debug.keystore`, which is generated on first build and not committed.
+The rootfs is built on the phone itself, through proot over adb, so the host needs no ARM toolchain or QEMU. `make-rootfs.sh` installs only runtime packages and removes the i386 Mesa and LLVM that package dependencies pull in, since box32 uses the native GL. The archive is about 127 MB. `TRIM_ONLY=1` re-trims and repacks without reinstalling. `build-apk.sh` builds a debuggable APK, so `adb shell run-as com.bananapepper` can read `files/run/*.log`. `RELEASE=1` builds a non-debuggable one. Signing uses `apps/android/debug.keystore`, which is generated on first build and not committed.
 
 ## Known limits
 

@@ -1,0 +1,9 @@
+[package]
+name = "banana-wine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wine execution backend for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true

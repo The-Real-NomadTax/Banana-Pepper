@@ -1,0 +1,11 @@
+[package]
+name = "banana-content"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Folder and ZArchive game sources for Banana Pepper"
+
+[dependencies]
+zarchive-rs = "0.1.1"
+sha2.workspace = true
+tempfile = "3.20.0"

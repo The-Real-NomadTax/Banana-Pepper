@@ -17,5 +17,5 @@ __pycache__/
 *.py[cod]
 
 # Android build output and local signing key
-/android/build/
-/android/debug.keystore
+/apps/android/build/
+/apps/android/debug.keystore

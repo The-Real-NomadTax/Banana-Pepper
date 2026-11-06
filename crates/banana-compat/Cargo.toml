@@ -1,0 +1,25 @@
+[package]
+name = "banana-compat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Registry of the built-in Banana Pepper game compatibility crates"
+
+[dependencies]
+banana-api.workspace = true
+banana-input.workspace = true
+banana-settings.workspace = true
+banana-game-aliens-armageddon.workspace = true
+banana-game-big-buck-hunter.workspace = true
+banana-game-jurassic-park.workspace = true
+banana-game-super-cars.workspace = true
+banana-game-ford-racing.workspace = true
+banana-game-minecraft-dungeons.workspace = true
+banana-native.workspace = true
+banana-wine.workspace = true
+banana-wsl.workspace = true
+banana-water.workspace = true
+
+[dev-dependencies]
+banana-core.workspace = true
+banana-runtime.workspace = true
