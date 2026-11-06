@@ -25,6 +25,8 @@ pub fn settings_env(command: &mut std::process::Command, settings: &GameSettings
 
 #[cfg(target_os = "linux")]
 fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<String, String> {
+    let materialized = crate::content::resolve(games_root)?;
+    let games_root = materialized.as_path();
     use std::{
         fs,
         process::{Command, Stdio},

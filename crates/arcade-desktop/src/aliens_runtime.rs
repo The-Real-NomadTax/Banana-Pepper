@@ -2,6 +2,8 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 pub fn run(root: &Path, launch: bool) -> Result<String, String> {
+    let materialized = crate::content::resolve(root)?;
+    let root = materialized.as_path();
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()

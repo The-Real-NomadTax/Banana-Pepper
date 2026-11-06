@@ -6,6 +6,7 @@ mod supercars_runtime;
 mod ford_runtime;
 mod big_buck_runtime;
 mod wsl_runtime;
+mod content;
 
 use arcade_core::controls::{self, Bindings};
 use arcade_core::settings::{self, Renderer, Settings, VSync};
@@ -142,7 +143,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|| "games".into());
         println!(
             "{}",
-            serde_json::to_string_pretty(&arcade_core::scan(&root))?
+            serde_json::to_string_pretty(&content::scan(&root)?)?
         );
         return Ok(());
     }
@@ -175,7 +176,7 @@ struct ArcadeApp {
     root: String,
     reports: Vec<GameReport>,
     selected: usize,
-    pending: Option<Receiver<Vec<GameReport>>>,
+    pending: Option<Receiver<Result<Vec<GameReport>, String>>>,
     message: String,
     input: CabinetInput,
     probe: Option<Receiver<Result<String, String>>>,
@@ -602,9 +603,9 @@ impl ArcadeApp {
         let root = PathBuf::from(&self.root);
         let (tx, rx) = mpsc::channel();
         self.pending = Some(rx);
-        self.message = "Inspecting executable metadata…".into();
+        self.message = "Preparing game source and inspecting executables… Large ZArchives are verified and cached on first load.".into();
         std::thread::spawn(move || {
-            let _ = tx.send(arcade_core::scan(&root));
+            let _ = tx.send(content::scan(&root));
             ctx.request_repaint();
         });
     }
@@ -613,13 +614,18 @@ impl eframe::App for ArcadeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(rx) = &self.pending {
             match rx.try_recv() {
-                Ok(reports) => {
+                Ok(Ok(reports)) => {
                     self.reports = reports;
                     if self.reports.get(self.selected).is_none_or(|r|r.binary.is_none()) {self.selected=self.reports.iter().position(|r|r.binary.is_some()).unwrap_or(0);}
                     self.pending = None;
                     self.message =
                         "Inspection complete. Choose a game for launch options and runtime requirements."
                             .into();
+                }
+                Ok(Err(error)) => {
+                    self.reports.clear();
+                    self.pending = None;
+                    self.message = error;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.pending = None;
@@ -665,8 +671,8 @@ impl eframe::App for ArcadeApp {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label("Games folder");
-                ui.add(egui::TextEdit::singleline(&mut self.root).desired_width(520.0));
+                ui.label("Game folder or ZArchive");
+                ui.add(egui::TextEdit::singleline(&mut self.root).hint_text("Folder path or game.zar").desired_width(520.0));
                 if ui
                     .add_enabled(self.pending.is_none(), egui::Button::new("Inspect library"))
                     .clicked()

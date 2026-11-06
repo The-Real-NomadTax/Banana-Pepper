@@ -4,6 +4,8 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 pub fn launch(root: &Path) -> Result<String, String> {
+    let materialized = crate::content::resolve(root)?;
+    let root = materialized.as_path();
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -52,6 +54,8 @@ fn conclusion(trace: &str, log: &str) -> &'static str {
 
 #[cfg(target_os = "linux")]
 pub fn probe(root: &Path, build: Build) -> Result<String, String> {
+    let materialized = crate::content::resolve(root)?;
+    let root = materialized.as_path();
     use std::{
         fs,
         process::{Command, Stdio},

@@ -45,6 +45,8 @@ fn guest_path(path: &Path) -> Result<String, String> {
 }
 
 pub fn run(root: &Path, mode: &str) -> Result<String, String> {
+    let materialized = crate::content::resolve(root)?;
+    let root = materialized.as_path();
     if !matches!(mode, "probe" | "launch" | "setup") {
         return Err("Unknown Minecraft operation".into());
     }

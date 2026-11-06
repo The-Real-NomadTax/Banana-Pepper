@@ -1,6 +1,8 @@
 //! One Windows game and cabinet adapter, used directly or through Wine.
 use std::{fs, path::Path, process::Command};
 pub fn launch(root: &Path) -> Result<String, String> {
+    let materialized = crate::content::resolve(root)?;
+    let root = materialized.as_path();
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()

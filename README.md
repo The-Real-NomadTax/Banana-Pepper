@@ -29,7 +29,7 @@ From the project root:
 cargo run -p arcade-desktop
 ```
 
-The games folder defaults to `games` relative to the working directory and is editable in the UI. Inspection runs on a worker thread. Export JSON saves `arcade-report.json` in the working directory. Keyboard input monitoring is active while hovering over the aim area, with text entry unfocused.
+The game source defaults to the `games` folder relative to the working directory. Enter a folder or ZArchive path in **Game folder or ZArchive**. Inspection runs on a worker thread. Export JSON saves `arcade-report.json` in the working directory. Keyboard input monitoring is active while hovering over the aim area, with text entry unfocused.
 
 Interactive Big Buck Hunter on your own display:
 
@@ -50,6 +50,32 @@ To build/test only the portable core without desktop dependencies:
 ```sh
 cargo test -p arcade-core
 ```
+
+## ZArchived game folders
+
+The workbench and existing desktop CLI commands accept ZArchives using
+[`zarchive-rs`](https://crates.io/crates/zarchive-rs) 0.1.1. Archive the contents of
+the folder you would normally select, preserving its layout. That can be a
+supported individual game folder or the usual multi-game library folder.
+
+```sh
+cargo run -p arcade-desktop -- --scan "games.zar"
+cargo run -p arcade-desktop -- --launch-big-buck "Big Buck Hunter Pro.zar"
+```
+
+Archives are checked for integrity and extracted into `runtime/archive-cache/`
+on first load. Subsequent loads hash the archive and reuse its completed cache;
+replacing its contents creates a new cache entry. The source archive is never
+modified. Allow enough disk space for the uncompressed folder. Set
+`ARCADE_ARCHIVE_CACHE` to use a different cache directory. You can remove unused
+cache entries when no game is using them.
+
+Source preparation happens before backend selection: Water and WSL on Windows,
+and the existing Linux/Wine runners, receive the same extracted folder. Existing
+game build checks and platform requirements still apply. ZArchive stores no Unix
+permissions, so ELF files and shebang scripts regain executable permission on
+Linux. Building the archive reader also requires a C++20 compiler; the crate
+builds its bundled Zstandard implementation.
 
 ## Game settings
 
@@ -89,6 +115,7 @@ Jurassic Park deliberately uses the supplied `game_original` rather than the act
 ## Layout
 
 - `crates/arcade-core`: static ELF/PE inspection, game reports, normalized cabinet input. No UI, graphics or process execution.
+- `crates/arcade-content`: verified ZArchive extraction and shared game-source caching.
 - `crates/arcade-desktop`: egui/eframe browser, Linux startup backend, report export and local input monitor.
 - `crates/arcade-linux-shim`: 32-bit guest library adapting cabinet fullscreen requests into an ordinary GL window.
 - `crates/arcade-wine-hook`: freestanding 32-bit Windows DLL, loaded by Wine as Super Cars' `dinput8.dll`, that feeds keyboard input to the game's cabinet I/O layer.
@@ -96,7 +123,7 @@ Jurassic Park deliberately uses the supplied `game_original` rather than the act
 - `docs/architecture.md`: platform boundaries and runtime implementation plan.
 - `games`: local game files, excluded from source control.
 
-Inspection is read-only. The separate Big Buck Hunter startup test prepares a hash-verified runtime copy and launches it inside Bubblewrap on a private Xvfb display. Original game files are preserved. Cabinet I/O and CPU emulation are not implemented.
+Inspection preserves the source folder or archive; inspecting an archive writes its extraction cache. The separate Big Buck Hunter startup test prepares a hash-verified runtime copy and launches it inside Bubblewrap on a private Xvfb display. Original game files are preserved. Cabinet I/O and CPU emulation are not implemented.
 
 API references: [eframe 0.36.2](https://docs.rs/eframe/0.36.2/eframe/) and [goblin object parser](https://docs.rs/goblin/0.10.7/goblin/enum.Object.html).
 

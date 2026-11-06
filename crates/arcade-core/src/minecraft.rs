@@ -11,6 +11,15 @@ pub const RELATIVE_DIRECTORY: &str = "linux based/Minecraft Dungeons Arcade";
 /// Accept a game directory, the conventional library layout, or a named download.
 /// Discovery is deliberately limited to two directory levels.
 pub fn directory(root: &Path) -> PathBuf {
+    let original_elf64 = |p: &Path| {
+        use std::io::Read;
+        let mut header = [0; 20];
+        fs::File::open(p.join("game"))
+            .and_then(|mut f| f.read_exact(&mut header))
+            .is_ok()
+            && header[..7] == *b"\x7fELF\x02\x01\x01"
+            && header[18..20] == 62u16.to_le_bytes()
+    };
     let valid = |p: &Path| {
         let name = p
             .file_name()
@@ -18,6 +27,8 @@ pub fn directory(root: &Path) -> PathBuf {
             .to_string_lossy()
             .to_lowercase();
         (p.join("minecraft.hvc").is_file()
+            || p.join("gamedump.exec").is_file()
+            || original_elf64(p)
             || (name.contains("minecraft") && name.contains("dungeons")))
             && p.join("data").is_dir()
             && (p.join("gamedump.exec").is_file() || p.join("game").is_file())

@@ -6,7 +6,12 @@ license.workspace = true
 
 [dependencies]
 arcade-core.workspace = true
+arcade-content = { path = "../arcade-content" }
 eframe.workspace = true
 serde_json.workspace = true
 
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+tempfile = "3.20.0"
+zarchive-rs = "0.1.1"

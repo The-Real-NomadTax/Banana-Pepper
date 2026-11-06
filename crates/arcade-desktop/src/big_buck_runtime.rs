@@ -2,6 +2,8 @@
 use std::path::Path;
 #[cfg(windows)]
 pub fn run(root: &Path, probe: bool) -> Result<String, String> {
+    let materialized = crate::content::resolve(root)?;
+    let root = materialized.as_path();
     use arcade_core::settings::Backend;
     use std::{fs, process::Command};
     let project = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -86,6 +88,8 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
 
 #[cfg(not(windows))]
 pub fn run(root: &Path, probe: bool) -> Result<String, String> {
+    let materialized = crate::content::resolve(root)?;
+    let root = materialized.as_path();
     if probe {
         crate::runtime::probe_big_buck(root, Path::new("runtime/big-buck"))
     } else {
