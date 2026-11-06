@@ -287,7 +287,7 @@ pub fn controller_frame() {
                 cursor = crate::pad::Cursor::new(px, py);
                 aim_gun(gun, px, py, false);
             }
-        } else if cursor.step(states[gun].movement(&c.moves[gun]), elapsed, CROSSHAIR_SPEED, 640, 480) {
+        } else if cursor.step_mode(crate::evdev_pad::aim_mode(gun), states[gun].movement(&c.moves[gun]), elapsed, CROSSHAIR_SPEED, 640, 480) {
             aim_gun(gun, cursor.x, cursor.y, false);
         }
         cursors[gun] = (cursor.x, cursor.y);

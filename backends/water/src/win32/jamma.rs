@@ -175,6 +175,19 @@ pub fn inputs() -> pad::Inputs {
     })
 }
 
+/// Stick-aim mode for this player's controller. Pointer devices stay direct.
+pub fn aim_mode(player: usize) -> pad::AimMode {
+    static MODES: OnceLock<[pad::AimMode; 2]> = OnceLock::new();
+    let modes = MODES.get_or_init(|| {
+        let text = std::env::var("ARCADE_AIM_MODES").ok();
+        [0, 1].map(|p| pad::AimMode::for_player(text.as_deref().map(str::as_bytes), p))
+    });
+    match inputs().methods[player.min(1)] {
+        pad::Method::XInput | pad::Method::DirectInput => modes[player.min(1)],
+        _ => pad::AimMode::Cursor,
+    }
+}
+
 /// Players in this session.
 pub fn players() -> usize {
     inputs().players
@@ -247,7 +260,7 @@ pub unsafe fn controller_frame(focused: bool) {
                 cursor = pad::Cursor::new(px, py);
                 aim_gun(gun, px, py, false);
             }
-        } else if cursor.step(states[gun].movement(&c.moves[gun]), elapsed, CROSSHAIR_SPEED, 640, 480) {
+        } else if cursor.step_mode(aim_mode(gun), states[gun].movement(&c.moves[gun]), elapsed, CROSSHAIR_SPEED, 640, 480) {
             aim_gun(gun, cursor.x, cursor.y, false);
         }
         cursors[gun] = (cursor.x, cursor.y);

@@ -20,6 +20,19 @@ pub fn inputs() -> pad::Inputs {
     })
 }
 
+/// Stick-aim mode for this player's controller. Pointer devices stay direct.
+pub fn aim_mode(player: usize) -> pad::AimMode {
+    static MODES: std::sync::OnceLock<[pad::AimMode; 2]> = std::sync::OnceLock::new();
+    let modes = MODES.get_or_init(|| {
+        let text = std::env::var("ARCADE_AIM_MODES").ok();
+        [0, 1].map(|p| pad::AimMode::for_player(text.as_deref().map(str::as_bytes), p))
+    });
+    match inputs().methods[player.min(1)] {
+        pad::Method::XInput | pad::Method::DirectInput => modes[player.min(1)],
+        _ => pad::AimMode::Cursor,
+    }
+}
+
 /// A player's movement axes (`ARCADE_MOVE`, `ARCADE_MOVE_P2`), or `default`.
 pub fn movement(player: usize, default: pad::Movement) -> pad::Movement {
     let name = if player == 0 { "ARCADE_MOVE" } else { "ARCADE_MOVE_P2" };

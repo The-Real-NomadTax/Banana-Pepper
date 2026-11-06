@@ -211,11 +211,15 @@ pub struct GameSettings {
     /// player has the keyboard and mouse ([`GameSettings::set_input`] keeps it
     /// that way); player two's applies with two players.
     pub inputs: [InputMethod; 2],
+    /// Each player's gun-stick aim behavior.
+    pub aim_modes: [AimMode; 2],
+    /// Input type shown by the shared operator binding editor.
+    pub operator_input: InputMethod,
 }
 
 /// What a player plays with: keyboard & mouse, XInput, DirectInput or Raw
 /// Input (see [`banana_input::pad::Method`]).
-pub use banana_input::pad::Method as InputMethod;
+pub use banana_input::pad::{AimMode, Method as InputMethod};
 
 /// Input methods for single-seat racers: the keyboard, or an XInput or
 /// DirectInput controller or wheel (no aim, so no Raw Input).
@@ -271,6 +275,8 @@ impl GameSettings {
             crosshair_size: banana_input::crosshair::SIZE_DEFAULT,
             players: 1,
             inputs: [InputMethod::XInput; 2],
+            aim_modes: [AimMode::Cursor; 2],
+            operator_input: InputMethod::XInput,
         }
     }
 
@@ -318,6 +324,9 @@ impl GameSettings {
         }
         if self.players > 1 || self.inputs[0] != InputMethod::XInput {
             env.push(("ARCADE_INPUTS", self.inputs_env()));
+        }
+        if self.aim_modes != [AimMode::Cursor; 2] {
+            env.push(("ARCADE_AIM_MODES", format!("{},{}", self.aim_modes[0].id(), self.aim_modes[1].id())));
         }
         match self.vsync {
             VSync::Default => {}
@@ -396,6 +405,15 @@ impl GameSettings {
                     "2" => 2,
                     _ => return Err(format!("players must be 1 or 2, not \"{value}\"")),
                 }
+            }
+            "p1_aim" | "p2_aim" => {
+                let mode = AimMode::parse(value.to_ascii_lowercase().as_bytes())
+                    .ok_or_else(|| format!("{key} must be cursor or centered"))?;
+                self.aim_modes[usize::from(key == "p2_aim")] = mode;
+            }
+            "operator_input" => {
+                self.operator_input = InputMethod::parse(value.to_ascii_lowercase().as_bytes())
+                    .ok_or_else(|| "operator_input must be keyboard_mouse, xinput, dinput or rawinput".to_owned())?;
             }
             "p1_input" | "p2_input" => {
                 let input = InputMethod::parse(value.to_ascii_lowercase().as_bytes()).ok_or_else(|| {
@@ -478,13 +496,18 @@ impl Settings {
             {
                 return Err(at(format!("[{id}] has no crosshair setting")));
             }
-            if matches!(key.trim(), "players" | "p2_input")
+            if matches!(key.trim(), "p1_aim" | "p2_aim")
+                && profile(id).is_some_and(|p| !p.input_methods.contains(&InputMethod::RawInput))
+            {
+                return Err(at(format!("[{id}] has no gun-stick aim setting")));
+            }
+            if matches!(key.trim(), "players" | "p2_input" | "p2_aim")
                 && value.trim() != "1"
                 && profile(id).is_some_and(|p| p.max_players < 2)
             {
                 return Err(at(format!("[{id}] is a one-player game")));
             }
-            if matches!(key.trim(), "p1_input" | "p2_input")
+            if matches!(key.trim(), "p1_input" | "p2_input" | "operator_input")
                 && let Some(p) = profile(id)
                 && let Some(method) = InputMethod::parse(value.trim().to_ascii_lowercase().as_bytes())
                 && !p.input_methods.contains(&method)
@@ -539,8 +562,12 @@ impl Settings {
             }
             if !p.input_methods.is_empty() {
                 let choices = p.input_methods.iter().map(|m| m.id()).collect::<Vec<_>>().join(" | ");
+                out += &format!("operator_input = {}  # {choices}\n", g.operator_input.id());
                 for (player, input) in g.inputs.iter().enumerate().take(usize::from(p.max_players)) {
                     out += &format!("p{}_input = {}  # {choices}\n", player + 1, input.id());
+                    if p.input_methods.contains(&InputMethod::RawInput) {
+                        out += &format!("p{}_aim = {}  # cursor | centered\n", player + 1, g.aim_modes[player].id());
+                    }
                 }
             }
         }

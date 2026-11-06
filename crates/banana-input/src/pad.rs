@@ -519,10 +519,51 @@ impl Inputs {
         (count > 0).then(|| players[index.min(count - 1)])
     }
 
+    /// Centered controller aim uses the gun axes even for the mouse's player.
+    pub fn own_aim_mode(&self, player: usize, mode: AimMode) -> bool {
+        self.own_aim(player) || (player < self.players && mode == AimMode::Centered
+            && matches!(self.method(player), Method::XInput | Method::DirectInput))
+    }
+
     /// True if `player` aims without the system mouse (a controller stick or
     /// its own mouse/light gun), so its aim reaches the game another way.
     pub fn own_aim(&self, player: usize) -> bool {
         player < self.players && self.mouse() != Some(player)
+    }
+}
+
+/// How a controller stick aims a gun. Mouse/light-gun coordinates bypass this.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AimMode {
+    #[default]
+    Cursor,
+    Centered,
+}
+
+impl AimMode {
+    pub fn parse(text: &[u8]) -> Option<Self> {
+        match text {
+            b"cursor" => Some(Self::Cursor),
+            b"centered" => Some(Self::Centered),
+            _ => None,
+        }
+    }
+
+    pub const fn id(self) -> &'static str {
+        match self { Self::Cursor => "cursor", Self::Centered => "centered" }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cursor => "Type 1: Cursor",
+            Self::Centered => "Type 2: Return to center",
+        }
+    }
+
+    /// Per-player modes from ARCADE_AIM_MODES; absent entries preserve cursor aim.
+    pub fn for_player(text: Option<&[u8]>, player: usize) -> Self {
+        text.and_then(|t| t.split(|b| *b == b',').nth(player))
+            .and_then(Self::parse).unwrap_or_default()
     }
 }
 
@@ -540,6 +581,34 @@ pub struct Cursor {
 impl Cursor {
     pub const fn new(x: i32, y: i32) -> Self {
         Self { x, y, fx: 0, fy: 0 }
+    }
+
+    /// Cursor mode integrates stick velocity; centered mode maps stick position
+    /// to the screen every frame, including the frame the stick is released.
+    pub fn step_mode(
+        &mut self,
+        mode: AimMode,
+        aim: (i32, i32),
+        elapsed_ms: u32,
+        speed: i32,
+        width: i32,
+        height: i32,
+    ) -> bool {
+        if mode == AimMode::Cursor {
+            return self.step(aim, elapsed_ms, speed, width, height);
+        }
+        let point = |value: i32, size: i32| {
+            let last = (size - 1).max(0);
+            let center = (size / 2).clamp(0, last);
+            let value = value.clamp(-AXIS_MAX, AXIS_MAX);
+            let radius = if value < 0 { center } else { last - center };
+            center + (i64::from(value) * i64::from(radius) / i64::from(AXIS_MAX)) as i32
+        };
+        let next = (point(aim.0, width), point(aim.1, height));
+        let moved = (self.x, self.y) != next;
+        (self.x, self.y) = next;
+        (self.fx, self.fy) = (0, 0);
+        moved
     }
 
     /// Advance by `elapsed_ms` with `aim` from [`Pad::aim`]; `speed` is the
@@ -774,4 +843,34 @@ mod tests {
         }
         assert_eq!((c.x, c.y), (0, 0));
     }
+    #[test]
+    fn centered_aim_maps_position_and_returns_to_exact_center() {
+        let mut c = Cursor::new(12, 34);
+        assert!(c.step_mode(AimMode::Centered, (AXIS_MAX, -AXIS_MAX), 16, 800, 640, 480));
+        assert_eq!((c.x, c.y), (639, 0));
+        assert!(!c.step_mode(AimMode::Centered, (AXIS_MAX, -AXIS_MAX), 100, 200, 640, 480));
+        assert!(c.step_mode(AimMode::Centered, (0, 0), 16, 800, 640, 480));
+        assert_eq!((c.x, c.y), (320, 240));
+        c.step_mode(AimMode::Centered, (-AXIS_MAX, AXIS_MAX), 0, 0, 640, 480);
+        assert_eq!((c.x, c.y), (0, 479));
+        c.step_mode(AimMode::Centered, (AXIS_MAX / 2, 0), 16, 800, 640, 480);
+        assert_eq!((c.x, c.y), (479, 240));
+        c.step_mode(AimMode::Centered, (0, 0), 16, 800, 1360, 768);
+        assert_eq!((c.x, c.y), (680, 384));
+        assert!(!c.step_mode(AimMode::Cursor, (0, 0), 16, 800, 1360, 768));
+        assert_eq!((c.x, c.y), (680, 384));
+    }
+
+    #[test]
+    fn centered_aim_is_independent_per_player_and_ignores_pointer_methods() {
+        assert_eq!(AimMode::for_player(Some(b"cursor,centered"), 1), AimMode::Centered);
+        assert_eq!(AimMode::for_player(None, 0), AimMode::Cursor);
+        assert_eq!(AimMode::for_player(Some(b"invalid"), 0), AimMode::Cursor);
+        let controllers = Inputs::parse(Some(b"2"), Some(b"xinput,dinput"));
+        assert!(!controllers.own_aim_mode(0, AimMode::Cursor));
+        assert!(controllers.own_aim_mode(0, AimMode::Centered));
+        let mouse = Inputs::parse(None, Some(b"keyboard_mouse"));
+        assert!(!mouse.own_aim_mode(0, AimMode::Centered));
+    }
+
 }

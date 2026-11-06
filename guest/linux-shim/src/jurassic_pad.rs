@@ -198,7 +198,7 @@ pub fn frame() {
                 Some((x, y)) => *gun = Cursor::new(x, y),
                 None => {
                     let aim = states[player].movement(&s.moves[player]);
-                    gun.step(aim, elapsed, width * SPEED_PER_WIDTH, width, height);
+                    gun.step_mode(crate::evdev_pad::aim_mode(player), aim, elapsed, width * SPEED_PER_WIDTH, width, height);
                 }
             }
             GUN_AIM[player][0].store(gun.x.clamp(0, width - 1), Ordering::Relaxed);
@@ -206,7 +206,7 @@ pub fn frame() {
         }
         let (old_x, old_y) = (s.cursor.x, s.cursor.y);
         if s.cursor
-            .step(pointer.movement(&pointer_moves), elapsed, width * SPEED_PER_WIDTH, width, height)
+            .step_mode(s.inputs.mouse().map_or(crate::pad::AimMode::Cursor, crate::evdev_pad::aim_mode), pointer.movement(&pointer_moves), elapsed, width * SPEED_PER_WIDTH, width, height)
         {
             s.aiming = true;
             s.queue.push_back(motion_event(

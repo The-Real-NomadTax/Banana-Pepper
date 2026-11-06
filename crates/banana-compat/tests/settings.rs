@@ -135,3 +135,28 @@ fn rejects_bad_settings() {
     assert!(Settings::parse("audio = true\n").is_err());
 }
 
+
+#[test]
+fn gun_aim_modes_round_trip_and_reach_the_guest_per_player() {
+    setup();
+    let s = Settings::parse("[jurassic]\nplayers = 2\np1_aim = centered\np2_aim = cursor\n[aliens]\np2_aim = centered\n").unwrap();
+    assert_eq!(s.game("jurassic").aim_modes, [AimMode::Centered, AimMode::Cursor]);
+    assert!(s.game("jurassic").guest_env().contains(&("ARCADE_AIM_MODES", "centered,cursor".into())));
+    assert!(s.game("aliens").guest_env().contains(&("ARCADE_AIM_MODES", "cursor,centered".into())));
+    assert_eq!(Settings::parse(&s.to_text()).unwrap(), s);
+    assert_eq!(Settings::default().game("big_buck").aim_modes, [AimMode::Cursor; 2]);
+    assert!(Settings::parse("[jurassic]\np1_aim = invalid\n").is_err());
+    assert!(Settings::parse("[super_cars]\np1_aim = centered\n").is_err());
+}
+
+#[test]
+fn operator_binding_input_is_saved_independently_of_players() {
+    setup();
+    for (id, method) in [("keyboard_mouse", InputMethod::KeyboardMouse), ("xinput", InputMethod::XInput), ("dinput", InputMethod::DirectInput), ("rawinput", InputMethod::RawInput)] {
+        let s = Settings::parse(&format!("[jurassic]\noperator_input = {id}\n")).unwrap();
+        assert_eq!(s.game("jurassic").operator_input, method);
+        assert_eq!(s.game("jurassic").inputs, [InputMethod::XInput; 2]);
+        assert_eq!(Settings::parse(&s.to_text()).unwrap(), s);
+    }
+    assert!(Settings::parse("[jurassic]\noperator_input = invalid\n").is_err());
+}

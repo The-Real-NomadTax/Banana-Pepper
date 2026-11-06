@@ -57,8 +57,8 @@ pub const NO_MOUSE_FIRE_KEYS: [u32; 3] = [294, 295, 296];
 ///   shim fills from its controller, mouse or light gun.
 /// * Player two always fires with Q/W/E unless it has the mouse; player one
 ///   then takes Q/W/E, or F13-F15 while nobody has the system mouse.
-fn sources(inputs: &banana_input::pad::Inputs) -> [u32; 8] {
-    let p1_aim = if inputs.mouse() == Some(0) { [0x144, 0x145] } else { [0x181, 0x182] };
+fn sources(inputs: &banana_input::pad::Inputs, modes: &[banana_input::pad::AimMode; 2]) -> [u32; 8] {
+    let p1_aim = if inputs.own_aim_mode(0, modes[0]) { [0x181, 0x182] } else { [0x144, 0x145] };
     let [f13, f14, f15] = NO_MOUSE_FIRE_KEYS;
     let (p1_fire, p2_fire) = match inputs.mouse() {
         Some(0) => ([0x146, 0x147, 0x148], [0x71, 0x77, 0x65]),
@@ -80,6 +80,7 @@ pub fn prepare(
     destination: &Path,
     keys: &[(u32, u32)],
     inputs: &banana_input::pad::Inputs,
+    modes: &[banana_input::pad::AimMode; 2],
 ) -> Result<String, String> {
     let mut bytes = fs::read(source).map_err(|e| e.to_string())?;
     if format!("{:x}", Sha256::digest(&bytes)) != ORIGINAL_SHA256 {
@@ -173,11 +174,11 @@ pub fn prepare(
         {
             return Err("Unsupported Aliens player-two aim mapping; no snapshot written".into());
         }
-        if inputs.own_aim(1) {
+        if inputs.own_aim_mode(1, modes[1]) {
             patched.push((offset + 3, gun));
         }
     }
-    for (&(address, target, original), replacement) in AIM_FIRE_SITES.iter().zip(sources(inputs)) {
+    for (&(address, target, original), replacement) in AIM_FIRE_SITES.iter().zip(sources(inputs, modes)) {
         let offset = address - 0x08048000;
         if offset < 8
             || bytes.get(offset - 8..offset - 4) != Some(&[0xc7, 0x44, 0x24, 0x04])
@@ -265,7 +266,7 @@ mod tests {
             .codes("aliens")
             .unwrap();
         let inputs = banana_input::pad::Inputs::ONE_PLAYER;
-        assert!(prepare(&source, &destination, &keys, &inputs).is_err());
+        assert!(prepare(&source, &destination, &keys, &inputs, &[banana_input::pad::AimMode::Cursor; 2]).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"unknown game");
         assert_eq!(fs::read(&destination).unwrap(), b"existing snapshot");
         assert!(!destination.with_extension("preparing").exists());
@@ -274,7 +275,8 @@ mod tests {
 
     #[test]
     fn each_input_layout_routes_aim_and_fire() {
-        use banana_input::pad::Inputs;
+        use banana_input::pad::{Inputs, AimMode};
+        let sources = |inputs: &Inputs| super::sources(inputs, &[AimMode::Cursor; 2]);
         let original: Vec<u32> = AIM_FIRE_SITES.iter().map(|s| s.2).collect();
         // One player on the system mouse: the engine's own maps.
         assert_eq!(sources(&Inputs::ONE_PLAYER).to_vec(), original);
@@ -288,4 +290,13 @@ mod tests {
         let solo = sources(&Inputs::parse(None, Some(b"rawinput")));
         assert_eq!(&solo[..5], &[0x181, 0x182, 294, 295, 296]);
     }
+    #[test]
+    fn centered_controller_uses_gun_axes_without_changing_fire_buttons() {
+        use banana_input::pad::{Inputs, AimMode};
+        let inputs = Inputs::ONE_PLAYER;
+        let result = sources(&inputs, &[AimMode::Centered, AimMode::Cursor]);
+        assert_eq!(&result[..2], &[0x181, 0x182]);
+        assert_eq!(&result[2..], &sources(&inputs, &[AimMode::Cursor; 2])[2..]);
+    }
+
 }

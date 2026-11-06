@@ -616,13 +616,13 @@ impl GunAim {
     /// Moves the player's aim and stores it in window pixels, scaled exactly
     /// like the mouse: copy the mouse record's flags and ranges, then set the
     /// raw value through the game's own setter.
-    fn update(&mut self, state: &crate::pad::Pad, moves: &crate::pad::Movement, elapsed: u32) {
+    fn update(&mut self, state: &crate::pad::Pad, moves: &crate::pad::Movement, mode: crate::pad::AimMode, elapsed: u32) {
         // A mouse or light gun of the player's own points directly.
         match state.pointer_moved(moves, self.width, self.height) {
             Some((x, y)) => self.cursor = crate::pad::Cursor::new(x, y),
             None => {
                 self.cursor
-                    .step(state.movement(moves), elapsed, POINTER_SPEED, self.width, self.height);
+                    .step_mode(mode, state.movement(moves), elapsed, POINTER_SPEED, self.width, self.height);
             }
         }
         let values = [self.cursor.x as f32, self.cursor.y as f32];
@@ -709,18 +709,20 @@ impl Controller {
         }
         let mut guns = [None, None];
         for (player, gun) in guns.iter_mut().enumerate() {
-            if !inputs.own_aim(player) {
+            if !inputs.own_aim_mode(player, crate::evdev_pad::aim_mode(player)) {
                 continue;
             }
-            let fire = if player == 0 && inputs.mouse().is_none() {
-                F13_FIRE_KEYS
-            } else {
-                [Q_FIRE_KEY, W_SECONDARY_KEY]
-            };
-            for (sdl, mask) in fire.into_iter().zip([crate::pad::RT, crate::pad::LT]) {
-                match x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
-                    Some(keycode) => add(KEY_PRESS, keycode, player, mask),
-                    None => eprintln!("[aliens] player {}: no X key for SDL key {sdl}", player + 1),
+            if inputs.own_aim(player) {
+                let fire = if player == 0 && inputs.mouse().is_none() {
+                    F13_FIRE_KEYS
+                } else {
+                    [Q_FIRE_KEY, W_SECONDARY_KEY]
+                };
+                for (sdl, mask) in fire.into_iter().zip([crate::pad::RT, crate::pad::LT]) {
+                    match x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
+                        Some(keycode) => add(KEY_PRESS, keycode, player, mask),
+                        None => eprintln!("[aliens] player {}: no X key for SDL key {sdl}", player + 1),
+                    }
                 }
             }
             match GunAim::new(player) {
@@ -761,7 +763,8 @@ impl Controller {
             .zip(self.moves)
             .any(|(s, m)| s.buttons != 0 || s.movement(&m) != (0, 0) || s.pointer.is_some());
         let pressed = self.outputs.iter().any(|o| o.3);
-        if !any && !pressed {
+        let centered = (0..self.inputs.players).any(|p| crate::evdev_pad::aim_mode(p) == crate::pad::AimMode::Centered);
+        if !any && !pressed && !centered {
             return;
         }
         let focused = !watcher.windows.is_empty() && watcher.focused_game();
@@ -777,9 +780,9 @@ impl Controller {
             }
         }
         let mut sent = false;
-        for ((gun, state), moves) in self.guns.iter_mut().zip(states).zip(self.moves) {
+        for (player, ((gun, state), moves)) in self.guns.iter_mut().zip(states).zip(self.moves).enumerate() {
             if focused && let Some(gun) = gun {
-                gun.update(&state, &moves, elapsed);
+                gun.update(&state, &moves, crate::evdev_pad::aim_mode(player), elapsed);
             }
         }
         for output in &mut self.outputs {
@@ -792,7 +795,8 @@ impl Controller {
             }
         }
         let (old_x, old_y) = (self.cursor.x, self.cursor.y);
-        if focused && self.cursor.step(pointer.movement(&pointer_moves), elapsed, POINTER_SPEED, 1 << 21, 1 << 21) {
+        let centered_mouse = self.inputs.mouse().is_some_and(|p| crate::evdev_pad::aim_mode(p) == crate::pad::AimMode::Centered);
+        if focused && !centered_mouse && self.cursor.step(pointer.movement(&pointer_moves), elapsed, POINTER_SPEED, 1 << 21, 1 << 21) {
             let (dx, dy) = (self.cursor.x - old_x, self.cursor.y - old_y);
             // Relative motion (detail 1). The virtual canvas keeps sub-pixel
             // remainders; recentre it only when it nears an edge.

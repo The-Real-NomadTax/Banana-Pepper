@@ -19,6 +19,7 @@ pub fn run(root: &Path, launch: bool) -> Result<String, String> {
         &output.join("game-native"),
         &controls.codes("aliens")?,
         &settings.input_assignment(),
+        &settings.aim_modes,
     )?;
     // The harness only runs the image this preparer just wrote.
     std::fs::write(output.join("game-native.sha256"), format!("{prepared}\n"))
