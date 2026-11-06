@@ -124,17 +124,26 @@ pub unsafe fn release() {
         switch(index, false);
     }
 }
-/// Last aimed position (mouse or controller), in 640x480 game coordinates.
-static mut AIM_X: i32 = 320;
-static mut AIM_Y: i32 = 240;
+/// Last aimed position per gun (mouse or controller), in 640x480 game
+/// coordinates. The mouse always aims gun one.
+static mut AIM: [(i32, i32); pad::MAX_PLAYERS] = [(320, 240); pad::MAX_PLAYERS];
 /// controls.cfg's default controller buttons for Big Buck.
 const DEFAULT_PAD: &str = "5:16,7:32,256:131072,256:4096,257:65536,257:8192";
+/// Controller 2 with two players: the same buttons on player two's targets.
+const DEFAULT_PAD_P2: &str = "6:16,8:32,258:131072,258:4096,259:65536,259:8192";
 const PAD_FIRE: u32 = 0x100;
 const PAD_PUMP: u32 = 0x101;
+const PAD_FIRE_P2: u32 = 0x102;
+const PAD_PUMP_P2: u32 = 0x103;
+/// Switch-table indices for gun two (`g21` trigger, `g22` pump).
+const GUN2_TRIGGER: usize = 2;
+const GUN2_PUMP: usize = 4;
 /// Crosshair speed at full stick deflection, in game pixels per second.
 const CROSSHAIR_SPEED: i32 = 700;
 struct Controller {
-    bindings: Vec<(u32, u32)>,
+    players: usize,
+    /// Per player: controller 1 = player one, controller 2 = player two.
+    bindings: [Vec<(u32, u32)>; pad::MAX_PLAYERS],
     /// Pad-held state per bound target, for press/release edges.
     held: Vec<(u32, bool)>,
     last: std::time::Instant,
@@ -142,47 +151,78 @@ struct Controller {
 }
 static mut CONTROLLER: Option<Controller> = None;
 
-/// One message-loop pass: XInput crosshair, shots, pump and switches.
+fn parse_pad(name: &str, defaults: &str) -> Vec<(u32, u32)> {
+    let text = std::env::var(name).unwrap_or_else(|_| defaults.into());
+    let mut bindings = vec![(0, 0); 128];
+    let n = pad::parse_bindings(text.as_bytes(), &mut bindings);
+    bindings.truncate(n);
+    bindings
+}
+
+/// Players in this session (settings.cfg `players`, via ARCADE_PLAYERS).
+pub fn players() -> usize {
+    static PLAYERS: OnceLock<usize> = OnceLock::new();
+    *PLAYERS.get_or_init(|| {
+        pad::players(std::env::var("ARCADE_PLAYERS").ok().as_deref().map(str::as_bytes))
+    })
+}
+
+/// One message-loop pass: XInput crosshairs, shots, pumps and switches.
 pub unsafe fn controller_frame(focused: bool) {
     let c = (*ptr::addr_of_mut!(CONTROLLER)).get_or_insert_with(|| {
-        let text = std::env::var("ARCADE_PAD").unwrap_or_else(|_| DEFAULT_PAD.into());
-        let mut bindings = vec![(0, 0); 128];
-        let n = pad::parse_bindings(text.as_bytes(), &mut bindings);
-        bindings.truncate(n);
         if !xinput::available() {
             eprintln!("[water] XInput unavailable; controllers disabled");
         }
+        if players() > 1 {
+            eprintln!("[water] two players: controller 2 is gun two");
+        }
         Controller {
-            bindings,
+            players: players(),
+            bindings: [
+                parse_pad("ARCADE_PAD", DEFAULT_PAD),
+                parse_pad("ARCADE_PAD_P2", DEFAULT_PAD_P2),
+            ],
             held: Vec::new(),
             last: std::time::Instant::now(),
             connected: 0,
         }
     });
-    let state = if focused { xinput::read() } else { pad::Pad::default() };
+    let states = if focused {
+        xinput::read_players(c.players)
+    } else {
+        [pad::Pad::default(); pad::MAX_PLAYERS]
+    };
     if focused && xinput::connected() != c.connected {
         c.connected = xinput::connected();
         eprintln!("[water] {} XInput controller(s) connected", c.connected);
     }
-    if state.held(pad::BACK) && state.held(pad::START) {
+    if states.iter().any(|s| s.held(pad::BACK) && s.held(pad::START)) {
         release();
         eprintln!("[water] Back + Start: exiting");
         std::process::exit(0);
     }
     let elapsed = c.last.elapsed().as_millis() as u32;
     c.last = std::time::Instant::now();
-    let mut cursor = pad::Cursor::new(AIM_X, AIM_Y);
-    if cursor.step(state.aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
-        aim(cursor.x, cursor.y, false);
+    let mut cursors = [(0, 0); pad::MAX_PLAYERS];
+    for gun in 0..c.players {
+        let (x, y) = aim_position(gun);
+        let mut cursor = pad::Cursor::new(x, y);
+        if cursor.step(states[gun].aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
+            aim_gun(gun, cursor.x, cursor.y, false);
+        }
+        cursors[gun] = (cursor.x, cursor.y);
     }
-    for &(target, _) in &c.bindings {
-        if !c.held.iter().any(|h| h.0 == target) {
-            c.held.push((target, false));
+    for bindings in &c.bindings[..c.players] {
+        for &(target, _) in bindings {
+            if !c.held.iter().any(|h| h.0 == target) {
+                c.held.push((target, false));
+            }
         }
     }
     let mut changes = Vec::new();
     for (target, was) in &mut c.held {
-        let now = pad::target_held(&state, &c.bindings, *target);
+        // A target shared by both players is held while either holds it.
+        let now = (0..c.players).any(|p| pad::target_held(&states[p], &c.bindings[p], *target));
         if now != *was {
             *was = now;
             changes.push((*target, now));
@@ -190,27 +230,37 @@ pub unsafe fn controller_frame(focused: bool) {
     }
     for (target, down) in changes {
         match target {
-            PAD_FIRE => {
+            PAD_FIRE | PAD_FIRE_P2 => {
+                let gun = usize::from(target == PAD_FIRE_P2);
                 if down {
-                    aim(cursor.x, cursor.y, true);
+                    aim_gun(gun, cursors[gun].0, cursors[gun].1, true);
                 }
-                switch(1, down);
+                switch(if gun == 0 { 1 } else { GUN2_TRIGGER }, down);
             }
             PAD_PUMP => switch(3, down),
-            1 | 5 | 6 | 7 | 8 | 10 | 11 => switch(target as usize, down),
+            PAD_PUMP_P2 => switch(GUN2_PUMP, down),
+            1 | 2 | 5 | 6 | 7 | 8 | 10 | 11 => switch(target as usize, down),
             _ => {}
         }
     }
 }
 
-/// Where the crosshair is drawn, in 640x480 game coordinates.
-pub unsafe fn aim_position() -> (i32, i32) {
-    (AIM_X, AIM_Y)
+/// Where a gun's crosshair is drawn, in 640x480 game coordinates.
+pub unsafe fn aim_position(gun: usize) -> (i32, i32) {
+    (*ptr::addr_of!(AIM))[gun.min(pad::MAX_PLAYERS - 1)]
 }
 
+/// Gun one's aim (the mouse).
 pub unsafe fn aim(x: i32, y: i32, shoot: bool) {
-    AIM_X = x.clamp(0, 639);
-    AIM_Y = y.clamp(0, 479);
+    aim_gun(0, x, y, shoot);
+}
+
+/// Shot (1) or move (9), with the gun number (0 = gun one) in bits 8-11 as
+/// the game's gun callback decodes it.
+unsafe fn aim_gun(gun: usize, x: i32, y: i32, shoot: bool) {
+    let gun = gun.min(pad::MAX_PLAYERS - 1);
+    let (x, y) = (x.clamp(0, 639), y.clamp(0, 479));
+    (*ptr::addr_of_mut!(AIM))[gun] = (x, y);
     if CALLBACK == 0 {
         return;
     }
@@ -218,16 +268,16 @@ pub unsafe fn aim(x: i32, y: i32, shoot: bool) {
         std::mem::transmute(CALLBACK);
     let empty = [0u32];
     f(
-        if shoot { 1 } else { 9 },
-        x.clamp(0, 639),
-        y.clamp(0, 479),
+        (if shoot { 1 } else { 9 }) | ((gun as u32) << 8),
+        x,
+        y,
         255,
         255,
         empty.as_ptr() as u32,
         empty.as_ptr() as u32,
     );
     if shoot {
-        eprintln!("[water] shot {x},{y}");
+        eprintln!("[water] gun {} shot {x},{y}", gun + 1);
     }
 }
 pub unsafe fn mouse(button: i32, down: bool, x: i32, y: i32) {

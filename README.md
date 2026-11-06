@@ -15,7 +15,7 @@ A Rust arcade compatibility project, starting on Linux with an egui/eframe deskt
 
 The workbench also builds natively on Windows. Minecraft Dungeons Arcade has native Linux and Windows-to-WSL2 runners, library preparation, snapshot import repair and diagnostics. With dongle seeds captured locally, `scripts/minecraft-seeded.py` boots it to the Mojang Studios screen with four virtual joysticks; factory setup and card scanners still block attract mode and gameplay. See [Linux setup and results](docs/minecraft-linux.md) or [Windows setup](docs/minecraft-windows.md).
 
-**Current status:** Aliens Armageddon and Jurassic Park reach desktop gameplay with mouse controls. Big Buck Hunter Pro reaches a rendered hunt scene and has verified PCM audio output through PulseAudio/PipeWire. Aliens and Jurassic audio now play through the desktop sound server (pending listening confirmation). Full playthroughs and physical cabinet hardware are unverified; Fast and Furious Super Cars (a Windows build) runs under Wine and reaches races with keyboard driving controls. See the per-game notes below for build requirements and limitations.
+**Current status:** Aliens Armageddon and Jurassic Park reach desktop gameplay with mouse controls. Big Buck Hunter Pro fully loads into scored gameplay with working score saving and verified PCM audio output through PulseAudio/PipeWire. Aliens and Jurassic audio now play through the desktop sound server (pending listening confirmation). Full playthroughs and physical cabinet hardware are unverified; Fast and Furious Super Cars (a Windows build) runs under Wine and reaches races with keyboard driving controls. See the per-game notes below for build requirements and limitations.
 
 This repository contains the compatibility runtime and tools. Game executables, assets, cabinet records, saves, generated runtime files and third-party libraries are not included. Supply your own local game files under `games/`.
 
@@ -69,8 +69,10 @@ outside that folder, then click **Create .zar archive**. The app compresses on a
 worker thread, displays progress, and supports cancellation. It includes the
 folder's contents directly, preserving subfolders, empty directories and filenames.
 Source files are kept, and existing output files are never replaced. Close games
-and other programs that modify the source while converting. Symbolic links,
-special files, non-UTF-8 names and names differing only by ASCII case are rejected.
+and other programs that modify the source while converting. Symbolic links to files and directories are copied as ordinary archive entries,
+including targets outside the selected folder. Broken symbolic links are skipped
+and listed in the completion message. Directory link cycles, special files,
+non-UTF-8 names and names differing only by ASCII case are rejected.
 The converter applies the same path, depth and size limits as the loader and
 verifies archive integrity before publishing the finished output. Cancellation
 during finalization or verification waits for that operation to finish.
@@ -146,9 +148,21 @@ Xbox and other XInput-compatible controllers work in every desktop game except M
 | Jurassic Park | RT = fire, LT = secondary, Start, Back = coin, D-pad + A/B for menus | Either stick moves the aim |
 | Aliens | Start/A = start, Back = coin, B = service/back, D-pad = volume/menu | Either stick moves the pointer. RT/LT click the left/right mouse buttons |
 
+#### Two players
+
+Aliens, Jurassic Park and Big Buck Hunter are two-player cabinets. Pick **2 players** at the top of the game's **Settings → Controls** tab, or set `players = 2` in that game's `settings.cfg` section. Controller 1 then plays player one and controller 2 plays player two, in the order the controllers were connected. Controller 2 uses player one's button layout: its Start, Coin, fire and secondary/pump act for player two, and its stick moves player two's aim. Test, service and menu buttons work from either controller. The mouse and keyboard stay player one. With the default `players = 1`, every controller plays player one, as before. The racing games are single-seat and Minecraft Dungeons has its own four-player setup, so they have no Players setting.
+
+| Game | Player two |
+| --- | --- |
+| Big Buck Hunter | Second gun: its own crosshair in the other colour, and gun-two shots, trigger and pump. Linux and Water |
+| Jurassic Park | Controller 2 drives the player-two gun inputs and its trigger/secondary. The game draws player two's reticle |
+| Aliens | The two-player image maps player two's aim to controller 2. RT/LT press **Q**/**W**, the game's player-two fire keys |
+
+Two-player mode was built from the games' own input tables and is covered by unit tests. It has not yet been played with two controllers in any game.
+
 How controllers are read:
 
-- **Windows and Wine** (Super Cars, Ford, and Big Buck through Water): XInput. The adapters load `xinput1_4`, `xinput1_3` or `xinput9_1_0` the first time they need it and merge up to four controllers. Under Wine, Wine's own XInput exposes your Linux controllers.
+- **Windows and Wine** (Super Cars, Ford, and Big Buck through Water): XInput. The adapters load `xinput1_4`, `xinput1_3` or `xinput9_1_0` the first time they need it and merge up to four controllers (with two players, the first connected controller is player one and the others player two). Under Wine, Wine's own XInput exposes your Linux controllers.
 - **Linux** (Aliens, Jurassic, Big Buck): evdev, with the kernel's Xbox layout. Wired `xpad` and Bluetooth `hid-microsoft` axis layouts are both handled. Each sandbox gets only controller device nodes. These are devices that report gamepad buttons and no letter keys, so keyboards are never exposed. Your user needs read access to them, which you get from `uaccess` or the `input` group. **Connect controllers before you start a game.** Aliens sends its controller input as XTest events to the focused game window, which needs `libxcb-xtest` (32-bit).
 
 Keyboard bindings for Aliens, Jurassic Park and Big Buck Hunter live in `controls.cfg` in the project root. Edit them in the workbench's **Controls** section (click an action, then press the new key; **+** adds an extra key, **×** unbinds, Esc cancels), or edit the file directly. Changes apply the next time a game starts. A key already used by another action moves to the new action, and the other action takes the replaced key, so swapping two keys takes one click. Escape is reserved for exiting.
@@ -196,11 +210,11 @@ API references: [eframe 0.36.2](https://docs.rs/eframe/0.36.2/eframe/) and [gobl
 
 ## Jurassic Park investigation
 
-Jurassic Park now opens on the desktop with player-one mouse aiming and firing. Start reaches mission selection, and gameplay shots have produced a score of 75. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-jurassic games` or choose **Open Jurassic Park on my display**. **1** starts, **mouse** aims, **left click** fires, **T** opens test mode, and **Esc** exits. The Rust desktop profile uses the supplied plaintext scripts and omits unavailable cabinet security initialization. Main audio plays through PulseAudio/PipeWire; cabinet/rumble audio, physical cabinet I/O and player-two aiming remain unfinished. The RIO connection overlay is suppressed in desktop mode. [Startup and control notes](docs/jurassic-startup.md) document the exact build checks and remaining work.
+Jurassic Park now opens on the desktop with player-one mouse aiming and firing. Start reaches mission selection, and gameplay shots have produced a score of 75. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-jurassic games` or choose **Open Jurassic Park on my display**. **1** starts, **mouse** aims, **left click** fires, **T** opens test mode, and **Esc** exits. The Rust desktop profile uses the supplied plaintext scripts and omits unavailable cabinet security initialization. Main audio plays through PulseAudio/PipeWire; cabinet/rumble audio and physical cabinet I/O remain unfinished. Player two can use a second controller (see Two players above). The RIO connection overlay is suppressed in desktop mode. [Startup and control notes](docs/jurassic-startup.md) document the exact build checks and remaining work.
 
 ## Aliens Armageddon desktop runtime
 
-Aliens now reaches playable 3D gameplay on the desktop; the user confirmed working controls and visuals. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-aliens games` or choose **Open Aliens on my display**. **1** starts, the native desktop mouse maps handle aiming/firing, **5** inserts a coin, **T** opens the test menu (all customizable) and **Esc** or the window's close button quits. The current copied settings are Spanish: choose **MODO HISTORIA** for Story Mode. Audio plays through PulseAudio/PipeWire; a full playthrough and player two are unverified. [Aliens startup notes](docs/aliens-startup.md) document the validated asset seeds, graphics adapters and runtime-only changes. Original files remain unchanged.
+Aliens now reaches playable 3D gameplay on the desktop; the user confirmed working controls and visuals. Build the i686 shim, then run `cargo run -p arcade-desktop -- --launch-aliens games` or choose **Open Aliens on my display**. **1** starts, the native desktop mouse maps handle aiming/firing, **5** inserts a coin, **T** opens the test menu (all customizable) and **Esc** or the window's close button quits. The current copied settings are Spanish: choose **MODO HISTORIA** for Story Mode. Audio plays through PulseAudio/PipeWire; a full playthrough is unverified. Player two can use a second controller (see Two players above), which has not been played yet. [Aliens startup notes](docs/aliens-startup.md) document the validated asset seeds, graphics adapters and runtime-only changes. Original files remain unchanged.
 
 ## Fast and Furious Super Cars (Wine)
 

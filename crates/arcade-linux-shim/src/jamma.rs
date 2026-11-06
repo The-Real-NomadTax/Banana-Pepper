@@ -4,7 +4,7 @@ use std::{
     ffi::c_int,
     sync::{
         Mutex,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
     },
 };
 static SWITCHES: Mutex<Switches> = Mutex::new(Switches {
@@ -187,77 +187,131 @@ pub unsafe fn install() {
     eprintln!("[arcade] virtual JAMMA API installed");
 }
 
-/// Last aimed position (mouse or controller), in 640x480 game coordinates.
-static AIM_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(320);
-static AIM_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(240);
+/// Last aimed position per gun (mouse or controller), in 640x480 game
+/// coordinates. The mouse always aims gun one.
+static AIM: [[AtomicI32; 2]; crate::pad::MAX_PLAYERS] = [
+    [AtomicI32::new(320), AtomicI32::new(240)],
+    [AtomicI32::new(320), AtomicI32::new(240)],
+];
 
 /// controls.cfg's default controller buttons for Big Buck.
 const DEFAULT_PAD: &str = "5:16,7:32,256:131072,256:4096,257:65536,257:8192";
-/// Controller-only targets: aimed shot and pump.
+/// Controller 2 with two players: the same buttons on player two's targets.
+const DEFAULT_PAD_P2: &str = "6:16,8:32,258:131072,258:4096,259:65536,259:8192";
+/// Controller-only targets: aimed shot and pump, per gun.
 const PAD_FIRE: u32 = 0x100;
 const PAD_PUMP: u32 = 0x101;
+const PAD_FIRE_P2: u32 = 0x102;
+const PAD_PUMP_P2: u32 = 0x103;
+/// Switch-table indices for gun two (`g21` trigger, `g22` pump); gun one's
+/// are `g11` = 1 and `g12` = 3.
+const GUN2_TRIGGER: usize = 2;
+const GUN2_PUMP: usize = 4;
 /// Crosshair speed at full stick deflection, in game pixels per second.
 const CROSSHAIR_SPEED: i32 = 700;
 
 struct Controller {
     reader: crate::evdev_pad::Reader,
-    bindings: Vec<(u32, u32)>,
+    players: usize,
+    /// Per player: controller 1 = player one, controller 2 = player two.
+    bindings: [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS],
     edges: crate::evdev_pad::Edges,
     last: std::time::Instant,
 }
 static CONTROLLER: Mutex<Option<Controller>> = Mutex::new(None);
 
-/// One controller frame (GLUT timer): crosshair, shots, pump and switches.
+/// Players in this session (settings.cfg `players`).
+pub fn players() -> usize {
+    static PLAYERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *PLAYERS.get_or_init(crate::evdev_pad::players)
+}
+
+/// One controller frame (GLUT timer): crosshairs, shots, pumps and switches.
 pub fn controller_frame() {
     let mut guard = CONTROLLER.lock().unwrap_or_else(|e| e.into_inner());
-    let c = guard.get_or_insert_with(|| Controller {
-        reader: crate::evdev_pad::Reader::new(),
-        bindings: crate::evdev_pad::bindings(DEFAULT_PAD),
-        edges: Default::default(),
-        last: std::time::Instant::now(),
+    let c = guard.get_or_insert_with(|| {
+        let players = players();
+        if players > 1 {
+            eprintln!("[arcade] two players: controller 2 is gun two");
+        }
+        Controller {
+            reader: crate::evdev_pad::Reader::new(),
+            players,
+            bindings: [
+                crate::evdev_pad::bindings(DEFAULT_PAD),
+                crate::evdev_pad::bindings_p2(DEFAULT_PAD_P2),
+            ],
+            edges: Default::default(),
+            last: std::time::Instant::now(),
+        }
     });
-    let state = c.reader.read();
-    if state.held(crate::pad::BACK) && state.held(crate::pad::START) {
+    let states = c.reader.read_players(c.players);
+    if states
+        .iter()
+        .any(|s| s.held(crate::pad::BACK) && s.held(crate::pad::START))
+    {
         eprintln!("[arcade] Back + Start: exiting");
         std::process::exit(0);
     }
     let elapsed = c.last.elapsed().as_millis() as u32;
     c.last = std::time::Instant::now();
-    let mut cursor = crate::pad::Cursor::new(
-        AIM_X.load(Ordering::Relaxed),
-        AIM_Y.load(Ordering::Relaxed),
-    );
-    if cursor.step(state.aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
-        aim(cursor.x, cursor.y, false);
+    let mut cursors = [(0, 0); crate::pad::MAX_PLAYERS];
+    for gun in 0..c.players {
+        let (x, y) = aim_position(gun);
+        let mut cursor = crate::pad::Cursor::new(x, y);
+        if cursor.step(states[gun].aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
+            aim_gun(gun, cursor.x, cursor.y, false);
+        }
+        cursors[gun] = (cursor.x, cursor.y);
     }
+    let players: Vec<(crate::pad::Pad, &[(u32, u32)])> = (0..c.players)
+        .map(|p| (states[p], c.bindings[p].as_slice()))
+        .collect();
     let mut changes = Vec::new();
     c.edges
-        .update(&state, &c.bindings, |target, down| changes.push((target, down)));
+        .update_players(&players, |target, down| changes.push((target, down)));
+    drop(players);
     drop(guard);
     for (target, down) in changes {
         match target {
-            PAD_FIRE => {
+            PAD_FIRE | PAD_FIRE_P2 => {
+                let gun = usize::from(target == PAD_FIRE_P2);
                 if down {
-                    aim(cursor.x, cursor.y, true);
+                    aim_gun(gun, cursors[gun].0, cursors[gun].1, true);
                 }
-                set_switch(1, down);
+                set_switch(if gun == 0 { 1 } else { GUN2_TRIGGER }, down);
             }
             PAD_PUMP => set_switch(3, down),
-            1 | 5 | 6 | 7 | 8 | 10 | 11 => set_switch(target as usize, down),
+            PAD_PUMP_P2 => set_switch(GUN2_PUMP, down),
+            1 | 2 | 5 | 6 | 7 | 8 | 10 | 11 => set_switch(target as usize, down),
             _ => {}
         }
     }
 }
 
-/// Where the crosshair is drawn, in 640x480 game coordinates.
-pub fn aim_position() -> (c_int, c_int) {
-    (AIM_X.load(Ordering::Relaxed), AIM_Y.load(Ordering::Relaxed))
+/// Where a gun's crosshair is drawn, in 640x480 game coordinates.
+pub fn aim_position(gun: usize) -> (c_int, c_int) {
+    let [x, y] = &AIM[gun.min(crate::pad::MAX_PLAYERS - 1)];
+    (x.load(Ordering::Relaxed), y.load(Ordering::Relaxed))
+}
+
+/// Gun one's aim (the mouse).
+pub fn aim(x: c_int, y: c_int, shoot: bool) {
+    aim_gun(0, x, y, shoot);
+}
+
+/// The gun callback's event code: shot (1) or move (9), with the gun number
+/// (0 = gun one) in bits 8-11, as the game's callback at 0x0804d9f0 decodes it.
+fn gun_event(gun: usize, shoot: bool) -> u32 {
+    (if shoot { 1 } else { 9 }) | ((gun as u32 & 0xf) << 8)
 }
 
 /// Deliver the observed gun callback shape on the GLUT/game thread.
-pub fn aim(x: c_int, y: c_int, shoot: bool) {
-    AIM_X.store(x.clamp(0, 639), Ordering::Relaxed);
-    AIM_Y.store(y.clamp(0, 479), Ordering::Relaxed);
+fn aim_gun(gun: usize, x: c_int, y: c_int, shoot: bool) {
+    let gun = gun.min(crate::pad::MAX_PLAYERS - 1);
+    let (x, y) = (x.clamp(0, 639), y.clamp(0, 479));
+    AIM[gun][0].store(x, Ordering::Relaxed);
+    AIM[gun][1].store(y, Ordering::Relaxed);
     let callback = CALLBACK.load(Ordering::Relaxed);
     if callback == 0 {
         return;
@@ -266,12 +320,11 @@ pub fn aim(x: c_int, y: c_int, shoot: bool) {
         unsafe { std::mem::transmute(callback as usize) };
     // The game's callback copies these empty tracking lists synchronously.
     let empty = [0u32; 1];
-    let event = if shoot { 1 } else { 9 };
     unsafe {
         callback(
-            event,
-            x.clamp(0, 639),
-            y.clamp(0, 479),
+            gun_event(gun, shoot),
+            x,
+            y,
             255,
             255,
             empty.as_ptr() as u32,
@@ -279,7 +332,7 @@ pub fn aim(x: c_int, y: c_int, shoot: bool) {
         );
     }
     if shoot {
-        eprintln!("[arcade] gun shot {x},{y}");
+        eprintln!("[arcade] gun {} shot {x},{y}", gun + 1);
     }
 }
 
@@ -322,6 +375,14 @@ mod tests {
         key(b't', false);
         assert_eq!(unsafe { *(counters as *const u32).add(11) }, 2);
         assert_eq!(unsafe { arcade_jamma_op(0xff) }, -9000);
+    }
+
+    #[test]
+    fn gun_two_events_carry_the_gun_number() {
+        assert_eq!(gun_event(0, true), 1);
+        assert_eq!(gun_event(0, false), 9);
+        assert_eq!(gun_event(1, true), 0x101);
+        assert_eq!(gun_event(1, false), 0x109);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Jurassic Park 2015: native startup investigation
 
-**Desktop controls now reach scored gameplay.** Verified on the user's NVIDIA RTX 3050 display using the Rust-prepared desktop profile, without GDB or a timeout: Start opens mission selection, mouse aim produces a visible reticle, and held fire produces shots and a score of 75. Full-game stability, physical cabinet devices, player-two aiming and Jurassic audio remain unfinished.
+**Desktop controls now reach scored gameplay.** Verified on the user's NVIDIA RTX 3050 display using the Rust-prepared desktop profile, without GDB or a timeout: Start opens mission selection, mouse aim produces a visible reticle, and held fire produces shots and a score of 75. Full-game stability, physical cabinet devices and Jurassic audio remain unfinished. Two-player mode (below) is implemented but not yet played.
 
 ## Open on the desktop
 
@@ -152,3 +152,7 @@ Only required shared libraries are staged. The archived SDK/package files and ex
 Reference packages used for import identification: [Ubuntu libc6 2.19-0ubuntu6.6 i386](https://launchpad.net/ubuntu/+archive/primary/+files/libc6_2.19-0ubuntu6.6_i386.deb) and [matching libc6-dbg](https://launchpad.net/ubuntu/+archive/primary/+files/libc6-dbg_2.19-0ubuntu6.6_i386.deb). Parsed libc SHA256: `1d286c652800917b618e97528409d70354ba9964f6b42d20bf5466a2b0c22400`; pthread SHA256: `f308663d81e959bbe455c4e38f7cbded91f674496a99216a4429afe1048b9257`.
 
 Additional reference data: [SDL 1.2.15-8ubuntu1.1 i386 package](https://archive.ubuntu.com/ubuntu/pool/main/libs/libsdl1.2/libsdl1.2debian_1.2.15-8ubuntu1.1_i386.deb), parsed library SHA256 `4d64e31dea0a850fd34d912898e29cb126c89ed48f653ed2136611fd4b0b2d30`; [NVIDIA 340.76 x86 archive](https://download.nvidia.com/XFree86/Linux-x86/340.76/NVIDIA-Linux-x86-340.76.run), parsed `libGL.so.340.76` SHA256 `ea3c144ff67e6902c5b522ad7667e190cb14a8f13ed9d59d91511e87b8ca339e`. The archive was decoded as data and only its library bytes were extracted. Libm reference SHA256: `b534bba234405fe6ce3fca8bf196a0cdada38a63cdca97c289a14d709a6e063a`.
+
+## Two players
+
+With `players = 2` in `settings.cfg`, controller 2 plays player two. Its buttons become private SDL keysyms mapped to player two's CoreInput targets: Start 2 (372), Coin 2 (380), trigger (343) and secondary (344). Its stick moves a player-two pointer. The cabinet's own input setup maps the player-two gun sources 353/354 to player two's aim (341/342). The desktop maps add that pair last. Each poll, the shim copies the mouse source's flags and range words into the 353/354 records. It then sets their raw values in window pixels with the game's own analog setter (`0x08366105`), which the SDL mouse handler also uses. Player two's aim is therefore scaled exactly like player one's mouse. The setter and the raw-record getter (`0x0836674b`) are fingerprint-checked at startup. This has not yet been played with two controllers.

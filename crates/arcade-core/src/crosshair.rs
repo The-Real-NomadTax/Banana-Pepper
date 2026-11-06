@@ -49,6 +49,17 @@ pub fn png(id: &str) -> Option<&'static [u8]> {
     STYLES.iter().find(|s| s.0 == id).map(|s| s.2)
 }
 
+/// Player two's style in a two-player game: the other colour at the same
+/// size, so the two crosshairs are always told apart.
+pub fn player_two(id: &str) -> &'static str {
+    match id {
+        "p1" => "p2",
+        "p1_large" => "p2_large",
+        "p2" => "p1",
+        _ => "p1_large",
+    }
+}
+
 /// Window-space quad (left, top, right, bottom) for an image of
 /// `width`x`height` game pixels at `percent` size, centred on game position
 /// (`x`, `y`), in a window of `window_w`x`window_h` showing the 640x480 game.
@@ -81,6 +92,11 @@ mod tests {
         }
         assert!(png("p2_large").is_some());
         assert!(png("off").is_none());
+        for (id, _, _) in STYLES {
+            let other = player_two(id);
+            assert!(png(other).is_some() && other != *id, "{id}");
+            assert_eq!(id.ends_with("_large"), other.ends_with("_large"));
+        }
     }
 
     #[test]

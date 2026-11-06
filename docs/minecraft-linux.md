@@ -2,6 +2,12 @@
 
 **Current seeded-runner status (2026-11-05):** coin, Start, loadout, level select and the chosen level all run. The game runs in a 60 Hz gamescope window by default; at 60 Hz the player panels, Ready box, score row and gear HUD draw. Still open: the HUD and short banners are intermittent between runs (sometimes missing, or a banner such as "NIGHT IS COMING" stays up), and automated runs have not yet shown a controllable player character after pressing a button in the level. Use the seeded launch below. The later investigation sections are historical records.
 
+## Launch from the main UI
+
+Add Minecraft Dungeons Arcade from the global library, set its game folder or ZArchive in Settings, then click **Play game**. Play and `--launch-minecraft` use the seeded runner with the same seeds, libraries, virtual controls and save directory as the command-line script. **Prepare libraries** and `--probe-minecraft` retain their setup and diagnostic behavior.
+
+Before the first launch, capture `runtime/minecraft/seeds.json` as described in [seed capture](minecraft-seed-capture.md), click **Prepare libraries**, and build the Linux adapter with `cargo build -p arcade-minecraft-io --offline`. The runner requires Python evdev, access to uinput and host input devices, Bubblewrap and gamescope as described below. On Windows these guest dependencies and the Linux adapter must be available inside WSL2. Missing prerequisites appear in the session error output.
+
 ## Cabinet type, 60 Hz and level start (2026-11-05)
 
 - **60 Hz:** the cabinet presented vsync'd at 60 Hz and the game's UI timing depends on it. On a 165 Hz monitor the game ran at about 165 FPS (it swaps twice per frame, so `glXSwapBuffers` counted ~330/s) and panels, the Ready box and the HUD were missing. The launcher now runs the sandbox inside `gamescope -r 60` (1920×1080 window). `--no-gamescope` draws straight to the desktop. Keyboard focus accepts the `gamescope` window.
@@ -73,6 +79,7 @@ The branch's earlier isolated bypass experiments already reached archive/localiz
 
 ```sh
 python3 scripts/test-minecraft-run.py
+python3 scripts/test-minecraft-seeded.py
 python3 scripts/test-minecraft-prepare.py 'games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]/gamedump.exec'
 cargo test --workspace
 ```

@@ -14,6 +14,11 @@
 //!   press the action's own key, RT/LT click the left/right mouse button and
 //!   either stick moves the pointer, all through XTest so the game sees
 //!   ordinary X input. Back + Start exits.
+//! * Two players (settings.cfg `players = 2`): controller 2 presses player
+//!   two's keys (Start 2, Coin 2, Q/W = the game's player-two fire and
+//!   secondary) and its stick aims player two. The prepared image maps
+//!   player two's aim to the player-two gun sources, which are written here
+//!   through the game's own analog setter.
 //!
 //! Game windows are identified by the unique SDL_VIDEO_X11_WMCLASS the
 //! launcher sets. XCB is loaded with dlopen; it reports errors per request, so
@@ -505,19 +510,121 @@ type FakeInput = unsafe extern "C" fn(Conn, u8, u8, u32, u32, i16, i16, u8) -> C
 
 /// controls.cfg's default controller buttons for Aliens, as `sdlkey:mask`.
 const DEFAULT_PAD_KEYS: &str = "49:16,49:4096,53:32,57:8192,273:1,274:2";
+/// Controller 2 with two players: Start 2 and Coin 2 keys instead.
+const DEFAULT_PAD_KEYS_P2: &str = "50:16,50:4096,54:32,57:8192,273:1,274:2";
+/// The engine's desktop-mode player-two fire and secondary keys (q, w).
+const P2_FIRE_KEY: u32 = 113;
+const P2_SECONDARY_KEY: u32 = 119;
 /// Pointer speed at full stick deflection, in screen pixels per second.
 const POINTER_SPEED: i32 = 1200;
 const KEY_PRESS: u8 = 2;
 const BUTTON_PRESS: u8 = 4;
 const MOTION_NOTIFY: u8 = 6;
 
+/// Raw input record for a source, and the analog setter that scales a raw
+/// value by the record's configured range (same engine as Jurassic Park).
+const RAW_ANALOG: usize = 0x081b18d8;
+const SET_ANALOG: usize = 0x081b1234;
+const ANALOG_PROLOGUE: [u8; 6] = [0x55, 0x89, 0xe5, 0x83, 0xec, 0x10];
+/// Mouse x/y sources, and the player-two gun x/y sources the prepared image
+/// maps to player two's aim.
+const MOUSE_AXES: [i32; 2] = [0x144, 0x145];
+const PLAYER_TWO_AXES: [i32; 2] = [0x183, 0x184];
+/// The game's analog input record (0x2c bytes): flags, scaled value, delta,
+/// raw value, raw delta, then the min/max/range and output scale words.
+type Analog = [u32; 11];
+
+/// True if `len` bytes at `address` are readable in this process.
+fn mapped(address: usize, len: usize) -> bool {
+    let Ok(maps) = std::fs::read_to_string("/proc/self/maps") else {
+        return false;
+    };
+    maps.lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let (Some(range), Some(perms)) = (fields.next(), fields.next()) else {
+            return false;
+        };
+        let Some((start, end)) = range.split_once('-') else {
+            return false;
+        };
+        let (Ok(start), Ok(end)) = (
+            usize::from_str_radix(start, 16),
+            usize::from_str_radix(end, 16),
+        ) else {
+            return false;
+        };
+        perms.starts_with('r') && start <= address && address + len <= end
+    })
+}
+
+/// Player two's aim, written into the player-two gun records.
+struct PlayerTwoAim {
+    get: unsafe extern "C" fn(i32) -> *mut Analog,
+    set: unsafe extern "C" fn(*mut Analog, f32),
+    cursor: crate::pad::Cursor,
+    width: i32,
+    height: i32,
+}
+
+impl PlayerTwoAim {
+    fn new() -> Result<Self, String> {
+        for address in [RAW_ANALOG, SET_ANALOG] {
+            if !mapped(address, ANALOG_PROLOGUE.len())
+                || unsafe { std::slice::from_raw_parts(address as *const u8, 6) } != ANALOG_PROLOGUE
+            {
+                return Err(format!("unexpected analog input code at {address:#x}"));
+            }
+        }
+        let (width, height) = std::env::var("ARCADE_RESOLUTION")
+            .ok()
+            .and_then(|r| {
+                let (w, h) = r.split_once('x')?;
+                Some((w.parse::<i32>().ok()?, h.parse::<i32>().ok()?))
+            })
+            .filter(|&(w, h)| w > 0 && h > 0)
+            .unwrap_or((1360, 768));
+        Ok(Self {
+            get: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(i32) -> *mut Analog>(RAW_ANALOG) },
+            set: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(*mut Analog, f32)>(SET_ANALOG) },
+            cursor: crate::pad::Cursor::new(width / 2, height / 2),
+            width,
+            height,
+        })
+    }
+
+    /// Moves player two's aim and stores it in window pixels, scaled exactly
+    /// like the mouse: copy the mouse record's flags and ranges, then set the
+    /// raw value through the game's own setter.
+    fn update(&mut self, aim: (i32, i32), elapsed: u32) {
+        self.cursor
+            .step(aim, elapsed, POINTER_SPEED, self.width, self.height);
+        let values = [self.cursor.x as f32, self.cursor.y as f32];
+        for ((mouse, gun), value) in MOUSE_AXES.into_iter().zip(PLAYER_TWO_AXES).zip(values) {
+            let (mouse, gun) = unsafe { ((self.get)(mouse), (self.get)(gun)) };
+            if mouse.is_null() || gun.is_null() {
+                continue;
+            }
+            unsafe {
+                let config = *mouse;
+                let words = gun.cast::<u32>();
+                for i in [0, 5, 6, 7, 8, 9, 10] {
+                    words.add(i).write(config[i]);
+                }
+                (self.set)(gun, value);
+            }
+        }
+    }
+}
+
 /// Controller input for Aliens, sent as XTest events to the focused game.
 struct Controller {
     fake: FakeInput,
     reader: crate::evdev_pad::Reader,
-    /// (event type, keycode/button, pad mask, currently pressed)
-    outputs: Vec<(u8, u8, u32, bool)>,
+    players: usize,
+    /// (event type, keycode/button, pad mask per player, currently pressed)
+    outputs: Vec<(u8, u8, [u32; crate::pad::MAX_PLAYERS], bool)>,
     cursor: crate::pad::Cursor,
+    player_two: Option<PlayerTwoAim>,
     last: Instant,
 }
 
@@ -534,44 +641,79 @@ impl Controller {
             return Err("libxcb-xtest lacks xcb_test_fake_input".into());
         }
         let fake: FakeInput = unsafe { std::mem::transmute::<*mut c_void, FakeInput>(pointer) };
-        let text = std::env::var("ARCADE_PAD_KEYS").unwrap_or_else(|_| DEFAULT_PAD_KEYS.into());
-        let mut pairs = [(0, 0); 64];
-        let n = crate::pad::parse_bindings(text.as_bytes(), &mut pairs);
-        let mut outputs: Vec<(u8, u8, u32, bool)> = Vec::new();
-        let mut add = |kind: u8, detail: u8, mask: u32| {
+        let players = crate::evdev_pad::players();
+        let mut outputs: Vec<(u8, u8, [u32; crate::pad::MAX_PLAYERS], bool)> = Vec::new();
+        let mut add = |kind: u8, detail: u8, player: usize, mask: u32| {
             match outputs.iter_mut().find(|o| o.0 == kind && o.1 == detail) {
-                Some(o) => o.2 |= mask,
-                None => outputs.push((kind, detail, mask, false)),
+                Some(o) => o.2[player] |= mask,
+                None => {
+                    let mut masks = [0; crate::pad::MAX_PLAYERS];
+                    masks[player] = mask;
+                    outputs.push((kind, detail, masks, false));
+                }
             }
         };
-        for &(sdl, mask) in &pairs[..n] {
-            match x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
-                Some(keycode) => add(KEY_PRESS, keycode, mask),
-                None => eprintln!("[aliens] controller: no X key for SDL key {sdl}"),
+        let key_sets = [
+            ("ARCADE_PAD_KEYS", DEFAULT_PAD_KEYS),
+            ("ARCADE_PAD_KEYS_P2", DEFAULT_PAD_KEYS_P2),
+        ];
+        for (player, (name, defaults)) in key_sets.into_iter().take(players).enumerate() {
+            let text = std::env::var(name).unwrap_or_else(|_| defaults.into());
+            let mut pairs = [(0, 0); 64];
+            let n = crate::pad::parse_bindings(text.as_bytes(), &mut pairs);
+            for &(sdl, mask) in &pairs[..n] {
+                match x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
+                    Some(keycode) => add(KEY_PRESS, keycode, player, mask),
+                    None => eprintln!("[aliens] controller: no X key for SDL key {sdl}"),
+                }
             }
         }
-        add(BUTTON_PRESS, 1, crate::pad::RT);
-        add(BUTTON_PRESS, 3, crate::pad::LT);
+        add(BUTTON_PRESS, 1, 0, crate::pad::RT);
+        add(BUTTON_PRESS, 3, 0, crate::pad::LT);
+        let mut player_two = None;
+        if players > 1 {
+            for (sdl, mask) in [(P2_FIRE_KEY, crate::pad::RT), (P2_SECONDARY_KEY, crate::pad::LT)] {
+                if let Some(keycode) = x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
+                    add(KEY_PRESS, keycode, 1, mask);
+                }
+            }
+            match PlayerTwoAim::new() {
+                Ok(aim) => {
+                    eprintln!("[aliens] two players: controller 2 is player two");
+                    player_two = Some(aim);
+                }
+                Err(error) => eprintln!("[aliens] player-two aim disabled: {error}"),
+            }
+        }
         Ok(Self {
             fake,
             reader: crate::evdev_pad::Reader::new(),
+            players,
             outputs,
             cursor: crate::pad::Cursor::new(1 << 20, 1 << 20),
+            player_two,
             last: Instant::now(),
         })
     }
 
     fn frame(&mut self, watcher: &Watcher) {
-        let state = self.reader.read();
+        let states = self.reader.read_players(self.players);
+        let state = states[0];
         let elapsed = self.last.elapsed().as_millis() as u32;
         self.last = Instant::now();
-        let any = state.buttons != 0 || state.aim() != (0, 0);
+        let any = states
+            .iter()
+            .any(|s| s.buttons != 0 || s.aim() != (0, 0));
         let pressed = self.outputs.iter().any(|o| o.3);
         if !any && !pressed {
             return;
         }
         let focused = !watcher.windows.is_empty() && watcher.focused_game();
-        if focused && state.held(crate::pad::BACK) && state.held(crate::pad::START) {
+        if focused
+            && states
+                .iter()
+                .any(|s| s.held(crate::pad::BACK) && s.held(crate::pad::START))
+        {
             eprintln!("[aliens] Back + Start pressed; exiting");
             unsafe {
                 libc::fflush(std::ptr::null_mut());
@@ -579,8 +721,11 @@ impl Controller {
             }
         }
         let mut sent = false;
+        if focused && let Some(aim) = self.player_two.as_mut() {
+            aim.update(states[1].aim(), elapsed);
+        }
         for output in &mut self.outputs {
-            let now = focused && state.held(output.2);
+            let now = focused && states.iter().zip(output.2).any(|(s, mask)| s.held(mask));
             if now != output.3 {
                 output.3 = now;
                 let kind = if now { output.0 } else { output.0 + 1 };

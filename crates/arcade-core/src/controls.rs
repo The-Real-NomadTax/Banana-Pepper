@@ -49,6 +49,11 @@ pub struct Game {
     pub mouse_buttons: bool,
     pub actions: &'static [Action],
     pub note: &'static str,
+    /// Two-player games: (player-one action, player-two target). Controller 2
+    /// uses player one's button layout; these actions drive player two's
+    /// target instead, and every other action (test, menus) stays shared.
+    /// Empty for one-player games.
+    pub player_two: &'static [(&'static str, u32)],
 }
 
 const fn one(
@@ -98,7 +103,7 @@ const fn pad(
 }
 
 pub const GAMES: &[Game] = &[
-    Game {id:"ford",title:"Ford Racing Full Blown",keys:KeySpace::DirectInput,mouse_buttons:false,note:"Keyboard steering ramps and recentres. Controllers (XInput): left stick steers, triggers bound to gas/brake are analog. The cabinet adapter runs on Windows and Wine; Escape exits.",actions:&[
+    Game {id:"ford",title:"Ford Racing Full Blown",keys:KeySpace::DirectInput,mouse_buttons:false,note:"Keyboard steering ramps and recentres. Controllers (XInput): left stick steers, triggers bound to gas/brake are analog. The cabinet adapter runs on Windows and Wine; Escape exits.",player_two:&[],actions:&[
         any("steer_left","Steer left",1,&["Left","PadLeft"]),any("steer_right","Steer right",2,&["Right","PadRight"]),any("gas","Gas / menu confirm",3,&["Up","PadRT"]),any("brake","Brake",4,&["Down","PadLT"]),
         any("start1","Start",5,&["Enter","1","PadStart","PadA"]),any("view","Change view",6,&["V","PadY"]),any("gear_up","Shift up",7,&["Space","PadRB"]),any("gear_down","Shift down",8,&["X","PadLB"]),any("coin1","Coin",9,&["5","PadBack"]),
     ]},
@@ -107,7 +112,8 @@ pub const GAMES: &[Game] = &[
         title: "Aliens Armageddon",
         keys: KeySpace::Sdl,
         mouse_buttons: false,
-        note: "Mouse aim and fire use the game's own desktop mouse controls. One key per action (plus any controller buttons). Controllers: either stick moves the pointer, RT = left click, LT = right click.",
+        note: "Mouse aim and fire use the game's own desktop mouse controls. One key per action (plus any controller buttons). Controllers: either stick moves the pointer, RT = left click, LT = right click. Two players: controller 2 aims player two, RT/LT = Q/W (the game's player-two fire keys).",
+        player_two: &[("start1", 0x155), ("coin1", 0x14d)],
         actions: &[
             one("start1", "Player 1 Start / menu confirm", 0x154, &["1", "PadStart", "PadA"]),
             one("start2", "Player 2 Start", 0x155, &["2"]),
@@ -124,7 +130,8 @@ pub const GAMES: &[Game] = &[
         title: "Jurassic Park 2015",
         keys: KeySpace::Sdl,
         mouse_buttons: true,
-        note: "Mouse movement always aims for player one. Controllers: either stick moves the aim.",
+        note: "Mouse movement always aims for player one. Controllers: either stick moves the aim. Two players: controller 2 aims and fires for player two.",
+        player_two: &[("start1", 372), ("coin1", 380), ("fire", 343), ("secondary", 344)],
         actions: &[
             any("start1", "Player 1 Start", 371, &["1", "PadStart"]),
             any("start2", "Player 2 Start", 372, &["2"]),
@@ -145,7 +152,14 @@ pub const GAMES: &[Game] = &[
         title: "Big Buck Hunter Pro",
         keys: KeySpace::Glut,
         mouse_buttons: false,
-        note: "Left mouse fires and right mouse pumps. Letters, digits, Space, Enter, Tab, Backspace and punctuation only. Controllers: either stick moves the crosshair.",
+        note: "Left mouse fires and right mouse pumps. Letters, digits, Space, Enter, Tab, Backspace and punctuation only. Controllers: either stick moves the crosshair. Two players: controller 2 is the second gun.",
+        player_two: &[
+            ("start1", 6),
+            ("coin1", 8),
+            ("trigger", 2),
+            ("fire", 0x102),
+            ("pump", 0x103),
+        ],
         actions: &[
             any("start1", "Player 1 Start", 5, &["1", "Enter", "PadStart"]),
             any("start2", "Player 2 Start", 6, &["2"]),
@@ -164,6 +178,7 @@ pub const GAMES: &[Game] = &[
         keys: KeySpace::DirectInput,
         mouse_buttons: false,
         note: "Steering ramps while held and recentres on release; gas and brake keys are on/off. Controllers (XInput): left stick steers, triggers bound to gas/brake are analog. Targets are the cabinet I/O board's input codes.",
+        player_two: &[],
         actions: &[
             any("steer_left", "Steer left", 1, &["Left", "PadLeft"]),
             any("steer_right", "Steer right", 2, &["Right", "PadRight"]),
@@ -190,6 +205,14 @@ pub const GAMES: &[Game] = &[
 
 pub fn game(id: &str) -> Option<&'static Game> {
     GAMES.iter().find(|g| g.id == id)
+}
+
+/// Where controller 2's binding for `action` goes in a two-player game.
+fn player_two_target(game: &Game, action: &Action) -> u32 {
+    game.player_two
+        .iter()
+        .find(|(id, _)| *id == action.id)
+        .map_or(action.target, |&(_, target)| target)
 }
 
 /// SDL 1.2 key symbols by canonical name.
@@ -785,6 +808,54 @@ impl Bindings {
         Ok(pairs.join(","))
     }
 
+    /// Controller 2's `target:mask,...` in a two-player game (`ARCADE_PAD_P2`):
+    /// player one's buttons, with player-one actions moved to player two's
+    /// targets ([`Game::player_two`]). Empty for one-player games.
+    pub fn pad_env_value_p2(&self, game: &str) -> Result<String, String> {
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        if g.player_two.is_empty() {
+            return Ok(String::new());
+        }
+        let mut pairs = Vec::new();
+        for action in g.actions {
+            let target = player_two_target(g, action);
+            for mask in self.keys(game, action.id).iter().filter_map(|k| pad_mask(k)) {
+                pairs.push(format!("{target}:{mask}"));
+            }
+        }
+        self.validate()?;
+        Ok(pairs.join(","))
+    }
+
+    /// Controller 2's `keycode:mask,...` for Aliens (`ARCADE_PAD_KEYS_P2`):
+    /// like [`Bindings::pad_key_env_value`], but player-one actions press the
+    /// key of the matching player-two action (Start 2, Coin 2).
+    pub fn pad_key_env_value_p2(&self, game: &str) -> Result<String, String> {
+        self.validate()?;
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        if g.player_two.is_empty() {
+            return Ok(String::new());
+        }
+        let first_key = |action: &Action| {
+            self.keys(game, action.id)
+                .iter()
+                .find(|k| !is_pad(k))
+                .and_then(|k| code(g.keys, k))
+        };
+        let mut pairs = Vec::new();
+        for action in g.actions {
+            let target = player_two_target(g, action);
+            let keyed = g.actions.iter().find(|a| a.target == target).unwrap_or(action);
+            let Some(code) = first_key(keyed) else {
+                continue;
+            };
+            for mask in self.keys(game, action.id).iter().filter_map(|k| pad_mask(k)) {
+                pairs.push(format!("{code}:{mask}"));
+            }
+        }
+        Ok(pairs.join(","))
+    }
+
     /// Add or remove one controller button on an action. Adding moves the
     /// button off any other action in the same game.
     pub fn toggle_pad(&mut self, game: &str, action: &str, button: &str) -> Result<String, String> {
@@ -937,6 +1008,38 @@ mod tests {
             "1:4,2:8,3:131072,4:65536,65536:16,65536:4096,65537:16384,65538:32768,\
 65539:8192,65540:128,65541:256,65542:512,65543:1,65544:2,65545:32"
         );
+    }
+
+    #[test]
+    fn controller_two_drives_player_two() {
+        let b = Bindings::default();
+        // The Linux shims' DEFAULT_PAD_P2 fallbacks must match these.
+        assert_eq!(
+            b.pad_env_value_p2("big_buck").unwrap(),
+            "6:16,8:32,258:131072,258:4096,259:65536,259:8192"
+        );
+        assert_eq!(
+            b.pad_env_value_p2("jurassic").unwrap(),
+            "372:16,380:32,383:1,384:2,385:4096,386:8192,343:131072,344:65536"
+        );
+        assert_eq!(
+            b.pad_key_env_value_p2("aliens").unwrap(),
+            "50:16,50:4096,54:32,57:8192,273:1,274:2"
+        );
+        // One-player games have no controller-2 bindings.
+        assert_eq!(b.pad_env_value_p2("ford").unwrap(), "");
+        assert_eq!(b.pad_env_value_p2("super_cars").unwrap(), "");
+        assert_eq!(b.pad_key_env_value_p2("ford").unwrap(), "");
+        // Every listed player-one action exists.
+        for g in GAMES {
+            for (id, _) in g.player_two {
+                assert!(g.actions.iter().any(|a| a.id == *id), "{} {id}", g.id);
+            }
+        }
+        // Rebinding player one's start moves controller 2's start with it.
+        let mut b = b;
+        b.toggle_pad("big_buck", "start1", "PadY").unwrap();
+        assert!(b.pad_env_value_p2("big_buck").unwrap().contains("6:32768"));
     }
 
     #[test]

@@ -120,6 +120,8 @@ pub struct Profile {
     pub resolution_note: &'static str,
     /// Default crosshair, or `None` if the game cannot draw one.
     pub crosshair: Option<Crosshair>,
+    /// Most simultaneous players the game's adapter supports (1 or 2).
+    pub max_players: u8,
 }
 
 pub const PROFILES: &[Profile] = &[
@@ -130,6 +132,7 @@ pub const PROFILES: &[Profile] = &[
         default_renderer: Renderer::Gpu,
         resolution_note: "Passed to the game's own -f option. 1360x768 is the cabinet mode and the tested size.",
         crosshair: None,
+        max_players: 2,
     },
     Profile {
         id: "jurassic",
@@ -138,6 +141,7 @@ pub const PROFILES: &[Profile] = &[
         default_renderer: Renderer::Gpu,
         resolution_note: "Passed to the game's own -f option. 1360x768 is the cabinet mode and the tested size.",
         crosshair: None,
+        max_players: 2,
     },
     Profile {
         id: "big_buck",
@@ -146,6 +150,7 @@ pub const PROFILES: &[Profile] = &[
         default_renderer: if cfg!(windows){Renderer::Gpu}else{Renderer::Software},
         resolution_note: "Window size. The game still renders at 640x480; aiming is rescaled to the window.",
         crosshair: Some(Crosshair(Some("p1"))),
+        max_players: 2,
     },
     Profile {
         id: "super_cars",
@@ -154,8 +159,9 @@ pub const PROFILES: &[Profile] = &[
         default_renderer: Renderer::Gpu,
         resolution_note: "Passed to the game's own -res option: 640x480, 800x600, 1024x768, 1280x1024, 1360x768, 1600x1200 or 1920x1080. Also the Wine window size. Renderer: WineD3D on OpenGL (GPU) or Mesa llvmpipe (software).",
         crosshair: None,
+        max_players: 1,
     },
-    Profile {id:"ford",title:"Ford Racing Full Blown",default_resolution:(640,480),default_renderer:Renderer::Gpu,resolution_note:"Native Direct3D 9 on Windows; Wine on Linux. Cabinet resolutions: 640x480, 800x600, 1024x768, 1280x1024, 1600x1200. Default is windowed.",crosshair:None},
+    Profile {id:"ford",title:"Ford Racing Full Blown",default_resolution:(640,480),default_renderer:Renderer::Gpu,resolution_note:"Native Direct3D 9 on Windows; Wine on Linux. Cabinet resolutions: 640x480, 800x600, 1024x768, 1280x1024, 1600x1200. Default is windowed.",crosshair:None,max_players:1},
 ];
 
 pub const RESOLUTIONS: &[(u32, u32)] = &[
@@ -191,6 +197,9 @@ pub struct GameSettings {
     pub crosshair: Crosshair,
     /// Crosshair size, percent of the image (crosshair::SIZE_MIN..=SIZE_MAX).
     pub crosshair_size: u32,
+    /// 1, or 2 in two-player games: each controller then drives its own
+    /// player (controller 1 = player one, controller 2 = player two).
+    pub players: u8,
 }
 
 impl GameSettings {
@@ -205,6 +214,7 @@ impl GameSettings {
             audio_sink: String::new(),
             crosshair: profile.crosshair.clone().unwrap_or(Crosshair(None)),
             crosshair_size: crate::crosshair::SIZE_DEFAULT,
+            players: 1,
         }
     }
 
@@ -228,7 +238,7 @@ impl GameSettings {
             },
             self.vsync.label().to_ascii_lowercase(),
             if self.audio { "on" } else { "off" },
-        )
+        ) + if self.players > 1 { " · 2 players" } else { "" }
     }
 
     /// Environment variables for the sandboxed game process. Read by the
@@ -242,6 +252,9 @@ impl GameSettings {
         }
         if self.fullscreen {
             env.push(("ARCADE_FULLSCREEN", "1".into()));
+        }
+        if self.players > 1 {
+            env.push(("ARCADE_PLAYERS", self.players.to_string()));
         }
         match self.vsync {
             VSync::Default => {}
@@ -313,6 +326,13 @@ impl GameSettings {
                     ));
                 }
                 self.crosshair_size = size;
+            }
+            "players" => {
+                self.players = match value {
+                    "1" => 1,
+                    "2" => 2,
+                    _ => return Err(format!("players must be 1 or 2, not \"{value}\"")),
+                }
             }
             _ => return Err(format!("unknown setting \"{key}\"")),
         }
@@ -387,6 +407,12 @@ impl Settings {
             {
                 return Err(at(format!("[{id}] has no crosshair setting")));
             }
+            if key.trim() == "players"
+                && value.trim() != "1"
+                && profile(id).is_some_and(|p| p.max_players < 2)
+            {
+                return Err(at(format!("[{id}] is a one-player game")));
+            }
             settings
                 .games
                 .get_mut(id)
@@ -425,6 +451,12 @@ impl Settings {
                     g.crosshair_size,
                     crate::crosshair::SIZE_MIN,
                     crate::crosshair::SIZE_MAX
+                );
+            }
+            if p.max_players > 1 {
+                out += &format!(
+                    "players = {}  # 1 | 2 (controller 2 drives player two)\n",
+                    g.players
                 );
             }
         }
@@ -488,6 +520,24 @@ mod tests {
         assert_eq!(Settings::default().to_text().matches("crosshair =").count(), 1);
         assert_eq!(Settings::default().to_text().matches("crosshair_size =").count(), 1);
         assert_eq!(Crosshair::all().len(), 5);
+    }
+
+    #[test]
+    fn two_players_only_for_two_player_games() {
+        let s = Settings::parse("[jurassic]\nplayers = 2\n[big_buck]\nplayers = 2\n").unwrap();
+        assert_eq!(s.game("jurassic").players, 2);
+        assert!(s.game("jurassic").guest_env().contains(&("ARCADE_PLAYERS", "2".into())));
+        assert!(s.game("jurassic").summary().ends_with("2 players"));
+        assert_eq!(Settings::parse(&s.to_text()).unwrap(), s);
+        // One player (the default) sets nothing for the guest.
+        let one = Settings::default();
+        assert_eq!(one.game("aliens").players, 1);
+        assert!(!one.game("aliens").guest_env().iter().any(|e| e.0 == "ARCADE_PLAYERS"));
+        assert!(Settings::parse("[aliens]\nplayers = 4\n").is_err());
+        assert!(Settings::parse("[ford]\nplayers = 2\n").is_err());
+        assert!(Settings::parse("[super_cars]\nplayers = 1\n").is_ok());
+        // Aliens, Jurassic and Big Buck write a players line.
+        assert_eq!(one.to_text().matches("players =").count(), 3);
     }
 
     #[test]

@@ -60,6 +60,7 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
             .env_value("big_buck")?,
     );
     command.envs(crate::runtime::pad_env(&project, "big_buck")?);
+    command.env("ARCADE_PLAYERS", settings.players.to_string());
     match settings.crosshair.0 {
         Some(style) => command
             .env("ARCADE_CROSSHAIR", style)

@@ -1,6 +1,6 @@
 # Big Buck Hunter Pro: first working startup
 
-The supplied build now boots past calibration, reaches attract mode, accepts START and mouse shots in the game/mode/adventure menus, and reaches Whitetail Adventure instructions, Player 1 site selection, and a rendered hunt scene. This remains experimental: full scored gameplay is not validated; audio playback now has an OSS-to-Pulse bridge. The test runs on a private 1024×768 Xvfb display for up to 45 seconds, with a 53-second outer timeout, and saves checkpoint images along the way.
+The supplied build now boots past calibration, reaches attract mode, accepts START and mouse shots in the game/mode/adventure menus, and reaches Whitetail Adventure instructions, Player 1 site selection, and a rendered hunt scene. Full scored gameplay and high-score saving are now confirmed; audio playback has an OSS-to-Pulse bridge. The test runs on a private 1024×768 Xvfb display for up to 45 seconds, with a 53-second outer timeout, and saves checkpoint images along the way.
 
 ## Interactive desktop mode
 
@@ -14,7 +14,7 @@ Controls: T = TEST, 1/Enter = left START, 2 = right START, 5/6 = coin switches, 
 
 Desktop mode uses `runtime/big-buck-desktop/` for its own saves and `runner.log`. It does not overwrite the private test's save state. Original game assets stay read-only in Bubblewrap; the current X11 socket and Xauthority file are exposed to the guest for interactive display access. This mode was explicitly requested by the user after the earlier private-display test. It requires no Xvfb installation, strace, xdotool or ImageMagick. The private probe remains available separately.
 
-The shim redirects a cabinet-supplied `-display :0.0` argument to the current DISPLAY during GLUT initialization. A normal desktop launch and visible game window were verified on the current host. Audio playback is bridged to PulseAudio/PipeWire; full scored gameplay remains unverified.
+The shim redirects a cabinet-supplied `-display :0.0` argument to the current DISPLAY during GLUT initialization. A normal desktop launch and visible game window were verified on the current host. Audio playback is bridged to PulseAudio/PipeWire; the game fully loads into scored gameplay and saves scores correctly.
 
 ## Private progression test
 
@@ -72,7 +72,9 @@ The new guest shim replaces four internal functions in memory, after build valid
 
 The game's switch table maps `g11`, `st1`, `cn1`, `srv`, and `tst` to monotonic transition counters. The adapter counts press/release edges, suppresses repeated key-downs, returns a stable counter buffer for Op `0x12`, and acknowledges the dirty flag when requested. A small assembly trampoline preserves the original cdecl variadic stack layout and aligns the stack before entering Rust. Op `6` stores the game's callback, used to deliver aim and trigger payloads on the GLUT/game thread. Callback tracking lists are empty; real optical tracking is not simulated.
 
-Key mappings in the private game window: `T` = TEST, `1`/Enter = left START, `2` = right START, `5`/`6` = coin switches, `9` = service, Space = left trigger switch, left mouse = left gun shot plus trigger switch, right mouse = left pump. Coin-switch delivery is logged, but the supplied saved configuration starts in FREEPLAY, so paid credit accounting is not verified. Physical guns and two-player aim are not supported.
+Key mappings in the private game window: `T` = TEST, `1`/Enter = left START, `2` = right START, `5`/`6` = coin switches, `9` = service, Space = left trigger switch, left mouse = left gun shot plus trigger switch, right mouse = left pump. Coin-switch delivery is logged, but the supplied saved configuration starts in FREEPLAY, so paid credit accounting is not verified. Physical guns are not supported.
+
+Two players (`players = 2`): controller 2 is the second gun. The game's switch table orders the guns as `g11`, `g21`, `g12`, `g22` (indices 1–4): gun one's trigger and pump are switches 1 and 3, gun two's are 2 and 4. The gun callback (`0x0804d9f0`) takes the event type in the low byte and the gun number in bits 8–11, so gun two's moves and shots are `0x109` and `0x101`. Controller 2's Start and Coin press Start 2 and Coin 2. The shim draws gun two's crosshair in the other colour. These were read from the binary and are covered by unit tests; a two-gun hunt has not been played.
 
 The adapter reports a virtual connected board/version. A limited set of observed configuration/output operations return success without implementing physical effects; unimplemented operations return `-9000`. Gun calibration transformations, board firmware, lamps, and accurate hardware capability semantics are incomplete. Do not treat successful menu navigation as a faithful serial-board implementation.
 

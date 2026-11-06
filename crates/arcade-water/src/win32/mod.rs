@@ -7,6 +7,7 @@ mod jamma;
 mod sound;
 /// XInput controllers (shared with the Super Cars and Ford adapter DLLs).
 #[path = "../../../arcade-wine-hook/src/xinput.rs"]
+#[allow(dead_code)] // Water reads per player; the hook DLLs use the merged read.
 mod xinput;
 use arcade_core::pad;
 

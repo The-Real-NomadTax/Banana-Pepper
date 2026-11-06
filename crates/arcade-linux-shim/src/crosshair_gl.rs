@@ -71,18 +71,24 @@ const BLEND: u32 = 0x0be2;
 /// Textures are padded to a power of two for old GL 1.x drivers.
 const SIDE: usize = 128;
 
-/// (texture, image width, image height), created on first use in the game's
-/// GL context. `None` when the crosshair is off or the image is unusable.
-static TEXTURE_ID: OnceLock<Option<(u32, u32, u32)>> = OnceLock::new();
+/// Per player: (texture, image width, image height), created on first use in
+/// the game's GL context. `None` when the crosshair is off or the image is
+/// unusable.
+static TEXTURE_ID: [OnceLock<Option<(u32, u32, u32)>>; 2] = [OnceLock::new(), OnceLock::new()];
 
 pub fn enabled() -> bool {
     style().is_some()
 }
 
 fn style() -> Option<&'static [u8]> {
-    std::env::var("ARCADE_CROSSHAIR")
-        .ok()
-        .and_then(|id| crosshair::png(&id))
+    player_style(0)
+}
+
+/// Player one's configured style; player two gets the other colour.
+fn player_style(player: usize) -> Option<&'static [u8]> {
+    let id = std::env::var("ARCADE_CROSSHAIR").ok()?;
+    crosshair::png(&id)?;
+    crosshair::png(if player == 0 { &id } else { crosshair::player_two(&id) })
 }
 
 /// RGBA8 pixels, padded into a SIDE x SIDE square.
@@ -109,8 +115,8 @@ pub fn decode(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
     Ok((square, w as u32, h as u32))
 }
 
-unsafe fn upload() -> Option<(u32, u32, u32)> {
-    let (pixels, w, h) = match decode(style()?) {
+unsafe fn upload(player: usize) -> Option<(u32, u32, u32)> {
+    let (pixels, w, h) = match decode(player_style(player)?) {
         Ok(image) => image,
         Err(error) => {
             eprintln!("[arcade] crosshair disabled: {error}");
@@ -148,13 +154,16 @@ unsafe fn upload() -> Option<(u32, u32, u32)> {
         glPopClientAttrib();
         glPopAttrib();
     }
-    eprintln!("[arcade] crosshair enabled ({w}x{h})");
+    eprintln!("[arcade] player {} crosshair enabled ({w}x{h})", player + 1);
     Some((texture, w, h))
 }
 
-/// Draws the crosshair over the current frame. Call just before the swap.
-pub unsafe fn draw(aim_x: c_int, aim_y: c_int, window_w: c_int, window_h: c_int) {
-    let Some((texture, w, h)) = *TEXTURE_ID.get_or_init(|| unsafe { upload() }) else {
+/// Draws a player's crosshair over the current frame. Call just before the
+/// swap.
+pub unsafe fn draw(player: usize, aim_x: c_int, aim_y: c_int, window_w: c_int, window_h: c_int) {
+    let player = player.min(TEXTURE_ID.len() - 1);
+    let Some((texture, w, h)) = *TEXTURE_ID[player].get_or_init(|| unsafe { upload(player) })
+    else {
         return;
     };
     static SIZE: OnceLock<u32> = OnceLock::new();

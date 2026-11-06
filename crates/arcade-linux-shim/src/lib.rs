@@ -152,8 +152,11 @@ pub extern "C" fn glutSwapBuffers() {
         libc::dlsym(libc::RTLD_NEXT, c"glutSwapBuffers".as_ptr()) as usize
     });
     if WINDOW.load(Ordering::Relaxed) > 0 && crosshair_gl::enabled() {
-        let (x, y) = jamma::aim_position();
-        unsafe { crosshair_gl::draw(x, y, glutGet(0x66).max(1), glutGet(0x67).max(1)) };
+        let (width, height) = unsafe { (glutGet(0x66).max(1), glutGet(0x67).max(1)) };
+        for gun in 0..jamma::players() {
+            let (x, y) = jamma::aim_position(gun);
+            unsafe { crosshair_gl::draw(gun, x, y, width, height) };
+        }
     }
     if real != 0 {
         let real: extern "C" fn() = unsafe { std::mem::transmute(real) };

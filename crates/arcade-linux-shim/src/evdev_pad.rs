@@ -290,8 +290,10 @@ impl Reader {
         }
     }
 
-    /// All connected controllers, merged. Rescans for new ones every 2 s.
-    pub fn read(&mut self) -> Pad {
+    /// Controllers per player ([`pad::player_for`]), rescanning for new ones
+    /// every 2 s. One player merges every controller; with two, the first
+    /// connected controller drives player one and the rest player two.
+    pub fn read_players(&mut self, players: usize) -> [Pad; pad::MAX_PLAYERS] {
         if self
             .last_scan
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(2))
@@ -304,20 +306,35 @@ impl Reader {
             self.announced = self.devices.len();
             eprintln!("[arcade] {} controller(s) connected", self.devices.len());
         }
-        self.devices
-            .iter()
-            .map(Device::state)
-            .fold(Pad::default(), Pad::merge)
+        let mut out = [Pad::default(); pad::MAX_PLAYERS];
+        for (index, device) in self.devices.iter().enumerate() {
+            let player = pad::player_for(index, players);
+            out[player] = out[player].merge(device.state());
+        }
+        out
     }
 }
 
-/// `ARCADE_PAD` bindings (`target:mask,...`), or `defaults` when unset.
-pub fn bindings(defaults: &str) -> Vec<(u32, u32)> {
-    let text = std::env::var("ARCADE_PAD").unwrap_or_else(|_| defaults.to_owned());
+/// `ARCADE_PLAYERS` (settings.cfg `players`): 1 or 2.
+pub fn players() -> usize {
+    pad::players(std::env::var("ARCADE_PLAYERS").ok().as_deref().map(str::as_bytes))
+}
+
+/// Controller 2's bindings (`ARCADE_PAD_P2`), or `defaults` when unset.
+pub fn bindings_p2(defaults: &str) -> Vec<(u32, u32)> {
+    parse(&std::env::var("ARCADE_PAD_P2").unwrap_or_else(|_| defaults.to_owned()))
+}
+
+fn parse(text: &str) -> Vec<(u32, u32)> {
     let mut out = vec![(0, 0); 128];
     let n = pad::parse_bindings(text.as_bytes(), &mut out);
     out.truncate(n);
     out
+}
+
+/// `ARCADE_PAD` bindings (`target:mask,...`), or `defaults` when unset.
+pub fn bindings(defaults: &str) -> Vec<(u32, u32)> {
+    parse(&std::env::var("ARCADE_PAD").unwrap_or_else(|_| defaults.to_owned()))
 }
 
 /// Reports press/release edges of pad-bound targets, so controller input
@@ -328,19 +345,24 @@ pub struct Edges {
 }
 
 impl Edges {
-    pub fn update(
+    /// Each player's controller with its own bindings. A target shared by
+    /// both (menus, test) is held while either player holds it.
+    pub fn update_players(
         &mut self,
-        state: &Pad,
-        bindings: &[(u32, u32)],
+        players: &[(Pad, &[(u32, u32)])],
         mut changed: impl FnMut(u32, bool),
     ) {
-        for &(target, _) in bindings {
-            if !self.held.iter().any(|h| h.0 == target) {
-                self.held.push((target, false));
+        for (_, bindings) in players {
+            for &(target, _) in *bindings {
+                if !self.held.iter().any(|h| h.0 == target) {
+                    self.held.push((target, false));
+                }
             }
         }
         for (target, was) in &mut self.held {
-            let now = pad::target_held(state, bindings, *target);
+            let now = players
+                .iter()
+                .any(|(state, bindings)| pad::target_held(state, bindings, *target));
             if now != *was {
                 *was = now;
                 changed(*target, now);
@@ -362,10 +384,33 @@ mod tests {
             buttons: pad::A,
             ..Pad::default()
         };
-        edges.update(&pressed, &bindings, |t, d| log.push((t, d)));
-        edges.update(&pressed, &bindings, |t, d| log.push((t, d)));
-        edges.update(&Pad::default(), &bindings, |t, d| log.push((t, d)));
+        edges.update_players(&[(pressed, &bindings)], |t, d| log.push((t, d)));
+        edges.update_players(&[(pressed, &bindings)], |t, d| log.push((t, d)));
+        edges.update_players(&[(Pad::default(), &bindings)], |t, d| log.push((t, d)));
         assert_eq!(log, [(5, true), (5, false)]);
+    }
+
+    #[test]
+    fn each_player_uses_its_own_bindings() {
+        let p1 = [(5, pad::START), (11, pad::BACK)];
+        let p2 = [(6, pad::START), (11, pad::BACK)];
+        let start = Pad {
+            buttons: pad::START,
+            ..Pad::default()
+        };
+        let back = Pad {
+            buttons: pad::BACK,
+            ..Pad::default()
+        };
+        let mut edges = Edges::default();
+        let mut log = Vec::new();
+        edges.update_players(&[(Pad::default(), &p1), (start, &p2)], |t, d| log.push((t, d)));
+        assert_eq!(log, [(6, true)]);
+        log.clear();
+        // A shared target stays held while either player holds it.
+        edges.update_players(&[(back, &p1), (back, &p2)], |t, d| log.push((t, d)));
+        edges.update_players(&[(back, &p1), (Pad::default(), &p2)], |t, d| log.push((t, d)));
+        assert_eq!(log, [(11, true), (6, false)]);
     }
 
     #[test]
@@ -382,7 +427,7 @@ mod tests {
     fn live_controllers() {
         let mut reader = Reader::new();
         for _ in 0..30 {
-            let state = reader.read();
+            let [state, _] = reader.read_players(1);
             eprintln!("{state:?} aim={:?}", state.aim());
             std::thread::sleep(Duration::from_millis(100));
         }

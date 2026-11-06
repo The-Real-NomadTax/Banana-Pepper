@@ -139,6 +139,25 @@ impl Pad {
     }
 }
 
+/// Most players any game adapter supports (the gun games are two-player).
+pub const MAX_PLAYERS: usize = 2;
+
+/// `ARCADE_PLAYERS` (from settings.cfg): `2` gives each controller its own
+/// player; anything else (or absent) is one player with every controller
+/// merged.
+pub fn players(value: Option<&[u8]>) -> usize {
+    match value {
+        Some(b"2") => 2,
+        _ => 1,
+    }
+}
+
+/// The player a controller drives: the first connected controller is player
+/// one, the second player two; any further controllers join the last player.
+pub fn player_for(index: usize, players: usize) -> usize {
+    index.min(players.clamp(1, MAX_PLAYERS) - 1)
+}
+
 /// Moves a pointer with stick input. Speed grows with deflection (squared
 /// response, so small movements are precise).
 #[derive(Clone, Copy, Debug)]
@@ -301,6 +320,16 @@ mod tests {
         assert_eq!(target_level(&pad, &out[..n], 3), 128);
         assert!(target_held(&pad, &out[..n], 3));
         assert!(!target_held(&pad, &out[..n], 5));
+    }
+
+    #[test]
+    fn controllers_are_assigned_to_players() {
+        assert_eq!(players(None), 1);
+        assert_eq!(players(Some(b"2")), 2);
+        assert_eq!(players(Some(b"4")), 1);
+        assert_eq!((player_for(0, 1), player_for(1, 1), player_for(3, 1)), (0, 0, 0));
+        assert_eq!((player_for(0, 2), player_for(1, 2), player_for(2, 2)), (0, 1, 1));
+        assert_eq!(player_for(1, 0), 0);
     }
 
     #[test]

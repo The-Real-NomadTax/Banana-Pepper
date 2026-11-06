@@ -21,7 +21,8 @@ def pad_args():
     prepared from controls.cfg, and only the controller device nodes it found
     (never keyboards). Empty for diagnostic runs."""
     args = []
-    for key in ('ARCADE_PAD', 'ARCADE_PAD_KEYS', 'ARCADE_PAD_DEVICES'):
+    for key in ('ARCADE_PAD', 'ARCADE_PAD_P2', 'ARCADE_PAD_KEYS', 'ARCADE_PAD_KEYS_P2',
+                'ARCADE_PAD_DEVICES'):
         if key in os.environ:
             args += ['--setenv', key, os.environ[key]]
     for device in os.environ.get('ARCADE_PAD_DEVICES', '').split(':'):

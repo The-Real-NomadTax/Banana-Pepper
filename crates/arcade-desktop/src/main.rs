@@ -381,6 +381,7 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
                             }
                             SettingsTab::Controls => {
                                 if let Some(profile) = profile {
+                                    players_row(ui, &mut app.settings, profile);
                                     controls_panel(ui, &mut app.controls, profile.id);
                                 }
                             }
@@ -419,6 +420,35 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
         app.settings.open = None;
         app.controls.capturing = None;
     }
+}
+
+/// One or two players, for two-player games (settings.cfg `players`).
+fn players_row(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings::Profile) {
+    if profile.max_players < 2 {
+        return;
+    }
+    let game = app.settings.game_mut(profile.id).expect("profile settings");
+    let mut change = None;
+    ui.horizontal(|ui| {
+        ui.label("Players");
+        for (players, label) in [(1, "1 player"), (2, "2 players")] {
+            if ui.radio_value(&mut game.players, players, label).clicked() {
+                change = Some(format!("{} {label}", profile.title));
+            }
+        }
+    });
+    ui.small(if game.players > 1 {
+        "Controller 1 plays player one, controller 2 plays player two with the same button layout. Mouse and keyboard stay player one. Connect both controllers before starting the game."
+    } else {
+        "Every controller plays player one."
+    });
+    if let Some(change) = change {
+        app.save(&change);
+    }
+    if app.message.contains(" player") {
+        ui.small(app.message.as_str());
+    }
+    ui.separator();
 }
 
 fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings::Profile) {
@@ -1303,13 +1333,15 @@ impl eframe::App for ArcadeApp {
                     let id = &report.profile.id;
                     let game_root = self.game_roots.get(id).cloned().unwrap_or_else(|| Ok(PathBuf::from(&self.root)));
                     ui.heading(&report.profile.title);
-                    ui.label(RichText::new(match id.as_str() {
-                        "minecraft" => "Experimental · Linux startup and licensing",
-                        "big-buck" => "Experimental · Desktop gameplay",
-                        "super-cars" => "Experimental · Wine desktop gameplay",
-                        "ford" => "Experimental · Desktop cabinet adapter",
-                        _ => "Experimental · Linux desktop gameplay",
-                    }).small().color(Color32::from_rgb(221, 183, 115)));
+                    let experimental = Color32::from_rgb(221, 183, 115);
+                    let (status, status_color) = match id.as_str() {
+                        "big-buck" | "jurassic" => ("Verified · Desktop gameplay", Color32::from_rgb(130, 200, 120)),
+                        "minecraft" => ("Experimental · Seeded desktop gameplay", experimental),
+                        "super-cars" => ("Experimental · Wine desktop gameplay", experimental),
+                        "ford" => ("Experimental · Desktop cabinet adapter", experimental),
+                        _ => ("Experimental · Linux desktop gameplay", experimental),
+                    };
+                    ui.label(RichText::new(status).small().color(status_color));
                     ui.add_space(8.0);
                     if self.global_library {
                         ui.label("Global library · Supported game profile");
@@ -1363,7 +1395,7 @@ impl eframe::App for ArcadeApp {
                         "super-cars" => "Arrow keys or a controller steer, accelerate and brake (stick and triggers are analog). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings.",
                         "ford" => "Arrow keys or an XInput controller drive (stick steers, triggers are analog gas/brake). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings.",
                         "big-buck" => "Mouse or controller aims and fires; right click or LT pumps. Start and coin bindings are under Settings. Esc or Back+Start exits.",
-                        "minecraft" => "Cabinet controls and services are still in development. Gameplay is not yet verified.",
+                        "minecraft" => "5 inserts a P1 coin; 1, Enter or Space starts. P1: arrows + Z/X/C. F1–F4 scan cards. Captured seeds and prepared libraries are required; HUD and gameplay issues remain.",
                         _ => "Mouse or controller sticks aim, RT fires. Start, coin and operator controls are under Settings. Esc or Back+Start exits.",
                     });
                     ui.add_space(10.0);

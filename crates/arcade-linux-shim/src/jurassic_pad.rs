@@ -3,6 +3,10 @@
 //! to each bound action, so they behave exactly like keyboard keys. Either
 //! stick moves the aim: synthetic SDL_MOUSEMOTION events plus SDL_GetMouseState
 //! report the controller pointer until the real mouse moves again.
+//!
+//! Two players (settings.cfg `players = 2`): controller 2's buttons drive
+//! player two's targets and its stick moves player two's aim, which
+//! `jurassic_controls.rs` feeds to the game as the player-two gun.
 use crate::evdev_pad::{Edges, Reader, bindings};
 use crate::pad::Cursor;
 use std::collections::VecDeque;
@@ -13,6 +17,9 @@ use std::time::Instant;
 
 /// controls.cfg's default controller buttons for Jurassic Park.
 pub const DEFAULT_PAD: &str = "371:16,379:32,383:1,384:2,385:4096,386:8192,333:131072,334:65536";
+/// Controller 2 with two players: the same buttons on player two's targets.
+pub const DEFAULT_PAD_P2: &str =
+    "372:16,380:32,383:1,384:2,385:4096,386:8192,343:131072,344:65536";
 /// First private keysym (SDLK_WORLD_0); SDL 1.2 defines 96 of them.
 pub const KEYSYM_BASE: i32 = 160;
 /// Pointer speed at full stick deflection, as window widths per second.
@@ -22,14 +29,20 @@ const EVENT_SIZE: usize = 20;
 
 pub static WIDTH: AtomicI32 = AtomicI32::new(0);
 pub static HEIGHT: AtomicI32 = AtomicI32::new(0);
+/// Player two's aim in window pixels; -1 until the window size is known.
+static P2_X: AtomicI32 = AtomicI32::new(-1);
+static P2_Y: AtomicI32 = AtomicI32::new(-1);
 
 struct State {
     reader: Reader,
-    bindings: Vec<(u32, u32)>,
+    players: usize,
+    /// Per player; player two's are empty in one-player sessions.
+    bindings: [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS],
     /// (target, keysym) for each bound action.
     sources: Vec<(u32, i32)>,
     edges: Edges,
     cursor: Cursor,
+    cursor_p2: Option<Cursor>,
     /// The controller moved the pointer more recently than the mouse.
     aiming: bool,
     last_real: (i32, i32),
@@ -50,23 +63,51 @@ pub fn sources(bindings: &[(u32, u32)]) -> Vec<(u32, i32)> {
     sources
 }
 
+/// Players in this session (settings.cfg `players`).
+pub fn players() -> usize {
+    static PLAYERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *PLAYERS.get_or_init(crate::evdev_pad::players)
+}
+
+/// Each player's controller bindings.
+fn player_bindings() -> [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS] {
+    let p2 = if players() > 1 {
+        crate::evdev_pad::bindings_p2(DEFAULT_PAD_P2)
+    } else {
+        Vec::new()
+    };
+    [bindings(DEFAULT_PAD), p2]
+}
+
+/// Every player's bindings together (one private keysym per target).
 pub fn configured_bindings() -> Vec<(u32, u32)> {
-    bindings(DEFAULT_PAD)
+    player_bindings().concat()
+}
+
+/// Player two's aim in window pixels, once a window exists.
+pub fn player_two_aim() -> Option<(f32, f32)> {
+    let (x, y) = (P2_X.load(Ordering::Relaxed), P2_Y.load(Ordering::Relaxed));
+    (x >= 0 && y >= 0).then_some((x as f32, y as f32))
 }
 
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let state = guard.get_or_insert_with(|| {
-        let bindings = configured_bindings();
+        let bindings = player_bindings();
+        if players() > 1 {
+            eprintln!("[jurassic] two players: controller 2 is player two");
+        }
         State {
             reader: Reader::new(),
-            sources: sources(&bindings),
+            players: players(),
+            sources: sources(&bindings.concat()),
             bindings,
             edges: Edges::default(),
             cursor: Cursor::new(
                 WIDTH.load(Ordering::Relaxed) / 2,
                 HEIGHT.load(Ordering::Relaxed) / 2,
             ),
+            cursor_p2: None,
             aiming: false,
             last_real: (-1, -1),
             last: Instant::now(),
@@ -97,15 +138,22 @@ fn motion_event(x: i32, y: i32, dx: i32, dy: i32) -> [u8; EVENT_SIZE] {
 /// Once per frame (start of the engine's event drain): read controllers.
 pub fn frame() {
     with(|s| {
-        let state = s.reader.read();
-        if state.held(crate::pad::BACK) && state.held(crate::pad::START) {
+        let states = s.reader.read_players(s.players);
+        if states
+            .iter()
+            .any(|p| p.held(crate::pad::BACK) && p.held(crate::pad::START))
+        {
             eprintln!("[jurassic] Back + Start: exiting");
             std::process::exit(0);
         }
+        let state = states[0];
         let mut changes = Vec::new();
-        s.edges.update(&state, &s.bindings, |target, down| {
-            changes.push((target, down))
-        });
+        let players: Vec<(crate::pad::Pad, &[(u32, u32)])> = (0..s.players)
+            .map(|p| (states[p], s.bindings[p].as_slice()))
+            .collect();
+        s.edges
+            .update_players(&players, |target, down| changes.push((target, down)));
+        drop(players);
         for (target, down) in changes {
             if let Some(&(_, keysym)) = s.sources.iter().find(|x| x.0 == target) {
                 s.queue.push_back(key_event(keysym, down));
@@ -119,6 +167,14 @@ pub fn frame() {
         );
         if width <= 0 || height <= 0 {
             return;
+        }
+        if s.players > 1 {
+            let p2 = s
+                .cursor_p2
+                .get_or_insert_with(|| Cursor::new(width / 2, height / 2));
+            p2.step(states[1].aim(), elapsed, width * SPEED_PER_WIDTH, width, height);
+            P2_X.store(p2.x.clamp(0, width - 1), Ordering::Relaxed);
+            P2_Y.store(p2.y.clamp(0, height - 1), Ordering::Relaxed);
         }
         let (old_x, old_y) = (s.cursor.x, s.cursor.y);
         if s.cursor

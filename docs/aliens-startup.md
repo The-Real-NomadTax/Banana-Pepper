@@ -1,6 +1,6 @@
 # Aliens Armageddon desktop runtime
 
-Status: Aliens opens on the user's display and reaches playable 3D gameplay. The user confirmed playing successfully with working controls. Native desktop mouse maps are enabled, with keyboard **1** for Start and **5** for coin. Audio remains disabled. A complete playthrough, all weapons, player two and physical cabinet hardware are not verified.
+Status: Aliens opens on the user's display and reaches playable 3D gameplay. The user confirmed playing successfully with working controls. Native desktop mouse maps are enabled, with keyboard **1** for Start and **5** for coin. Audio remains disabled. A complete playthrough, all weapons, two-player play and physical cabinet hardware are not verified.
 
 ## Launch
 
@@ -51,6 +51,10 @@ Two native flag-reset sites select the engine's existing desktop input mode. Thi
 
 Test, Start 1 and Start 2 are also re-registered by a second setup routine at `0x08193dba`; those sites use the same keys. Test, Service, Volume and P2 Start were added with customizable controls and still need in-game confirmation. Every executable patch site is fingerprint-checked before writing; original game files remain unchanged.
 
+## Two players
+
+The engine's desktop input mode maps the mouse (sources `0x144`/`0x145`) to both players' aim and menu pointers. It also maps **Q**/**W** to player two's fire and secondary. With `players = 2`, the preparer rewrites the four player-two aim operands (`0x080818d4`, `0x080818e8`, `0x08081988`, `0x0808199c`) to the player-two gun sources `0x183`/`0x184`. Every site is fingerprint-checked first. The shim's watcher thread moves a player-two pointer with controller 2's stick. It copies the mouse records' flags and ranges into the gun records, then sets the raw pixel values through the game's analog setter (`0x081b1234`, records from `0x081b18d8`). Both functions' prologues and mappings are checked before any write. Controller 2's RT/LT press Q/W, and its Start/Coin press the Start 2 and Coin 2 keys. With one player, the image is unchanged. This has not yet been played with two controllers.
+
 ## Quitting
 
 The engine ignores SDL quit requests, and its statically linked SDL loads X11 itself, so the Jurassic-style SDL event hook cannot be used. The launcher gives the window the unique class `BananaPepperAliens` (`SDL_VIDEO_X11_WMCLASS`). A shim thread (`aliens_exit.rs`) then watches it on its own XCB connection:
@@ -64,7 +68,7 @@ XCB is loaded with `dlopen` and reports errors per request, so the game's Xlib e
 
 Verified: rendered attract scenes, mode selection and active gameplay on the desktop. Captures show the health/ammunition HUD, enemies and increasing kill totals; the user explicitly confirmed playing and that controls/visuals work. The session was left running. `runtime/aliens/gameplay-verification.json` records this manual confirmation separately from automatic startup classification.
 
-The original first-probe black-window/null-configuration failure is resolved. Individual captures during transitions can still be black. The supplied/copied save settings use Spanish. Audio quality, advanced control behavior, player two, a full playthrough and cabinet-device protocols remain unverified.
+The original first-probe black-window/null-configuration failure is resolved. Individual captures during transitions can still be black. The supplied/copied save settings use Spanish. Audio quality, advanced control behavior, two-player play, a full playthrough and cabinet-device protocols remain unverified.
 
 ```sh
 cargo run -p arcade-desktop --offline -- --probe-aliens games

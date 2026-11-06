@@ -13,18 +13,26 @@ mod crosshair {
     use super::*;
     /// Padded to a power of two for old GL 1.x drivers.
     const SIDE: u32 = 128;
-    static TEXTURE: OnceLock<Option<(u32, u32, u32)>> = OnceLock::new();
+    /// Per player; player two gets the other colour.
+    static TEXTURE: [OnceLock<Option<(u32, u32, u32)>>; 2] = [OnceLock::new(), OnceLock::new()];
 
     pub fn enabled() -> bool {
         style().is_some()
     }
     fn style() -> Option<&'static [u8]> {
-        std::env::var("ARCADE_CROSSHAIR")
-            .ok()
-            .and_then(|id| arcade_core::crosshair::png(&id))
+        player_style(0)
     }
-    unsafe fn upload() -> Option<(u32, u32, u32)> {
-        let image = match image::load_from_memory_with_format(style()?, image::ImageFormat::Png) {
+    fn player_style(player: usize) -> Option<&'static [u8]> {
+        let id = std::env::var("ARCADE_CROSSHAIR").ok()?;
+        arcade_core::crosshair::png(&id)?;
+        arcade_core::crosshair::png(if player == 0 {
+            &id
+        } else {
+            arcade_core::crosshair::player_two(&id)
+        })
+    }
+    unsafe fn upload(player: usize) -> Option<(u32, u32, u32)> {
+        let image = match image::load_from_memory_with_format(player_style(player)?, image::ImageFormat::Png) {
             Ok(image) => image.to_rgba8(),
             Err(e) => {
                 eprintln!("[water] crosshair disabled: {e}");
@@ -64,14 +72,21 @@ mod crosshair {
         );
         glPopClientAttrib();
         glPopAttrib();
-        eprintln!("[water] crosshair enabled ({w}x{h})");
+        eprintln!("[water] player {} crosshair enabled ({w}x{h})", player + 1);
         Some((texture, w, h))
     }
+    /// Every player's crosshair.
     pub unsafe fn draw() {
-        let Some((texture, w, h)) = *TEXTURE.get_or_init(|| upload()) else {
+        for player in 0..jamma::players() {
+            draw_player(player);
+        }
+    }
+    unsafe fn draw_player(player: usize) {
+        let player = player.min(TEXTURE.len() - 1);
+        let Some((texture, w, h)) = *TEXTURE[player].get_or_init(|| upload(player)) else {
             return;
         };
-        let (x, y) = jamma::aim_position();
+        let (x, y) = jamma::aim_position(player);
         static SIZE: OnceLock<u32> = OnceLock::new();
         let size = *SIZE.get_or_init(|| {
             arcade_core::crosshair::size_percent(

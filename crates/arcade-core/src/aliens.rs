@@ -20,9 +20,26 @@ const SWITCH_SITES: &[(u32, &[usize])] = &[
     (0x14d, &[0x0808147a]),
 ];
 
+/// Player two's desktop-mode aim maps (game aim x/y and menu pointer x/y).
+/// They read the mouse (sources 0x144/0x145) like player one's; two-player
+/// images read the player-two gun sources 0x183/0x184 instead, which the
+/// guest shim fills from controller 2 (`aliens_exit.rs`).
+const PLAYER_TWO_AIM_SITES: &[(usize, u32, u32)] = &[
+    (0x080818d4, 0x144, 0x183),
+    (0x080818e8, 0x145, 0x184),
+    (0x08081988, 0x144, 0x183),
+    (0x0808199c, 0x145, 0x184),
+];
+
 /// Writes a separate runtime image and returns its SHA-256. `keys` holds
 /// (cabinet switch source, SDL key symbol) pairs from [`crate::controls`].
-pub fn prepare(source: &Path, destination: &Path, keys: &[(u32, u32)]) -> Result<String, String> {
+/// `two_players` gives player two its own (controller 2) aim.
+pub fn prepare(
+    source: &Path,
+    destination: &Path,
+    keys: &[(u32, u32)],
+    two_players: bool,
+) -> Result<String, String> {
     let mut bytes = fs::read(source).map_err(|e| e.to_string())?;
     if format!("{:x}", Sha256::digest(&bytes)) != ORIGINAL_SHA256 {
         return Err("Unrecognized Aliens build; no changes applied".into());
@@ -108,6 +125,17 @@ pub fn prepare(source: &Path, destination: &Path, keys: &[(u32, u32)]) -> Result
             patched.push((offset + 3, key));
         }
     }
+    for &(address, mouse, gun) in PLAYER_TWO_AIM_SITES {
+        let offset = address - 0x08048000;
+        if bytes.get(offset..offset + 3) != Some(&[0xc7, 0x04, 0x24])
+            || bytes.get(offset + 3..offset + 7) != Some(mouse.to_le_bytes().as_slice())
+        {
+            return Err("Unsupported Aliens player-two aim mapping; no snapshot written".into());
+        }
+        if two_players {
+            patched.push((offset + 3, gun));
+        }
+    }
     for (offset, key) in patched {
         bytes[offset..offset + 4].copy_from_slice(&key.to_le_bytes());
     }
@@ -180,7 +208,7 @@ mod tests {
         let keys = crate::controls::Bindings::default()
             .codes("aliens")
             .unwrap();
-        assert!(prepare(&source, &destination, &keys).is_err());
+        assert!(prepare(&source, &destination, &keys, true).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"unknown game");
         assert_eq!(fs::read(&destination).unwrap(), b"existing snapshot");
         assert!(!destination.with_extension("preparing").exists());

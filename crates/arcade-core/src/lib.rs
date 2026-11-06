@@ -141,23 +141,24 @@ pub fn scan(root: &Path) -> Vec<GameReport> {
             blockers = vec![
                 "Linux desktop and Water ELF32 backends support the fingerprinted build; Windows also offers WSL2.".into(),
                 "Virtual JAMMA API supports switch edges and mouse gun callbacks; physical serial protocol is not implemented.".into(),
-                "OSS playback is bridged to PulseAudio/PipeWire; full scored gameplay remains unverified.".into(),
+                "OSS playback is bridged to PulseAudio/PipeWire.".into(),
+                "Confirmed: the game fully loads into scored gameplay and high scores save correctly.".into(),
             ];
         }
         if profile.id=="ford" {blockers=vec!["Native Windows or Linux Wine with the same custom cabinet adapter; original files and bundled loaders are not run.".into(),"Keyboard driving; physical wheels, force feedback and cabinet networking remain unimplemented.".into()];}
         if profile.id == "jurassic" {
             blockers = vec![
-                "Native original build exits before engine startup while connecting to a Sentinel/HASP service on localhost:1947.".into(),
-                "Supplied modified build crashes during native initialization.".into(),
-                "Legacy 32-bit Theora and PhysX 2.8.1 libraries are staged locally; graphics and cabinet I/O are not yet validated.".into(),
+                "Runs from a Rust-prepared desktop profile that omits unavailable cabinet security initialization.".into(),
+                "Mouse aims and fires for player one; main audio plays through PulseAudio/PipeWire.".into(),
+                "Confirmed: the game fully loads into scored gameplay and high scores save correctly.".into(),
             ];
         }
         if profile.id == "minecraft" {
             blockers = vec![
                 "Windows uses WSL2 with WSLg; Linux uses the same isolated runner directly.".into(),
                 "Run startup diagnostics to check GLU, LAPACK, wireless/PCSC and FMOD 1.10 libraries.".into(),
-                "The measured startup failure is HASP status 7 (protection key not found). Startup diagnostics recheck the actual API status.".into(),
-                "Cabinet joystick, card-reader and security interfaces are not implemented; gameplay is unverified.".into(),
+                "Play uses locally captured runtime/minecraft/seeds.json and prepared libraries; diagnostics retain the original HASP startup check.".into(),
+                "The seeded runner supplies virtual joysticks, keyboard input and card scanners. HUD issues remain; full gameplay is unverified.".into(),
                 "Supplied gamedump.exec is a pre-existing modified build; original game and cabinet boot scripts are never run.".into(),
             ];
         }

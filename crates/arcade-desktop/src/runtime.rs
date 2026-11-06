@@ -63,13 +63,20 @@ fn is_gamepad(caps: &str) -> bool {
 }
 
 /// Controller settings for a game: `ARCADE_PAD` (`target:mask,...`),
-/// `ARCADE_PAD_KEYS` for Aliens and `ARCADE_PAD_DEVICES` (colon-separated
+/// `ARCADE_PAD_P2` for controller 2 in two-player games, `ARCADE_PAD_KEYS`
+/// (and `_P2`) for Aliens and `ARCADE_PAD_DEVICES` (colon-separated
 /// device nodes) for the Linux sandboxes.
 pub fn pad_env(project: &Path, game: &str) -> Result<Vec<(&'static str, String)>, String> {
     let controls = arcade_core::controls::Bindings::load(&project.join("controls.cfg"))?;
     let mut env = vec![("ARCADE_PAD", controls.pad_env_value(game)?)];
     if game == "aliens" {
         env.push(("ARCADE_PAD_KEYS", controls.pad_key_env_value(game)?));
+        env.push(("ARCADE_PAD_KEYS_P2", controls.pad_key_env_value_p2(game)?));
+    }
+    // Controller 2 in two-player games (used when settings.cfg players = 2).
+    let p2 = controls.pad_env_value_p2(game)?;
+    if !p2.is_empty() {
+        env.push(("ARCADE_PAD_P2", p2));
     }
     #[cfg(target_os = "linux")]
     env.push((

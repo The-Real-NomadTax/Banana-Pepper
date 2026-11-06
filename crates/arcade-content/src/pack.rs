@@ -17,6 +17,20 @@ pub struct Progress {
     pub bytes_total: u64,
     pub files_done: usize,
     pub files_total: usize,
+    pub skipped_links: Vec<String>,
+}
+
+impl Progress {
+    pub fn skipped_links_message(&self) -> String {
+        if self.skipped_links.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\nSkipped broken symbolic links:\n{}",
+                self.skipped_links.join("\n")
+            )
+        }
+    }
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
@@ -28,7 +42,9 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
 }
 
 /// Archive the folder's contents (no extra enclosing directory). The output parent
-/// must exist and be outside the source. Links and special files are rejected.
+/// must exist and be outside the source. Symbolic links are materialized as files
+/// or directories, including targets outside the source. Broken links are skipped
+/// and reported in Progress. Directory cycles and special files are rejected.
 /// Callers should keep the game closed while converting it.
 pub fn convert(
     source: &Path,
@@ -68,9 +84,9 @@ pub fn convert(
         };
         report(progress.clone());
         let mut entries = Vec::new();
-        let mut pending = vec![(source.clone(), String::new(), 0)];
+        let mut pending = vec![(source.clone(), String::new(), 0, vec![source.clone()])];
         let mut names = HashSet::new();
-        while let Some((directory, prefix, depth)) = pending.pop() {
+        while let Some((directory, prefix, depth, ancestors)) = pending.pop() {
             check_cancel(cancel)?;
             if depth > MAX_DEPTH {
                 return Err("Folder nesting exceeds 64 directories.".into());
@@ -100,12 +116,30 @@ pub fn convert(
                         "ZArchive cannot store names differing only by case: {path}"
                     ));
                 }
-                let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
-                if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
-                    return Err(format!("Links and special files are unsupported: {path}"));
+                let link_metadata =
+                    fs::symlink_metadata(entry.path()).map_err(|e| format!("{path}: {e}"))?;
+                let resolved = match entry.path().canonicalize() {
+                    Ok(target) => target,
+                    Err(e)
+                        if link_metadata.file_type().is_symlink()
+                            && e.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        progress.skipped_links.push(path);
+                        continue;
+                    }
+                    Err(e) => return Err(format!("Cannot resolve {path}: {e}")),
+                };
+                let metadata = fs::metadata(&resolved).map_err(|e| format!("{path}: {e}"))?;
+                if !(metadata.is_file() || metadata.is_dir()) {
+                    return Err(format!("Special files are unsupported: {path}"));
                 }
                 if metadata.is_dir() {
-                    pending.push((entry.path(), path.clone(), depth + 1));
+                    if ancestors.contains(&resolved) {
+                        return Err(format!("Symbolic link directory cycle: {path}"));
+                    }
+                    let mut child_ancestors = ancestors.clone();
+                    child_ancestors.push(resolved.clone());
+                    pending.push((entry.path(), path.clone(), depth + 1, child_ancestors));
                 } else {
                     progress.bytes_total = progress
                         .bytes_total
@@ -113,7 +147,7 @@ pub fn convert(
                         .ok_or("Folder size overflow")?;
                     progress.files_total += 1;
                 }
-                entries.push((entry.path(), path, metadata));
+                entries.push((entry.path(), path, metadata, resolved));
                 if entries.len() > MAX_ENTRIES || progress.bytes_total > MAX_UNPACKED_BYTES {
                     return Err(
                         "Folder exceeds the loader's one million entries / 2 TiB limits.".into(),
@@ -131,9 +165,12 @@ pub fn convert(
         let mut buffer = vec![0; 1024 * 1024];
         progress.phase = "Compressing";
         report(progress.clone());
-        for (disk_path, path, before) in entries {
+        for (disk_path, path, before, resolved) in entries {
+            if disk_path.canonicalize().ok().as_ref() != Some(&resolved) {
+                return Err(format!("Source changed during conversion: {path}"));
+            }
             check_cancel(cancel)?;
-            let current = fs::symlink_metadata(&disk_path).map_err(|e| e.to_string())?;
+            let current = fs::metadata(&resolved).map_err(|e| e.to_string())?;
             if current.file_type() != before.file_type()
                 || current.len() != before.len()
                 || current.modified().ok() != before.modified().ok()
@@ -144,7 +181,7 @@ pub fn convert(
                 writer.create_dir_all(&path).map_err(|e| e.to_string())?;
                 continue;
             }
-            let mut input = File::open(&disk_path).map_err(|e| format!("{path}: {e}"))?;
+            let mut input = File::open(&resolved).map_err(|e| format!("{path}: {e}"))?;
             let mut entry = writer.start_file(&path).map_err(|e| e.to_string())?;
             let mut copied = 0;
             progress.path = path.clone();
