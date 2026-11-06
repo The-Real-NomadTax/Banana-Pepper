@@ -88,6 +88,26 @@ options a profile does not declare.
    runtime.
 9. Binary patches apply only to identified builds, on staged copies.
 10. Game crates depend on shared crates, never the reverse.
+11. Registered game actions are implemented in Rust. Do not invoke Python or
+    shell launchers, embed interpreter payloads, or ship runtime scripts.
+    Game-specific preparation, input, saves and probe policy stay in the game's
+    crate; reusable sandbox, Wine and WSL mechanisms belong in the backends.
+
+## Compiled sessions
+
+`banana-native::Sandbox` builds the isolated process filesystem and desktop,
+GPU and audio interfaces. `banana-wine::Prefix` manages private Wine prefixes.
+`banana-wsl` forwards argument vectors directly through `wsl.exe --exec` to
+`banana-game-host`, which dispatches through the same `GameCompat` registry as
+the desktop. `banana-session` supervises native guests and typed diagnostic
+events, with owned child processes and bounded auxiliary tools. Neither helper
+knows individual titles. Game crates own their images, mounts and event plans.
+
+Minecraft's crate owns import reconstruction, captured-seed preparation,
+library setup, direct evdev/uinput access and the compiled card utility.
+The synthetic image regression test pins the old runner's byte-for-byte output.
+No interpreter or source-checkout file is needed at runtime. Source-only build
+and cabinet-record capture tools may still use platform scripting languages.
 
 ## Known gaps
 
@@ -99,7 +119,6 @@ above and are tracked for follow-up work:
 - `backends/water`'s `water-buck` worker carries Big Buck's JAMMA hooks. The
   game-specific parts should move to `game-compat/big-buck-hunter`, leaving
   Water as a generic ELF32 runtime.
-- `minecraft-dungeons` uses its own WSL invocation rather than `banana-wsl`.
 - The desktop's settings window still has some per-tab layout that assumes
   the current set of settings; the backend selector, audio routing, status,
   hints and extra actions are now capability-driven.
@@ -107,5 +126,7 @@ above and are tracked for follow-up work:
   frontend on `banana-ffi` is the next step; the FFI crate exposes library
   scanning and launching, and Kotlin bindings are generated with
   `uniffi-bindgen`.
-- `runtime` paths and guest build outputs are resolved from the repository
-  root at compile time (`CARGO_MANIFEST_DIR`), as before.
+
+Distribution resources are resolved from the executable's package marker;
+development builds use the checkout layout. `just build` assembles an
+allowlisted portable package in `target/dist` without local runtime data.

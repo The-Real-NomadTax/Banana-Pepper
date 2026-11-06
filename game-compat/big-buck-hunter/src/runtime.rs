@@ -6,10 +6,7 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
     let root = materialized.as_path();
     use banana_settings::Backend;
     use std::{fs, process::Command};
-    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
+    let project = banana_runtime::project_root()?;
     let settings = banana_runtime::game_settings(&project, "big_buck")?;
     let backend = match std::env::var("ARCADE_BBH_BACKEND").as_deref() {
         Ok("water" | "native") => Backend::Water,
@@ -27,9 +24,13 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
     if backend == Backend::Wsl {
         return wsl(&project, &game, probe);
     }
-    let worker = project.join("target/i686-pc-windows-msvc/debug/water-buck.exe");
+    let worker = banana_runtime::resource_path(
+        &project,
+        "helpers/water-buck.exe",
+        "target/i686-pc-windows-msvc/release/water-buck.exe",
+    );
     if !worker.is_file() {
-        return Err("Build Water first: cargo build -p banana-water --bin water-buck --target i686-pc-windows-msvc".into());
+        return Err("Build Water first: just build".into());
     }
     let output = project.join(if probe {
         "runtime/big-buck-native-probe"
@@ -101,14 +102,15 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
     ))
 }
 
-/// The Linux launcher inside WSL, built by scripts/build-big-buck-wsl.sh.
+/// The compiled registry host inside WSL, built by `just build-wsl`.
 #[cfg(windows)]
 fn wsl(project: &Path, game: &Path, probe: bool) -> Result<String, String> {
-    let flag = if probe { "--probe-big-buck" } else { "--launch-big-buck" };
-    let status = banana_wsl::run_in_project(
+    let status = banana_wsl::run_game(
         project,
-        "target/wsl/debug/arcade-desktop",
-        &[flag.into(), banana_wsl::path(game)?],
+        &banana_runtime::linux_host(project),
+        "big-buck",
+        if probe { "probe" } else { "launch" },
+        game,
     )?;
     if !status.success() {
         return Err(format!(
@@ -123,7 +125,10 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
     let materialized = banana_runtime::content::resolve(root)?;
     let root = materialized.as_path();
     if probe {
-        crate::linux::probe_big_buck(root, Path::new("runtime/big-buck"))
+        crate::linux::probe_big_buck(
+            root,
+            &banana_runtime::project_root()?.join("runtime/big-buck"),
+        )
     } else {
         crate::linux::launch_big_buck(root)
     }

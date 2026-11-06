@@ -20,7 +20,7 @@ cargo build -p banana-super-cars-hook --target i686-pc-windows-msvc --release
 cargo run -p banana-desktop -- --launch-super-cars games
 ```
 
-You can also use **Open Super Cars on my display** in the workbench. `scripts/supercars-run.py` checks `sdaemon.exe` against SHA-256 `0cddbdbf1d107d27dc668897d7851b6ac96b4349320551d800504b1c50b195ba`, then:
+You can also use **Open Super Cars on my display** in the workbench. The Rust game crate checks `sdaemon.exe` against SHA-256 `0cddbdbf1d107d27dc668897d7851b6ac96b4349320551d800504b1c50b195ba`, then:
 
 1. creates `runtime/supercars/prefix` on first launch and removes its `Z:` drive, so the game only sees `C:`;
 2. maps the game into `C:\rawart`, the cabinet path. Large assets are symlinks to the originals. Small files the game rewrites (`prefs`, `audits`, `*.hst`, logs) are private copies made once and kept between sessions;

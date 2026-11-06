@@ -19,6 +19,7 @@ banana-native.workspace = true
 banana-wine.workspace = true
 banana-wsl.workspace = true
 banana-water.workspace = true
+banana-runtime.workspace = true
 
 [dev-dependencies]
 banana-core.workspace = true

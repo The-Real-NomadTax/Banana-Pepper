@@ -1,3 +1,9 @@
+> Historical verification record. References below to Python/shell launchers
+> describe earlier implementations. Registered game actions now use Rust in
+> `game-compat/` with compiled native/Wine/WSL helpers; those launch scripts
+> have been retired. Historical gameplay observations do not verify the new
+> orchestration implementation. See `docs/workspace.md` for the current design.
+
 # Initial build verification
 
 Verified on the current Linux x86-64 host:

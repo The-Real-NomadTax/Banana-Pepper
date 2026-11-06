@@ -1,5 +1,7 @@
 # Jurassic Park 2015: native startup investigation
 
+Current application launches are implemented in the Rust game crate. The debugger exploration described below is a historical investigation; it is not part of the shipped runtime.
+
 **Desktop controls now reach scored gameplay.** Verified on the user's NVIDIA RTX 3050 display using the Rust-prepared desktop profile, without GDB or a timeout: Start opens mission selection, mouse aim produces a visible reticle, and held fire produces shots and a score of 75. Full-game stability, physical cabinet devices and Jurassic audio remain unfinished. Two-player mode (below) is implemented but not yet played.
 
 ## Open on the desktop
@@ -43,7 +45,7 @@ No TeknoParrot binary, profile or launcher is executed. All original game files 
 Stage dependencies locally (already done on this machine):
 
 ```sh
-./scripts/setup-jurassic-libs.sh
+just setup-runtime
 ```
 
 The script extracts NVIDIA's original PhysX 2.8.1 Linux libraries and Arch's archived 32-bit Theora library under `runtime/jurassic/libs/`. It checks pinned SHA256 hashes and does not install system packages. Existing host 32-bit glibc, SDL 1.2 compatibility, GL/GLU/GLUT, udev, X11 and C++ libraries are also used.
@@ -101,9 +103,9 @@ The supplied cabinet command uses `-n`, but this image's command-line dispatch d
 ### Graphics/resource exploration (explicit debugger skips)
 
 ```sh
-python3 scripts/jurassic-explore.py
+cargo run -p banana-desktop -- --probe-jurassic-native games
 # Shorter check:
-python3 scripts/jurassic-explore.py --seconds 10
+cargo run -p banana-desktop -- --probe-jurassic-native games
 ```
 
 This is a bounded development experiment, not a playable launch mode. It requires GDB, Bubblewrap, the prepared native image/shim/libraries, the existing private Xvfb tool, ImageMagick and xdotool. It runs for up to 75 seconds and captures private-display frames at 10-second intervals. Its GDB commands deliberately skip `GameInitDongle`; normal native mode does not. It also redirects `SysLog` to printf and enables verbose shader error logging in process memory.

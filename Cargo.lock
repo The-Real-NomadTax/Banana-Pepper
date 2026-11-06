@@ -234,6 +234,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "banana-dist"
+version = "0.1.0"
+dependencies = [
+ "banana-compat",
+ "banana-input",
+ "banana-runtime",
+ "banana-settings",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "banana-ffi"
 version = "0.1.0"
 dependencies = [
@@ -304,6 +317,7 @@ dependencies = [
  "goblin 0.10.7",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -315,6 +329,8 @@ dependencies = [
  "banana-input",
  "banana-runtime",
  "banana-settings",
+ "banana-wsl",
+ "libc",
  "serde_json",
  "sha2",
 ]
@@ -328,6 +344,7 @@ dependencies = [
  "banana-input",
  "banana-runtime",
  "banana-settings",
+ "banana-wine",
  "serde_json",
  "sha2",
 ]
@@ -359,6 +376,7 @@ name = "banana-native"
 version = "0.1.0"
 dependencies = [
  "banana-api",
+ "libc",
 ]
 
 [[package]]
@@ -369,7 +387,14 @@ dependencies = [
  "banana-content",
  "banana-core",
  "banana-input",
+ "banana-native",
  "banana-settings",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "zstd-sys",
 ]
 
 [[package]]

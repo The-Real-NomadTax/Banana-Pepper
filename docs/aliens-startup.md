@@ -74,7 +74,7 @@ The original first-probe black-window/null-configuration failure is resolved. In
 
 ```sh
 cargo run -p banana-desktop --offline -- --probe-aliens games
-python3 scripts/aliens-run.py --games-root games --debug
+# Historical debugger commands remain in scripts/aliens-probe.gdb.
 ```
 
-The normal probe times out after 45 seconds and records startup logs/captures under `runtime/aliens/`. Automatic startup output does not certify gameplay. Debugger mode stops at a decompression breakpoint; `--plaintext-assets` is an optional diagnostic overlay, not the normal runtime.
+The normal probe times out after 45 seconds and records startup logs/captures under `runtime/aliens/`. Automatic startup output does not certify gameplay. The Rust probe preserves bounded startup observation. The old decompression debugger/plaintext overlay was an investigation tool, not a registered application launch mode.

@@ -1,5 +1,11 @@
 # Minecraft Dungeons Arcade on Windows
 
+The application runtime now uses a compiled Rust `banana-game-host` through
+`banana-wsl`; build optional guest components with `just build-wsl`. The same
+Rust compatibility crate handles Linux and WSL. The licensing investigations
+below are historical; current seeded-session notes are in [Minecraft on Linux](minecraft-linux.md).
+No Python or shell interpreter is required by the runtime.
+
 **Current direction:** WSL2 remains a Windows backend option. Development of
 the separate native Linux translation engine is paused at the user's request
 while work focuses on Minecraft through WSL2.
@@ -81,7 +87,7 @@ stale library addresses from the machine where it was dumped. Banana pepper rebu
 659 import relocations from the named records retained in the snapshot, adds a
 data LOAD segment for normal ELF linker metadata, and lets the Linux linker
 resolve the imports. Game instruction bytes and security checks remain
-unchanged in this normal runtime copy. `scripts/test-minecraft-prepare.py`
+unchanged in this normal runtime copy. The Rust synthetic-image regression test
 validates this against a local supplied snapshot without shipping the binary.
 
 The supplied `game` file was also tested in a separate copy and exited with

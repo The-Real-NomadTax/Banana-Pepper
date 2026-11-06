@@ -55,6 +55,27 @@ also needs a C++20 compiler.
 cargo run -p banana-desktop
 ```
 
+With `just` installed, `just` builds the release app and the guest components
+for your host and assembles a portable folder under
+`target/dist/banana-pepper-<os>-x86_64/`; `just run` builds and opens the workbench.
+Copy the entire distribution folder to a writable location to use or share it.
+It contains the workbench, ZAR converter, compiled helpers, adapters,
+documentation, fresh default settings and a SHA-256 file manifest. It excludes
+your game files, saves, caches and personal settings. Build output is replaced
+on each build, so use a separate copy for play. WSL guest components and external
+runtime libraries remain separate prerequisites, described in its `README.txt`.
+All registered game backends are Rust; distributions contain no runtime scripts
+and require no Python or shell interpreter. `just build-wsl` on Windows builds
+and packages the optional Rust Linux hosts and guest adapters in WSL.
+The package finds resources beside its executable and needs no source checkout.
+`arcade-desktop --runtime-info` shows the resolved settings and cache paths.
+Windows builds require
+LLVM's `lld-link` for the 32-bit guest components. Linux builds additionally
+prepare the local runtime libraries and require a 32-bit C linker/development
+libraries plus Xvfb. Linux guest components for WSL must be built inside Linux;
+see [Big Buck on Windows](docs/big-buck-windows.md) and
+[Minecraft on Windows](docs/minecraft-windows.md) for setup.
+
 Guest components are built for their own targets:
 
 ```sh
@@ -251,6 +272,7 @@ titles. The framework crates never name an individual title. See
 - `backends/`: `native`, `wine`, `water` and `wsl`.
 - `guest/`: the i686 Linux shim, and the freestanding Windows guest runtime and input readers.
 - `game-compat/`: one crate per title, with any title-specific guest DLLs beside it.
-- `tools/zar`: the ZArchive converter.
+- `tools/zar`: the ZArchive converter. `tools/dist`: portable distribution assembly.
+- `scripts/`: development/build helpers and cabinet-record capture tools; no game launchers.
 - `docs/`: architecture notes and per-title startup and verification notes.
 - `runtime/` and `games/`: generated runtime copies, caches and saves, and your local game files. Neither is under source control.

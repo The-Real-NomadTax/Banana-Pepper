@@ -1,0 +1,17 @@
+[package]
+name = "banana-dist"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Assemble relocatable Banana Pepper desktop distributions"
+
+[dependencies]
+banana-compat.workspace = true
+banana-input.workspace = true
+banana-settings.workspace = true
+banana-runtime.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
