@@ -75,6 +75,9 @@ fn fail(errno: c_int) -> c_int {
 /// C open() arguments, including mode when O_CREAT/O_TMPFILE requires it.
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
+// The naked entry preserves the full optional third argument on the i386
+// caller's stack. Rust cannot spell a defined C variadic function on stable.
+#[allow(invalid_runtime_symbol_definitions)]
 pub unsafe extern "C" fn open(_path: *const c_char, _flags: c_int) -> c_int {
     core::arch::naked_asm!("jmp arcade_oss_open_bridge");
 }

@@ -3,6 +3,9 @@ mod jurassic_runtime;
 mod runtime;
 mod minecraft_runtime;
 mod supercars_runtime;
+mod ford_runtime;
+mod big_buck_runtime;
+mod wsl_runtime;
 
 use arcade_core::controls::{self, Bindings};
 use arcade_core::settings::{self, Renderer, Settings, VSync};
@@ -22,6 +25,11 @@ fn main() {
 
 fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|a|a=="--launch-ford"){
+        if args.len()>2{return Err("Usage: arcade-desktop --launch-ford [game-folder-or-library-root]".into());}
+        let root=args.get(1).map(PathBuf::from).unwrap_or_else(||"games".into());
+        println!("{}",ford_runtime::launch(&root)?);return Ok(());
+    }
     if args.first().is_some_and(|a| a == "--probe-minecraft" || a == "--launch-minecraft" || a == "--setup-minecraft-libs") {
         if args.len() > 2 { return Err("Usage: arcade-desktop --probe-minecraft|--launch-minecraft|--setup-minecraft-libs [game-folder-or-library-root]".into()); }
         let root = args.get(1).map(PathBuf::from).unwrap_or_else(|| "games".into());
@@ -107,7 +115,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "Launching Big Buck Hunter on your display. Mouse = aim/fire, right click = pump, Esc = exit; keys come from controls.cfg."
         );
-        println!("{}", runtime::launch_big_buck(&root)?);
+        println!("{}", big_buck_runtime::run(&root,false)?);
         return Ok(());
     }
     if args.first().is_some_and(|a| a == "--probe-big-buck") {
@@ -120,7 +128,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|| "games".into());
         println!(
             "{}",
-            runtime::probe_big_buck(&root, &PathBuf::from("runtime/big-buck"))?
+            big_buck_runtime::run(&root,true)?
         );
         return Ok(());
     }
@@ -290,6 +298,12 @@ fn settings_window(ctx: &egui::Context, app: &mut SettingsUi, controls: &mut Con
         .default_pos(ctx.content_rect().center())
         .default_width(560.0)
         .show(ctx, |ui| {
+            if id=="big_buck" && cfg!(windows){
+                let game=app.settings.game_mut(id).unwrap();let previous=game.backend;
+                ui.horizontal(|ui|{ui.label("Execution backend");egui::ComboBox::from_id_salt("big-buck-backend").selected_text(game.backend.label()).show_ui(ui,|ui|{for backend in settings::Backend::ALL{ui.selectable_value(&mut game.backend,backend,backend.label());}});});
+                if game.backend!=previous{app.save("Big Buck backend changed");}
+                ui.small("Automatic uses the Water runtime. WSL2 remains available with Linux dependencies installed.");
+            }
             ui.horizontal(|ui| {
                 for (tab, label) in [
                     (SettingsTab::Controls, "🎮 Controls"),
@@ -342,7 +356,7 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
             egui::ComboBox::from_id_salt(("resolution", profile.id))
                 .selected_text(game.resolution_text())
                 .show_ui(ui, |ui| {
-                    let mut options = settings::RESOLUTIONS.to_vec();
+                    let mut options = if profile.id=="ford"{vec![(640,480),(800,600),(1024,768),(1280,1024),(1600,1200)]}else{settings::RESOLUTIONS.to_vec()};
                     if !options.contains(&current) {
                         options.push(current); // Custom size from settings.cfg.
                     }
@@ -382,23 +396,24 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
             ui.end_row();
 
             ui.label("VSync");
-            ui.horizontal(|ui| {
+            ui.add_enabled_ui(!(profile.id=="ford"&&cfg!(windows)),|ui| {ui.horizontal(|ui| {
                 for v in VSync::ALL {
                     if ui.radio_value(&mut game.vsync, v, v.label()).clicked() {
                         change = Some(format!("VSync {}", v.label().to_ascii_lowercase()));
                     }
                 }
-            });
+            });});
             ui.end_row();
 
             ui.label("Renderer");
             ui.vertical(|ui| {
                 for r in Renderer::ALL {
-                    let mut label = r.label().to_owned();
+                    let mut label = if cfg!(windows)&&profile.id=="big_buck"&&game.backend!=settings::Backend::Wsl&&r==Renderer::Software{"Software (Windows OpenGL)".to_owned()}else{r.label().to_owned()};
                     if r == profile.default_renderer {
                         label += "  (default)";
                     }
-                    if ui.radio_value(&mut game.renderer, r, label).clicked() {
+                    if ui.add_enabled(!(profile.id=="ford"&&cfg!(windows)&&r==Renderer::Software),egui::RadioButton::new(game.renderer==r,label)).clicked() {
+                        game.renderer=r;
                         change = Some(format!("Renderer {}", r.id()));
                     }
                 }
@@ -417,6 +432,7 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
 fn audio_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings::Profile) {
     let mut change = None;
     let game = app.settings.game_mut(profile.id).expect("profile settings");
+    let windows_audio=cfg!(windows)&&(profile.id=="ford"||(profile.id=="big_buck"&&game.backend!=settings::Backend::Wsl));
     egui::Grid::new(("audio", profile.id))
         .num_columns(2)
         .spacing([16.0, 10.0])
@@ -431,7 +447,7 @@ fn audio_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings
             ui.end_row();
 
             ui.label("Output device");
-            ui.add_enabled_ui(game.audio, |ui| {
+            ui.add_enabled_ui(game.audio&&!windows_audio, |ui| {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut game.audio_sink)
                         .hint_text("System default")
@@ -452,7 +468,7 @@ fn audio_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings
             ui.end_row();
         });
     ui.add_space(6.0);
-    ui.small("Output device is a PulseAudio/PipeWire sink name (see `pactl list short sinks`). Leave empty for the default output. Use the game's own operator menu for in-game volume.");
+    ui.small(if windows_audio{"Uses the default Windows sound output. Select its device and volume in Windows sound settings."}else{"Output device is a PulseAudio/PipeWire sink name. Leave empty for the default output."});
     if let Some(change) = change {
         app.save(&change);
     }
@@ -599,6 +615,7 @@ impl eframe::App for ArcadeApp {
             match rx.try_recv() {
                 Ok(reports) => {
                     self.reports = reports;
+                    if self.reports.get(self.selected).is_none_or(|r|r.binary.is_none()) {self.selected=self.reports.iter().position(|r|r.binary.is_some()).unwrap_or(0);}
                     self.pending = None;
                     self.message =
                         "Inspection complete. Choose a game for launch options and runtime requirements."
@@ -617,7 +634,7 @@ impl eframe::App for ArcadeApp {
                     if result.is_ok()
                         && !self.desktop_running
                         && let Ok(pixels) =
-                            image::open("runtime/big-buck/screen.png").map(|i| i.to_rgba8())
+                            image::open(if cfg!(windows){"runtime/big-buck-native-probe/screen.png"}else{"runtime/big-buck/screen.png"}).map(|i| i.to_rgba8())
                     {
                         let size = [pixels.width() as usize, pixels.height() as usize];
                         let color = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_raw());
@@ -722,6 +739,7 @@ impl eframe::App for ArcadeApp {
                 ui.label(RichText::new(match report.profile.id.as_str() {
                     "minecraft" => "EXPERIMENTAL — diagnose Linux startup and licensing",
                     "big-buck" => "EXPERIMENTAL — virtual JAMMA inputs; gameplay incomplete",
+                    "ford" => "EXPERIMENTAL — desktop cabinet adapter",
                     "aliens" | "jurassic" if cfg!(target_os = "linux") => "EXPERIMENTAL — Linux desktop gameplay",
                     _ => "Runtime adapter unavailable on this host",
                 }).color(Color32::from_rgb(244, 188, 95)));
@@ -772,9 +790,9 @@ impl eframe::App for ArcadeApp {
                         self.screenshot=None;
                         self.message="Big Buck Hunter running on your display. Close the game or press Esc to return.".into();
                         let repaint=ctx.clone();
-                        std::thread::spawn(move || {let _=tx.send(runtime::launch_big_buck(&root));repaint.request_repaint();});
+                        std::thread::spawn(move || {let _=tx.send(big_buck_runtime::run(&root,false));repaint.request_repaint();});
                     }
-                    ui.label("Experimental Linux backend: private display with scripted switch and mouse inputs.");
+                    ui.label(if cfg!(windows){"Windows: Water runtime by default; choose WSL2 under Settings. The progression probe opens a visible window."}else{"Linux progression probe: private display with scripted inputs."});
                     if ui.add_enabled(self.probe.is_none(), egui::Button::new("Test Big Buck Hunter progression")).clicked() {
                         self.screenshot = None;
                         self.desktop_running=false;
@@ -784,7 +802,7 @@ impl eframe::App for ArcadeApp {
                         self.message = "Testing Big Buck Hunter on a private display…".into();
                         let repaint = ctx.clone();
                         std::thread::spawn(move || {
-                            let result = runtime::probe_big_buck(&root, &PathBuf::from("runtime/big-buck"));
+                            let result = big_buck_runtime::run(&root,true);
                             let _ = tx.send(result);
                             repaint.request_repaint();
                         });
@@ -792,7 +810,7 @@ impl eframe::App for ArcadeApp {
                 }
                 if report.profile.id == "big-buck"
                     && let Some(texture) = &self.screenshot {
-                        ui.label("Captured private-display frame (not an interactive game view)");
+                        ui.label("Captured progression-test frame");
                         let size = texture.size_vec2();
                         ui.image((texture.id(), size * (ui.available_width().min(640.0) / size.x)));
                 }
@@ -865,6 +883,13 @@ impl eframe::App for ArcadeApp {
                             let _=tx.send(supercars_runtime::launch(&root));
                             repaint.request_repaint();
                         });
+                    }
+                }
+                if report.profile.id=="ford"{
+                    ui.label("Native Windows or Linux/Wine. Arrows steer, accelerate and brake; Enter/1 starts; V changes view; Space/X shift; 5 adds credit; Esc exits.");
+                    if ui.add_enabled(self.probe.is_none()&&report.binary.is_some(),egui::Button::new("Play Ford Racing")).clicked(){
+                        self.screenshot=None;self.desktop_running=true;let root=PathBuf::from(&self.root);let(tx,rx)=mpsc::channel();self.probe=Some(rx);self.message="Ford Racing is running…".into();let repaint=ctx.clone();
+                        std::thread::spawn(move||{let _=tx.send(ford_runtime::launch(&root));repaint.request_repaint();});
                     }
                 }
                 settings_button(ui, &mut self.settings, &report.profile.id.replace('-', "_"));

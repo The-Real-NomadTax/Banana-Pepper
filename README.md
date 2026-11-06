@@ -1,5 +1,16 @@
 # Arcade Foundry
 
+**[Water](crates/arcade-water/README.md) — Water Adapts The ELF Runtime** is our
+Linux-to-Windows compatibility layer: Linux executables, Windows APIs.
+
+Ford Racing Full Blown now has a native Windows runner and a shared Windows/Wine
+cabinet adapter. Big Buck Hunter Pro also has a Water ELF32 worker:
+its Linux game code runs directly in a 32-bit Windows process, with our own
+OpenGL, input, C-library and audio translations. WSL2 remains selectable.
+See [Ford setup](docs/ford-startup.md) and [Big Buck on Windows](docs/big-buck-windows.md)
+for the verified results, commands and platform limits. These backends do not
+establish macOS/Android or ARM CPU support.
+
 A Rust arcade compatibility project, starting on Linux with an egui/eframe desktop workbench. No TeknoParrot code, profiles or loaders are used by this application.
 
 The workbench also builds natively on Windows. Minecraft Dungeons Arcade has native Linux and Windows-to-WSL2 runners, library preparation, snapshot import repair and diagnostics. With dongle seeds captured locally, `scripts/minecraft-seeded.py` boots it to the Mojang Studios screen with four virtual joysticks; factory setup and card scanners still block attract mode and gameplay. See [Linux setup and results](docs/minecraft-linux.md) or [Windows setup](docs/minecraft-windows.md).
@@ -71,6 +82,7 @@ Aliens defaults: **T** opens the operator test menu, where T selects, **9** goes
 | Big Buck Hunter Pro | `game` in the supplied `Big Bug Hunter Pro` directory | ELF32, i386, no section table |
 | Fast and Furious Super Cars | `sdaemon.exe` in the nested game directory | PE32, i386 |
 | Minecraft Dungeons Arcade | supplied `gamedump.exec` (preferred) or `game` for inspection | ELF64, x86-64 |
+| Ford Racing Full Blown | `FordRacing/fordracing.exe` | PE32, i386 |
 
 Jurassic Park deliberately uses the supplied `game_original` rather than the active `game`, which the existing README describes as modified. This is a filename selection, not verification that the file is pristine. Super Cars selects the game executable rather than the bundled third-party loader. Original files and launch scripts are not modified or run. Imported library names are requirements recorded in the executable, not proof those libraries are installed or usable.
 

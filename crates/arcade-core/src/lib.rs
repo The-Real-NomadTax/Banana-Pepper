@@ -3,6 +3,8 @@
 pub mod aliens;
 pub mod big_buck;
 pub mod controls;
+pub mod ford;
+pub mod ford_packet;
 pub mod jurassic;
 pub mod minecraft;
 pub mod settings;
@@ -39,6 +41,7 @@ pub fn profiles() -> Vec<GameProfile> {
         ("big-buck", "Big Buck Hunter Pro", "linux based/Big Bug Hunter Pro/game", Controls::LightGuns),
         ("super-cars", "The Fast and the Furious Super Cars", "windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars/sdaemon.exe", Controls::Driving),
         ("minecraft", "Minecraft Dungeons Arcade", "linux based/Minecraft Dungeons Arcade/gamedump.exec", Controls::Joysticks),
+        ("ford", "Ford Racing Full Blown", "windows based/Ford Racing/FordRacing/fordracing.exe", Controls::Driving),
     ].into_iter().map(|(id,title,path,controls)| GameProfile {
         id: id.into(), title: title.into(), executable: path.into(), controls,
     }).collect()
@@ -111,7 +114,7 @@ pub struct GameReport {
 
 pub fn scan(root: &Path) -> Vec<GameReport> {
     profiles().into_iter().map(|profile| {
-        let path = if profile.id == "minecraft" { minecraft::executable(root) } else { root.join(&profile.executable) };
+        let path = match profile.id.as_str() { "minecraft"=>minecraft::executable(root),"big-buck"=>big_buck::directory(root).join("game"),"ford"=>ford::directory(root).join("FordRacing/fordracing.exe"),_=>root.join(&profile.executable) };
         let result = inspect_file(&path);
         let mut blockers = vec!["Cabinet I/O protocol and game adapter are not implemented.".into(),
             "Required security hardware/services have not been validated.".into()];
@@ -134,11 +137,12 @@ pub fn scan(root: &Path) -> Vec<GameReport> {
         }
         if profile.id == "big-buck" {
             blockers = vec![
-                "Experimental Linux startup backend available for one SHA256-verified build.".into(),
+                "Linux desktop and Water ELF32 backends support the fingerprinted build; Windows also offers WSL2.".into(),
                 "Virtual JAMMA API supports switch edges and mouse gun callbacks; physical serial protocol is not implemented.".into(),
                 "OSS playback is bridged to PulseAudio/PipeWire; full scored gameplay remains unverified.".into(),
             ];
         }
+        if profile.id=="ford" {blockers=vec!["Native Windows or Linux Wine with the same custom cabinet adapter; original files and bundled loaders are not run.".into(),"Keyboard driving; physical wheels, force feedback and cabinet networking remain unimplemented.".into()];}
         if profile.id == "jurassic" {
             blockers = vec![
                 "Native original build exits before engine startup while connecting to a Sentinel/HASP service on localhost:1947.".into(),
@@ -218,7 +222,7 @@ mod tests {
     #[test]
     fn missing_games_are_reported_individually() {
         let reports = scan(Path::new("/nonexistent-arcade-test-root"));
-        assert_eq!(reports.len(), 5);
+        assert_eq!(reports.len(), 6);
         assert!(
             reports
                 .iter()

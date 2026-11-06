@@ -1,4 +1,4 @@
-//! Linux ABI translation on Windows, without a Linux VM or CPU interpreter.
+//! Water Adapts The ELF Runtime: Linux ABI translation on Windows.
 //!
 //! Native execution currently supports a constrained static ELF64 ABI. Dynamic
 //! linking, TLS, graphics and Linux threads are explicitly rejected. Guest code

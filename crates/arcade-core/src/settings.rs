@@ -32,6 +32,14 @@ pub enum Renderer {
     Software,
 }
 
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+pub enum Backend { Auto, Water, Wsl }
+impl Backend {
+    pub const ALL:[Self;3]=[Self::Auto,Self::Water,Self::Wsl];
+    pub fn id(self)->&'static str{match self{Self::Auto=>"auto",Self::Water=>"water",Self::Wsl=>"wsl"}}
+    pub fn label(self)->&'static str{match self{Self::Auto=>"Automatic",Self::Water=>"Water (Linux to Windows)",Self::Wsl=>"WSL2 / WSLg"}}
+}
+
 impl VSync {
     pub const ALL: [Self; 3] = [Self::Default, Self::On, Self::Off];
     pub fn id(self) -> &'static str {
@@ -96,7 +104,7 @@ pub const PROFILES: &[Profile] = &[
         id: "big_buck",
         title: "Big Buck Hunter Pro",
         default_resolution: (640, 480),
-        default_renderer: Renderer::Software,
+        default_renderer: if cfg!(windows){Renderer::Gpu}else{Renderer::Software},
         resolution_note: "Window size. The game still renders at 640x480; aiming is rescaled to the window.",
     },
     Profile {
@@ -106,6 +114,7 @@ pub const PROFILES: &[Profile] = &[
         default_renderer: Renderer::Gpu,
         resolution_note: "Passed to the game's own -res option: 640x480, 800x600, 1024x768, 1280x1024, 1360x768, 1600x1200 or 1920x1080. Also the Wine window size. Renderer: WineD3D on OpenGL (GPU) or Mesa llvmpipe (software).",
     },
+    Profile {id:"ford",title:"Ford Racing Full Blown",default_resolution:(640,480),default_renderer:Renderer::Gpu,resolution_note:"Native Direct3D 9 on Windows; Wine on Linux. Cabinet resolutions: 640x480, 800x600, 1024x768, 1280x1024, 1600x1200. Default is windowed."},
 ];
 
 pub const RESOLUTIONS: &[(u32, u32)] = &[
@@ -129,6 +138,7 @@ pub fn profile(id: &str) -> Option<&'static Profile> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameSettings {
+    pub backend: Backend,
     pub resolution: (u32, u32),
     pub fullscreen: bool,
     pub vsync: VSync,
@@ -141,6 +151,7 @@ pub struct GameSettings {
 impl GameSettings {
     pub fn defaults(profile: &Profile) -> Self {
         Self {
+            backend: Backend::Auto,
             resolution: profile.default_resolution,
             fullscreen: false,
             vsync: VSync::Default,
@@ -217,6 +228,7 @@ impl GameSettings {
             _ => Err(format!("expected true or false, got \"{v}\"")),
         };
         match key {
+            "backend"=>self.backend=Backend::ALL.into_iter().find(|b|b.id()==value || (value=="native" && *b==Backend::Water)).ok_or("backend must be auto, water or wsl")?,
             "resolution" => self.resolution = parse_resolution(value)?,
             "fullscreen" => self.fullscreen = flag(value)?,
             "vsync" => {
@@ -325,6 +337,7 @@ impl Settings {
             let g = self.game(p.id);
             out += &format!("\n[{}]  # {}\n", p.id, p.title);
             out += &format!("resolution = {}\n", g.resolution_text());
+            out += &format!("backend = {}  # auto | water | wsl (Big Buck on Windows)\n",g.backend.id());
             out += &format!("fullscreen = {}\n", g.fullscreen);
             out += &format!("vsync = {}  # default | on | off\n", g.vsync.id());
             out += &format!("renderer = {}  # gpu | software\n", g.renderer.id());
@@ -368,7 +381,7 @@ mod tests {
         );
         let bbh = s.game("big_buck");
         assert_eq!(bbh.resolution, (640, 480));
-        assert_eq!(bbh.renderer, Renderer::Software);
+        assert_eq!(bbh.renderer, if cfg!(windows){Renderer::Gpu}else{Renderer::Software});
         assert!(!bbh.fullscreen && bbh.audio);
     }
 

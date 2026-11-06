@@ -96,21 +96,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "arcade-linux-runtime"
+name = "arcade-ford-hook"
 version = "0.1.0"
-dependencies = [
- "goblin",
- "iced-x86",
- "serde",
- "serde_json",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "arcade-linux-shim"
 version = "0.1.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "arcade-water"
+version = "0.1.0"
+dependencies = [
+ "arcade-core",
+ "goblin",
+ "iced-x86",
+ "image",
+ "serde",
+ "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

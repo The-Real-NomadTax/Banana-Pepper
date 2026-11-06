@@ -78,6 +78,10 @@ const fn any(
 }
 
 pub const GAMES: &[Game] = &[
+    Game {id:"ford",title:"Ford Racing Full Blown",keys:KeySpace::DirectInput,mouse_buttons:false,note:"Keyboard steering ramps and recentres. The cabinet adapter runs on Windows and Wine; Escape exits.",actions:&[
+        any("steer_left","Steer left",1,&["Left"]),any("steer_right","Steer right",2,&["Right"]),any("gas","Gas / menu confirm",3,&["Up"]),any("brake","Brake",4,&["Down"]),
+        any("start1","Start",5,&["Enter","1"]),any("view","Change view",6,&["V"]),any("gear_up","Shift up",7,&["Space"]),any("gear_down","Shift down",8,&["X"]),any("coin1","Coin",9,&["5"]),
+    ]},
     Game {
         id: "aliens",
         title: "Aliens Armageddon",

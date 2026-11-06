@@ -3,10 +3,11 @@
 ## Windows backend direction
 
 Keep both WSL2 and the developing native Linux ABI backend as Windows options.
-The existing Minecraft runner uses WSL2/WSLg. `arcade-linux-runtime` has a native
-static ELF execution proof, but its development is paused at the user's request
-while Minecraft startup and asset decoding are investigated through WSL2.
-Do not route Minecraft through the native crate or remove WSL support.
+The Minecraft runner continues to use WSL2/WSLg. Native runtime development has
+resumed for Big Buck at the user's request: `water-buck` is a separate 32-bit
+Windows worker translating that fingerprinted game's ELF imports to Windows.
+The original static ELF64 worker remains available. Neither native worker runs
+Minecraft; do not reroute Minecraft or remove WSL support.
 
 ## Scope
 
@@ -45,7 +46,7 @@ Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A
 | Host | Frontend | Execution work |
 | --- | --- | --- |
 | Linux x86-64 | Initial target | 32-bit Linux ABI/userspace plus per-game adapters |
-| Windows x86-64 | Native workbench build verified | Minecraft uses WSL2/WSLg; dependencies resolve, but protected assets and cabinet initialization prevent gameplay. Other game backends remain Linux-only. |
+| Windows x86-64 | Native workbench | Big Buck uses the Water ELF32 worker or WSL2/WSLg. Ford uses native Direct3D 9 with our adapter. Minecraft retains its WSL2 runner and its documented cabinet/asset limits. |
 | macOS (especially Apple Silicon) | Future desktop target | Linux/Windows ABI and x86 execution solution; graphics translation as needed |
 | Android (typically ARM64) | Future mobile target | Android lifecycle/input frontend plus x86 CPU translation, guest ABI and graphics solution |
 

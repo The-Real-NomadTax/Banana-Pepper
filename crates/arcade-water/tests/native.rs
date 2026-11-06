@@ -1,4 +1,4 @@
-use arcade_linux_runtime::elf::Image;
+use arcade_water::elf::Image;
 use std::{fs,path::PathBuf,sync::atomic::{AtomicUsize,Ordering}};
 static CASE:AtomicUsize=AtomicUsize::new(0);
 
@@ -46,7 +46,7 @@ fn temp()->PathBuf {
 #[cfg(all(windows,target_arch="x86_64"))]
 fn run(bytes:&[u8],timeout:u32)->(std::process::Output,PathBuf) {
     let path=temp();fs::write(path.join("guest.elf"),bytes).unwrap();
-    let result=std::process::Command::new(env!("CARGO_BIN_EXE_linux-run"))
+    let result=std::process::Command::new(env!("CARGO_BIN_EXE_water"))
         .arg("run").arg(path.join("guest.elf")).arg("--root").arg(&path)
         .arg("--work").arg(path.join("work")).arg("--timeout").arg(timeout.to_string()).output().unwrap();
     (result,path)

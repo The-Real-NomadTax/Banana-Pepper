@@ -172,7 +172,7 @@ impl State {
             }
             39=>Ok(unsafe{GetCurrentProcessId()} as u64),
             60|231=>{
-                eprintln!("[linux-runtime] guest exit={} syscalls={} elapsed_us={}",a[0]&255,self.calls,self.started.elapsed().as_micros());
+                eprintln!("[watertime] guest exit={} syscalls={} elapsed_us={}",a[0]&255,self.calls,self.started.elapsed().as_micros());
                 unsafe{ExitProcess((a[0]&255) as u32)}
             }
             63=>{
@@ -217,7 +217,7 @@ impl State {
                 if unsafe{BCryptGenRandom(ptr::null_mut(),a[0] as *mut u8,length as u32,BCRYPT_USE_SYSTEM_PREFERRED_RNG)}<0{return Err(EIO);}
                 Ok(length as u64)
             }
-            _=>{if self.unknown.insert(number){eprintln!("[linux-runtime] unsupported syscall {number}; returning Linux ENOSYS");}Err(ENOSYS)}
+            _=>{if self.unknown.insert(number){eprintln!("[watertime] unsupported syscall {number}; returning Linux ENOSYS");}Err(ENOSYS)}
         }
     }
 }
@@ -242,7 +242,7 @@ unsafe extern "system" fn exception(info:*mut EXCEPTION_POINTERS)->i32 {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     if context.Rip>=state.plan.image_start&&context.Rip<state.plan.image_end {
-        eprintln!("[linux-runtime] guest fault: Windows exception {:#x} at Linux RIP {:#x}",code as u32,context.Rip);
+        eprintln!("[watertime] guest fault: Windows exception {:#x} at Linux RIP {:#x}",code as u32,context.Rip);
         unsafe{ExitProcess(125)}
     }
     EXCEPTION_CONTINUE_SEARCH

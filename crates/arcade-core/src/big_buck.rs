@@ -6,6 +6,11 @@ use std::{
     path::Path,
 };
 
+pub fn directory(root:&Path)->std::path::PathBuf {
+    [root.join("linux based/Big Bug Hunter Pro"),root.join("Big Bug Hunter Pro"),root.join("Big Buck Hunter Pro"),root.to_path_buf()]
+        .into_iter().find(|p|p.join("game").is_file()).unwrap_or_else(||root.join("linux based/Big Bug Hunter Pro"))
+}
+
 pub const SOURCE_SHA256: &str = "c569677c4e4bcf3449939b6e9a44afd3346c153133391c24dc06c012a58c1244";
 const CODE_OFFSET: usize = 0x2d80;
 const CODE_SIZE: usize = 0x937c0;

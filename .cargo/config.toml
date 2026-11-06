@@ -4,9 +4,4 @@
 linker = "lld-link"
 rustflags = [
     "-C", "panic=abort",
-    "-C", "link-arg=/NODEFAULTLIB",
-    "-C", "link-arg=/ENTRY:_DllMainCRTStartup@12",
-    "-C", "link-arg=/EXPORT:DirectInput8Create=_DirectInput8Create@20",
-    "-C", "link-arg=/SAFESEH:NO",
-    "-C", "link-arg=/OPT:REF",
 ]

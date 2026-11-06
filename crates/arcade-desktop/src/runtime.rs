@@ -29,8 +29,7 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
         fs,
         process::{Command, Stdio},
     };
-    let game = games_root
-        .join("linux based/Big Bug Hunter Pro")
+    let game = arcade_core::big_buck::directory(games_root)
         .canonicalize()
         .map_err(|e| e.to_string())?;
     fs::create_dir_all(output).map_err(|e| e.to_string())?;
@@ -52,11 +51,11 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
         .canonicalize()
         .map_err(|e| e.to_string())?;
     // Settings apply to the desktop session; the private-display probe keeps
-    // its fixed software-rendered, audio-enabled configuration.
+    // its fixed software-rendered, muted configuration.
     let settings = if desktop {
         game_settings(&project, "big_buck")?
     } else {
-        GameSettings::defaults(arcade_core::settings::profile("big_buck").expect("profile"))
+        GameSettings { audio: false, ..GameSettings::defaults(arcade_core::settings::profile("big_buck").expect("profile")) }
     };
     let shim = project.join("target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so");
     if !shim.is_file() {
