@@ -1,7 +1,9 @@
+mod appearance;
 mod aliens_runtime;
 mod jurassic_runtime;
-mod runtime;
+mod library_preferences;
 mod minecraft_runtime;
+mod runtime;
 mod supercars_runtime;
 
 use arcade_core::controls::{self, Bindings};
@@ -149,11 +151,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "Arcade Foundry",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([1160.0, 800.0]),
+            viewport: egui::ViewportBuilder::default().with_inner_size([1160.0, 800.0]).with_min_inner_size([850.0, 620.0]),
             ..Default::default()
         },
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            appearance::install(&cc.egui_ctx);
             let mut app = ArcadeApp::default();
             if let Some(root) = initial_root { app.root = root; app.selected = 4; }
             app.rescan(cc.egui_ctx.clone());
@@ -165,6 +167,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
 struct ArcadeApp {
     root: String,
+    session_open: bool,
+    session_failed: bool,
+    folder_message: String,
+    folders: library_preferences::Preferences,
+    folder_drafts: std::collections::BTreeMap<String, String>,
+    game_roots: std::collections::BTreeMap<String, Result<PathBuf, String>>,
     reports: Vec<GameReport>,
     selected: usize,
     pending: Option<Receiver<Vec<GameReport>>>,
@@ -212,6 +220,7 @@ impl ControlsUi {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
+    Directory,
     Controls,
     Graphics,
     Audio,
@@ -222,7 +231,7 @@ struct SettingsUi {
     settings: Settings,
     path: PathBuf,
     /// Game whose settings window is open.
-    open: Option<&'static str>,
+    open: Option<String>,
     tab: SettingsTab,
     message: String,
 }
@@ -240,7 +249,7 @@ impl SettingsUi {
             settings,
             path,
             open: None,
-            tab: SettingsTab::Controls,
+            tab: SettingsTab::Directory,
             message,
         }
     }
@@ -254,79 +263,106 @@ impl SettingsUi {
 
 /// "Settings" button plus the current summary, shown on each game page.
 fn settings_button(ui: &mut egui::Ui, app: &mut SettingsUi, game_id: &str) {
-    let Some(profile) = settings::profile(game_id) else {
-        return;
-    };
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        if ui
-            .button(RichText::new("⚙ Settings").strong())
-            .on_hover_text("Controls, graphics and audio for this game")
-            .clicked()
-        {
-            app.open = Some(profile.id);
-            app.message.clear();
-        }
-        ui.small(app.settings.game(profile.id).summary());
-    });
-    ui.add_space(8.0);
+    if ui.button("Settings").on_hover_text("Game folder, controls, graphics and audio").clicked() {
+        app.open = Some(game_id.to_owned());
+        app.tab = SettingsTab::Directory;
+        app.message.clear();
+    }
 }
 
-fn settings_window(ctx: &egui::Context, app: &mut SettingsUi, controls: &mut ControlsUi) {
-    let Some(id) = app.open else {
+fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Frame) {
+    let Some(id) = app.settings.open.clone() else {
         return;
     };
-    let Some(profile) = settings::profile(id) else {
-        app.open = None;
+    let Some(game) = arcade_core::profiles()
+        .into_iter()
+        .find(|game| game.id == id)
+    else {
+        app.settings.open = None;
         return;
     };
+    let profile = settings::profile(&id.replace('-', "_"));
     let mut open = true;
-    egui::Window::new(format!("{} settings", profile.title))
+    egui::Window::new(format!("{} settings", game.title))
         .id(egui::Id::new("game-settings"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
-        .default_width(560.0)
+        .default_width(640.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                for (tab, label) in [
-                    (SettingsTab::Controls, "🎮 Controls"),
-                    (SettingsTab::Graphics, "🖥 Graphics"),
-                    (SettingsTab::Audio, "🔊 Audio"),
-                ] {
-                    if ui.selectable_label(app.tab == tab, label).clicked() {
-                        app.tab = tab;
-                        controls.capturing = None;
+                let mut tabs = vec![(SettingsTab::Directory, "Game files")];
+                if profile.is_some() {
+                    tabs.extend([
+                        (SettingsTab::Controls, "Controls"),
+                        (SettingsTab::Graphics, "Graphics"),
+                        (SettingsTab::Audio, "Audio"),
+                    ]);
+                }
+                for (tab, label) in tabs {
+                    if ui
+                        .selectable_label(app.settings.tab == tab, label)
+                        .clicked()
+                    {
+                        app.settings.tab = tab;
+                        app.controls.capturing = None;
                     }
                 }
             });
             ui.separator();
             egui::ScrollArea::vertical()
                 .max_height(460.0)
-                .show(ui, |ui| match app.tab {
-                    SettingsTab::Controls => controls_panel(ui, controls, profile.id),
-                    SettingsTab::Graphics => graphics_tab(ui, app, profile),
-                    SettingsTab::Audio => audio_tab(ui, app, profile),
-                });
-            if app.tab != SettingsTab::Controls {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Reset graphics & audio").clicked() {
-                        app.settings.reset_game(profile.id);
-                        app.save(&format!("{} graphics and audio reset", profile.title));
+                .show(ui, |ui| match app.settings.tab {
+                    SettingsTab::Directory => {
+                        app.game_folder_ui(ui, &id, &game.title, frame);
+                        ui.add_space(8.0);
+                        ui.label(if app.folders.games.contains_key(&id) {
+                            "Using a saved folder for this game."
+                        } else {
+                            "Using the default library folder."
+                        });
+                        if !app.folder_message.is_empty() {
+                            ui.label(&app.folder_message);
+                        }
                     }
-                    ui.small(app.path.display().to_string());
+                    SettingsTab::Controls => {
+                        if let Some(profile) = profile {
+                            controls_panel(ui, &mut app.controls, profile.id);
+                        }
+                    }
+                    SettingsTab::Graphics => {
+                        if let Some(profile) = profile {
+                            graphics_tab(ui, &mut app.settings, profile);
+                        }
+                    }
+                    SettingsTab::Audio => {
+                        if let Some(profile) = profile {
+                            audio_tab(ui, &mut app.settings, profile);
+                        }
+                    }
                 });
-                if !app.message.is_empty() {
-                    ui.small(app.message.as_str());
-                }
+            if matches!(app.settings.tab, SettingsTab::Graphics | SettingsTab::Audio)
+                && let Some(profile) = profile
+            {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Reset graphics & audio").clicked() {
+                            app.settings.settings.reset_game(profile.id);
+                            app.settings
+                                .save(&format!("{} graphics and audio reset", profile.title));
+                        }
+                        ui.small(app.settings.path.display().to_string());
+                    });
+                    if !app.settings.message.is_empty() {
+                        ui.small(app.settings.message.as_str());
+                    }
             }
         });
     if !open {
-        app.open = None;
-        controls.capturing = None;
+        app.settings.open = None;
+        app.controls.capturing = None;
     }
 }
 
@@ -564,10 +600,49 @@ fn controls_panel(ui: &mut egui::Ui, state: &mut ControlsUi, game_id: &str) {
     }
 }
 
+/// Use the platform's folder chooser, parented to the desktop window.
+fn pick_folder(
+    frame: &eframe::Frame,
+    title: &str,
+    current: &str,
+) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new().set_title(title).set_parent(frame);
+    if let Ok(directory) = Path::new(current).canonicalize()
+        && directory.is_dir()
+    {
+        dialog = dialog.set_directory(directory);
+    }
+    dialog
+        .pick_folder()
+        .map(|folder| {
+            folder
+                .into_os_string()
+                .into_string()
+                .map_err(|_| "The selected folder path must contain valid Unicode.".into())
+        })
+        .transpose()
+}
+
 impl Default for ArcadeApp {
     fn default() -> Self {
+        let (folders, folder_message) = match library_preferences::load() {
+            Ok(folders) => (folders, String::new()),
+            Err(error) => (
+                library_preferences::Preferences {
+                    root: "games".into(),
+                    ..Default::default()
+                },
+                error,
+            ),
+        };
         Self {
-            root: "games".into(),
+            root: folders.root.clone(),
+            session_open: false,
+            session_failed: false,
+            folder_drafts: folders.games.clone(),
+            folders,
+            folder_message,
+            game_roots: Default::default(),
             reports: vec![],
             selected: 0,
             pending: None,
@@ -582,27 +657,179 @@ impl Default for ArcadeApp {
     }
 }
 impl ArcadeApp {
+    fn launch_game(&mut self, id: &str, root: PathBuf, ctx: egui::Context, mode: &'static str) {
+        let id = id.to_owned();
+        let name = arcade_core::profiles().into_iter().find(|profile| profile.id == id)
+            .map(|profile| profile.title).unwrap_or_else(|| id.clone());
+        self.screenshot = None;
+        self.session_failed = false;
+        self.desktop_running = true;
+        self.message = format!(
+            "{name}: {}…",
+            if mode == "setup" {
+                "preparing libraries"
+            } else {
+                "starting game"
+            }
+        );
+        let (tx, rx) = mpsc::channel();
+        self.probe = Some(rx);
+        std::thread::spawn(move || {
+            let result = match id.as_str() {
+                "aliens" => aliens_runtime::run(&root, true),
+                "jurassic" => jurassic_runtime::launch(&root),
+                "big-buck" => runtime::launch_big_buck(&root),
+                "super-cars" => supercars_runtime::launch(&root),
+                "minecraft" => minecraft_runtime::run(&root, mode),
+                _ => Err("This game does not have a desktop runtime yet.".into()),
+            };
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    fn save_games_folder(&mut self, ctx: egui::Context) {
+        let result = library_preferences::validate(&self.root).and_then(|root| {
+            let mut folders = self.folders.clone();
+            folders.root = root;
+            library_preferences::save(&folders)?;
+            Ok(folders)
+        });
+        match result {
+            Ok(folders) => {
+                self.root = folders.root.clone();
+                self.folders = folders;
+                self.folder_message =
+                    "Default library folder saved. Individual game folders take priority.".into();
+                self.rescan(ctx);
+            }
+            Err(error) => self.folder_message = error,
+        }
+    }
+
+    fn game_folder_ui(&mut self, ui: &mut egui::Ui, id: &str, title: &str, frame: &eframe::Frame) {
+        let mut save = false;
+        let mut reset = false;
+        let mut browse = false;
+        ui.add_enabled_ui(self.probe.is_none(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Game folder");
+                let draft = self.folder_drafts.entry(id.to_owned()).or_default();
+                let response = ui.add(
+                    egui::TextEdit::singleline(draft)
+                        .hint_text("Directory containing this game's executable")
+                        .desired_width(380.0),
+                );
+                browse = ui.button("Browse…").clicked();
+                save = ui.button("Save game folder").clicked()
+                    || (response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                reset = ui
+                    .add_enabled(
+                        self.folders.games.contains_key(id),
+                        egui::Button::new("Use default library"),
+                    )
+                    .clicked();
+            });
+        });
+        ui.small("Choose this game's own directory. Each game's folder is saved separately.");
+        if browse {
+            let current = self
+                .folder_drafts
+                .get(id)
+                .filter(|path| !path.is_empty())
+                .unwrap_or(&self.root);
+            match pick_folder(frame, &format!("Choose {title} folder"), current) {
+                Ok(Some(folder)) => {
+                    self.folder_drafts.insert(id.into(), folder);
+                    save = true;
+                }
+                Ok(None) => {}
+                Err(error) => self.folder_message = error,
+            }
+        }
+        if save || reset {
+            let result = (|| {
+                let mut folders = self.folders.clone();
+                if reset {
+                    folders.games.remove(id);
+                } else {
+                    let folder = library_preferences::validate(&self.folder_drafts[id])?;
+                    library_preferences::runtime_root(id, &folder)?;
+                    folders.games.insert(id.into(), folder);
+                }
+                library_preferences::save(&folders)?;
+                Ok::<_, String>(folders)
+            })();
+            match result {
+                Ok(folders) => {
+                    self.folder_drafts.insert(
+                        id.into(),
+                        folders.games.get(id).cloned().unwrap_or_default(),
+                    );
+                    self.folders = folders;
+                    self.folder_message = if reset {
+                        "Game now uses the default library folder."
+                    } else {
+                        "Game folder saved for the next launch and future sessions."
+                    }
+                    .into();
+                    self.screenshot = None;
+                    self.rescan(ui.ctx().clone());
+                }
+                Err(error) => self.folder_message = error,
+            }
+        }
+    }
+
     fn rescan(&mut self, ctx: egui::Context) {
         let root = PathBuf::from(&self.root);
+        self.game_roots = self
+            .folders
+            .games
+            .iter()
+            .map(|(id, folder)| (id.clone(), library_preferences::runtime_root(id, folder)))
+            .collect();
+        let game_roots = self.game_roots.clone();
         let (tx, rx) = mpsc::channel();
         self.pending = Some(rx);
-        self.message = "Inspecting executable metadata…".into();
+        self.message = "Refreshing your library…".into();
         std::thread::spawn(move || {
-            let _ = tx.send(arcade_core::scan(&root));
+            let mut reports = arcade_core::scan(&root);
+            for report in &mut reports {
+                if let Some(custom_root) = game_roots.get(&report.profile.id) {
+                    match custom_root {
+                        Ok(custom_root) => {
+                            if let Some(mut custom) = arcade_core::scan(custom_root)
+                                .into_iter()
+                                .find(|r| r.profile.id == report.profile.id)
+                            {
+                                if let Ok(path) = custom.path.canonicalize() {
+                                    custom.path = path;
+                                }
+                                *report = custom;
+                            }
+                        }
+                        Err(error) => {
+                            report.binary = None;
+                            report.error = Some(error.clone());
+                        }
+                    }
+                }
+            }
+            let _ = tx.send(reports);
             ctx.request_repaint();
         });
     }
 }
 impl eframe::App for ArcadeApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         if let Some(rx) = &self.pending {
             match rx.try_recv() {
                 Ok(reports) => {
                     self.reports = reports;
                     self.pending = None;
-                    self.message =
-                        "Inspection complete. Choose a game for launch options and runtime requirements."
-                            .into();
+                    self.message = "Your library is up to date.".into();
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.pending = None;
@@ -627,12 +854,16 @@ impl eframe::App for ArcadeApp {
                             egui::TextureOptions::LINEAR,
                         ));
                     }
+                    self.session_failed = result.is_err();
+                    self.session_open |= self.session_failed;
                     self.message = result.unwrap_or_else(|e| e);
                     self.probe = None;
                     self.desktop_running = false;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.message = "Startup worker stopped unexpectedly".into();
+                    self.session_failed = true;
+                    self.session_open = true;
                     self.probe = None;
                     self.desktop_running = false;
                 }
@@ -640,241 +871,256 @@ impl eframe::App for ArcadeApp {
             }
         }
         let ctx = ui.ctx().clone();
-        egui::Panel::top("header").show(ui, |ui| {
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                ui.heading(RichText::new("ARCADE FOUNDRY").color(Color32::from_rgb(72, 213, 188)));
-                ui.label(" /  compatibility workbench  /  0.1");
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label("Games folder");
-                ui.add(egui::TextEdit::singleline(&mut self.root).desired_width(520.0));
-                if ui
-                    .add_enabled(self.pending.is_none(), egui::Button::new("Inspect library"))
-                    .clicked()
-                {
-                    self.rescan(ctx.clone());
-                }
-                if ui
-                    .add_enabled(
-                        !self.reports.is_empty() && self.pending.is_none(),
-                        egui::Button::new("Export JSON"),
-                    )
-                    .clicked()
-                {
-                    self.message = match arcade_core::write_report(
-                        &PathBuf::from("arcade-report.json"),
-                        &self.reports,
-                    ) {
-                        Ok(()) => {
-                            "Saved arcade-report.json in the current working directory.".into()
-                        }
-                        Err(e) => format!("Export failed: {e}"),
-                    };
-                }
-            });
-            ui.add_space(10.0);
-        });
-        egui::Panel::bottom("status").show(ui, |ui| {
-            egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                ui.label(&self.message);
-            });
-        });
-        egui::Panel::left("library")
-            .default_size(250.0)
+        egui::Panel::top("header")
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_gray(29))
+                    .inner_margin(egui::Margin::symmetric(16, 12)),
+            )
             .show(ui, |ui| {
-                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("ARCADE FOUNDRY")
+                            .size(18.0)
+                            .color(appearance::ACCENT),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(env!("CARGO_PKG_VERSION"))
+                                .small()
+                                .color(appearance::MUTED),
+                        );
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Games folder");
+                    let folder = ui.add_enabled(
+                        self.probe.is_none(),
+                        egui::TextEdit::singleline(&mut self.root)
+                            .hint_text("Path to your game files")
+                            .desired_width((ui.available_width() - 430.0).clamp(210.0, 520.0)),
+                    );
+                    if folder.changed() {
+                        self.folder_message =
+                            "Folder changed. Choose Save folder to remember it.".into();
+                    }
+                    let mut selected_folder = false;
+                    if ui
+                        .add_enabled(self.probe.is_none(), egui::Button::new("Browse…"))
+                        .clicked()
+                    {
+                        match pick_folder(frame, "Choose default library folder", &self.root) {
+                            Ok(Some(folder)) => {
+                                self.root = folder;
+                                selected_folder = true;
+                            }
+                            Ok(None) => {}
+                            Err(error) => self.folder_message = error,
+                        }
+                    }
+                    let save = ui
+                        .add_enabled(self.probe.is_none(), egui::Button::new("Save folder"))
+                        .on_hover_text("Remember this directory and inspect its game files")
+                        .clicked();
+                    let enter = folder.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    if save || enter || selected_folder {
+                        self.save_games_folder(ctx.clone());
+                    }
+                    if ui
+                        .add_enabled(self.pending.is_none(), egui::Button::new("Refresh library"))
+                        .clicked()
+                    {
+                        self.rescan(ctx.clone());
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.reports.is_empty() && self.pending.is_none(),
+                            egui::Button::new("Export JSON"),
+                        )
+                        .clicked()
+                    {
+                        self.message = match arcade_core::write_report(
+                            &PathBuf::from("arcade-report.json"),
+                            &self.reports,
+                        ) {
+                            Ok(()) => {
+                                "Saved arcade-report.json in the current working directory.".into()
+                            }
+                            Err(e) => format!("Export failed: {e}"),
+                        };
+                    }
+                });
+                if !self.folder_message.is_empty() {
+                    ui.small(&self.folder_message);
+                }
+            });
+        egui::Panel::bottom("status")
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_gray(29))
+                    .inner_margin(egui::Margin::symmetric(16, 8)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if self.pending.is_some() || self.probe.is_some() {
+                        ui.spinner();
+                    }
+                    let summary = self
+                        .message
+                        .lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or_default();
+                    ui.add_sized(
+                        egui::vec2((ui.available_width() - 80.0).max(100.0), 20.0),
+                        egui::Label::new(RichText::new(summary).small().color(
+                            if self.session_failed {
+                                Color32::LIGHT_RED
+                            } else {
+                                appearance::MUTED
+                            },
+                        ))
+                        .truncate(),
+                    );
+                    if ui.small_button("Details").clicked() {
+                        self.session_open = true;
+                    }
+                });
+            });
+        egui::Panel::left("library")
+            .default_size(245.0)
+            .min_size(210.0)
+            .max_size(360.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_gray(25))
+                    .inner_margin(egui::Margin::symmetric(12, 16)),
+            )
+            .show(ui, |ui| {
                 ui.heading("Library");
-                ui.label(format!("{} cabinet profiles", arcade_core::profiles().len()));
-                ui.add_space(14.0);
-                for (i, report) in self.reports.iter().enumerate() {
-                    ui.vertical(|ui| {
+                ui.label(
+                    RichText::new(format!("{} games", arcade_core::profiles().len()))
+                        .small()
+                        .color(appearance::MUTED),
+                );
+                ui.add_space(10.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, report) in self.reports.iter().enumerate() {
+                        let text = RichText::new(&report.profile.title).size(14.0);
                         if ui
-                            .selectable_label(self.selected == i, &report.profile.title)
+                            .add(
+                                egui::Button::new(text)
+                                    .selected(self.selected == i)
+                                    .frame(self.selected == i)
+                                    .wrap()
+                                    .min_size(egui::vec2(ui.available_width(), 34.0)),
+                            )
                             .clicked()
                         {
                             self.selected = i;
                         }
-                        ui.small(if report.binary.is_some() {
-                            "Detected · adapter needed"
-                        } else {
-                            "Inspection unavailable"
-                        });
-                        ui.add_space(12.0);
-                    });
-                }
-                if self.pending.is_some() {
-                    ui.spinner();
-                }
+                        ui.label(
+                            RichText::new(if report.binary.is_some() {
+                                "Files found"
+                            } else {
+                                "Folder needs attention"
+                            })
+                            .small()
+                            .color(appearance::MUTED),
+                        );
+                        ui.add_space(9.0);
+                    }
+                });
+                ui.add_space(8.0);
                 ui.separator();
-                ui.small(format!(
-                    "Host: {} / {}",
-                    std::env::consts::OS,
-                    std::env::consts::ARCH
-                ));
+                ui.label(
+                    RichText::new(format!(
+                        "{} / {}",
+                        std::env::consts::OS,
+                        std::env::consts::ARCH
+                    ))
+                    .small()
+                    .color(appearance::MUTED),
+                );
             });
-        egui::CentralPanel::default().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                let Some(report) = self.reports.get(self.selected) else { ui.label("Waiting for library inspection…"); return; };
-                ui.add_space(12.0);
-                ui.heading(&report.profile.title);
-                ui.label(RichText::new(match report.profile.id.as_str() {
-                    "minecraft" => "EXPERIMENTAL — diagnose Linux startup and licensing",
-                    "big-buck" => "EXPERIMENTAL — virtual JAMMA inputs; gameplay incomplete",
-                    "aliens" | "jurassic" if cfg!(target_os = "linux") => "EXPERIMENTAL — Linux desktop gameplay",
-                    _ => "Runtime adapter unavailable on this host",
-                }).color(Color32::from_rgb(244, 188, 95)));
-                ui.add_space(10.0);
-                ui.label(report.path.display().to_string());
-                if let Some(error) = &report.error { ui.colored_label(Color32::LIGHT_RED, error); }
-                if let Some(binary) = &report.binary {
-                    ui.add_space(12.0);
-                    egui::Grid::new("binary").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
-                        ui.label("Executable"); ui.monospace(format!("{} / {}-bit / machine {:#x}", binary.format, binary.bits, binary.machine)); ui.end_row();
-                        ui.label("Entry address"); ui.monospace(format!("{:#x}", binary.entry)); ui.end_row();
-                        ui.label("Interpreter"); ui.monospace(binary.interpreter.as_deref().unwrap_or("Windows runtime")); ui.end_row();
-                        ui.label("Sections"); ui.monospace(binary.section_count.to_string()); ui.end_row();
-                    });
-                    ui.add_space(12.0);
-                    egui::CollapsingHeader::new(format!("Imported libraries ({})", binary.libraries.len())).show(ui, |ui| {
-                        for library in &binary.libraries { ui.monospace(library); }
-                        for path in &binary.search_paths { ui.label(format!("Search path: {path}")); }
-                    });
-                }
-                ui.add_space(12.0);
-                if report.profile.id == "minecraft" {
-                    ui.label(if cfg!(windows) { "Windows backend: WSL2 / Ubuntu with WSLg." } else { "Linux backend: native x86-64 guest inside Bubblewrap." });
-                    ui.label("Original game files stay read-only; saves and logs use runtime/minecraft.");
-                    ui.label("Cabinet controls are not mapped yet. Startup diagnostics identify missing libraries and the next failure.");
-                    for (label, mode) in [("Diagnose Minecraft startup", "probe"), ("Prepare Linux libraries", "setup"), ("Launch Minecraft guest", "launch")] {
-                        if ui.add_enabled(self.probe.is_none() && report.binary.is_some(), egui::Button::new(label)).clicked() {
-                            self.screenshot = None;
-                            self.desktop_running = true;
-                            let root = PathBuf::from(&self.root);
-                            let (tx, rx) = mpsc::channel();
-                            self.probe = Some(rx);
-                            self.message = format!("Minecraft: {mode} in progress…");
-                            let repaint = ctx.clone();
-                            std::thread::spawn(move || {
-                                let _ = tx.send(minecraft_runtime::run(&root, mode));
-                                repaint.request_repaint();
-                            });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(Color32::from_gray(27)).inner_margin(18))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    let Some(report) = self.reports.get(self.selected).cloned() else {
+                        ui.label("Inspecting your game library…");
+                        return;
+                    };
+                    let id = &report.profile.id;
+                    let game_root = self.game_roots.get(id).cloned().unwrap_or_else(|| Ok(PathBuf::from(&self.root)));
+                    ui.heading(&report.profile.title);
+                    ui.label(RichText::new(match id.as_str() {
+                        "minecraft" => "Experimental · Linux startup and licensing",
+                        "big-buck" => "Experimental · Desktop gameplay",
+                        "super-cars" => "Experimental · Wine desktop gameplay",
+                        _ => "Experimental · Linux desktop gameplay",
+                    }).small().color(Color32::from_rgb(221, 183, 115)));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(report.path.display().to_string()).small().color(appearance::MUTED));
+                    if let Some(error) = &report.error { ui.colored_label(Color32::LIGHT_RED, error); }
+                    ui.add_space(10.0);
+                    ui.horizontal_wrapped(|ui| {
+                        let found = report.binary.is_some();
+                        let label = if found { "Play game" } else { "Set game folder…" };
+                        let enabled = self.probe.is_none() && self.pending.is_none() && (game_root.is_ok() || !found);
+                        if ui.add_enabled(enabled, egui::Button::new(RichText::new(label).strong()).min_size(egui::vec2(120.0, 32.0))).clicked() {
+                            if found {
+                                if let Ok(root) = &game_root { self.launch_game(id, root.clone(), ctx.clone(), "launch"); }
+                            } else {
+                                self.settings.open = Some(id.clone());
+                                self.settings.tab = SettingsTab::Directory;
+                            }
                         }
+                        settings_button(ui, &mut self.settings, id);
+                        if id == "minecraft" && ui.add_enabled(self.probe.is_none() && report.binary.is_some() && game_root.is_ok(), egui::Button::new("Prepare libraries")).clicked()
+                            && let Ok(root) = &game_root {
+                            self.launch_game(id, root.clone(), ctx.clone(), "setup");
+                        }
+                    });
+                    if let Some(profile) = settings::profile(&id.replace('-', "_")) {
+                        ui.label(RichText::new(self.settings.settings.game(profile.id).summary()).small().color(appearance::MUTED));
                     }
-                }
-                if report.profile.id == "big-buck" {
-                    ui.label("Mouse aims and fires, right click pumps, Esc exits. Keys, graphics and audio are under Settings.");
-                    if ui.add_enabled(self.probe.is_none(),egui::Button::new("Play on my display")).clicked() {
-                        self.desktop_running=true;
-                        let root=PathBuf::from(&self.root);
-                        let (tx,rx)=mpsc::channel(); self.probe=Some(rx);
-                        self.screenshot=None;
-                        self.message="Big Buck Hunter running on your display. Close the game or press Esc to return.".into();
-                        let repaint=ctx.clone();
-                        std::thread::spawn(move || {let _=tx.send(runtime::launch_big_buck(&root));repaint.request_repaint();});
-                    }
-                    ui.label("Experimental Linux backend: private display with scripted switch and mouse inputs.");
-                    if ui.add_enabled(self.probe.is_none(), egui::Button::new("Test Big Buck Hunter progression")).clicked() {
-                        self.screenshot = None;
-                        self.desktop_running=false;
-                        let root = PathBuf::from(&self.root);
-                        let (tx, rx) = mpsc::channel();
-                        self.probe = Some(rx);
-                        self.message = "Testing Big Buck Hunter on a private display…".into();
-                        let repaint = ctx.clone();
-                        std::thread::spawn(move || {
-                            let result = runtime::probe_big_buck(&root, &PathBuf::from("runtime/big-buck"));
-                            let _ = tx.send(result);
-                            repaint.request_repaint();
-                        });
-                    }
-                }
-                if report.profile.id == "big-buck"
-                    && let Some(texture) = &self.screenshot {
-                        ui.label("Captured private-display frame (not an interactive game view)");
-                        let size = texture.size_vec2();
-                        ui.image((texture.id(), size * (ui.available_width().min(640.0) / size.x)));
-                }
-                if report.profile.id == "aliens" {
-                    ui.label("Mouse aims and fires. Keys (including T = Test), graphics and audio are under Settings. Audio plays through your desktop sound.");
-                    if ui.add_enabled(self.probe.is_none(), egui::Button::new("Open Aliens on my display")).clicked() {
-                        self.screenshot = None;
-                        self.desktop_running = true;
-                        let root = PathBuf::from(&self.root);
-                        let (tx, rx) = mpsc::channel();
-                        self.probe = Some(rx);
-                        self.message = "Aliens Armageddon is running on your display…".into();
-                        let repaint = ctx.clone();
-                        std::thread::spawn(move || {
-                            let _ = tx.send(aliens_runtime::run(&root, true));
-                            repaint.request_repaint();
-                        });
-                    }
-                    if ui.add_enabled(self.probe.is_none(), egui::Button::new("Diagnose Aliens startup")).clicked() {
-                        self.screenshot = None;
-                        self.desktop_running = false;
-                        let root = PathBuf::from(&self.root);
-                        let (tx, rx) = mpsc::channel();
-                        self.probe = Some(rx);
-                        self.message = "Diagnosing Aliens startup…".into();
-                        let repaint = ctx.clone();
-                        std::thread::spawn(move || {
-                            let _ = tx.send(aliens_runtime::run(&root, false));
-                            repaint.request_repaint();
-                        });
-                    }
-                }
-                if report.profile.id == "jurassic" {
-                    ui.label("Mouse aims for player one, Esc exits. Keys, graphics and audio are under Settings. Audio plays through your desktop sound.");
-                    if ui.add_enabled(self.probe.is_none(),egui::Button::new("Open Jurassic Park on my display")).clicked() {
-                        self.screenshot=None;
-                        self.desktop_running=true;
-                        let root=PathBuf::from(&self.root);
-                        let (tx,rx)=mpsc::channel();self.probe=Some(rx);
-                        self.message="Jurassic Park is running on your display…".into();
-                        let repaint=ctx.clone();
-                        std::thread::spawn(move || {
-                            let _=tx.send(jurassic_runtime::launch(&root));
-                            repaint.request_repaint();
-                        });
-                    }
-                    if ui.add_enabled(self.probe.is_none(),egui::Button::new("Diagnose repaired Jurassic Park startup")).clicked() {
-                        self.screenshot=None;
-                        self.desktop_running=true; // Suppress the Big Buck Hunter frame preview.
-                        let root=PathBuf::from(&self.root);
-                        let (tx,rx)=mpsc::channel();self.probe=Some(rx);
-                        self.message="Tracing Jurassic Park native startup…".into();
-                        let repaint=ctx.clone();
-                        std::thread::spawn(move || {
-                            let _=tx.send(jurassic_runtime::probe(&root,arcade_core::jurassic::Build::Native));
-                            repaint.request_repaint();
-                        });
-                    }
-                }
-                if report.profile.id == "super-cars" {
-                    ui.label("Runs under Wine. Left/Right steer, Up = gas, Down = brake, Enter = start, 5 = coin, Esc exits. Keys, graphics and audio are under Settings.");
-                    if ui.add_enabled(self.probe.is_none(),egui::Button::new("Open Super Cars on my display")).clicked() {
-                        self.screenshot=None;
-                        self.desktop_running=true;
-                        let root=PathBuf::from(&self.root);
-                        let (tx,rx)=mpsc::channel();self.probe=Some(rx);
-                        self.message="Super Cars is running on your display…".into();
-                        let repaint=ctx.clone();
-                        std::thread::spawn(move || {
-                            let _=tx.send(supercars_runtime::launch(&root));
-                            repaint.request_repaint();
-                        });
-                    }
-                }
-                settings_button(ui, &mut self.settings, &report.profile.id.replace('-', "_"));
-                ui.heading("Runtime work remaining");
-                for blocker in &report.blockers { ui.label(format!("• {blocker}")); }
-                ui.add_space(18.0);
-                ui.heading("Cabinet input monitor");
-                ui.label("Local test only. Pointer = aim / left click = trigger / Enter = start / 5 = coin.");
+                    ui.add_space(6.0);
+                    ui.label(match id.as_str() {
+                        "super-cars" => "Arrow keys steer, accelerate and brake. Enter starts, 5 inserts a coin, Esc exits. Change bindings in Settings.",
+                        "big-buck" => "Mouse aims and fires; right click pumps. Start and coin bindings are under Settings. Esc exits.",
+                        "minecraft" => "Cabinet controls and services are still in development. Gameplay is not yet verified.",
+                        _ => "Mouse aims and fires. Start, coin and operator controls are under Settings. Esc exits.",
+                    });
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    egui::CollapsingHeader::new("Executable details").id_salt(("technical", id)).show(ui, |ui| {
+                        if let Some(binary) = &report.binary {
+                            egui::Grid::new(("binary", id)).num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
+                                ui.label("Format"); ui.monospace(format!("{} / {}-bit / machine {:#x}", binary.format, binary.bits, binary.machine)); ui.end_row();
+                                ui.label("Entry address"); ui.monospace(format!("{:#x}", binary.entry)); ui.end_row();
+                                ui.label("Interpreter"); ui.monospace(binary.interpreter.as_deref().unwrap_or("Windows runtime")); ui.end_row();
+                                ui.label("Sections"); ui.monospace(binary.section_count.to_string()); ui.end_row();
+                            });
+                            egui::CollapsingHeader::new(format!("Imported libraries ({})", binary.libraries.len())).show(ui, |ui| {
+                                for library in &binary.libraries { ui.monospace(library); }
+                                for path in &binary.search_paths { ui.label(format!("Search path: {path}")); }
+                            });
+                        } else { ui.label("Set the game folder in Settings to inspect its executable."); }
+                    });
+                    egui::CollapsingHeader::new("Compatibility notes").id_salt(("notes", id)).default_open(true).show(ui, |ui| {
+                        for blocker in &report.blockers { ui.label(format!("• {blocker}")); }
+                    });
+                    ui.add_space(14.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Cabinet input monitor").size(16.0));
+                    ui.label(RichText::new("Local test · Mouse to aim · Left click to fire · Enter to start · 5 for coin").small().color(appearance::MUTED));
                 let (rect,response) = ui.allocate_exact_size(egui::vec2(ui.available_width().min(600.0), 190.0), egui::Sense::click_and_drag());
-                ui.painter().rect_filled(rect, 6.0, Color32::from_rgb(18, 29, 36));
+                let painter = ui.painter().with_clip_rect(rect);
+                painter.rect_filled(rect, 6.0, Color32::from_rgb(18, 29, 36));
                 if let Some(pos) = response.hover_pos() {
                     self.input.set_aim((pos.x-rect.left())/rect.width(), (pos.y-rect.top())/rect.height());
                 }
@@ -884,12 +1130,26 @@ impl eframe::App for ArcadeApp {
                 self.input.coin = accepts_input && ctx.input(|i| i.key_down(egui::Key::Num5));
                 let p = egui::pos2(rect.left()+self.input.aim[0]*rect.width(),rect.top()+self.input.aim[1]*rect.height());
                 let color = if self.input.trigger { Color32::LIGHT_RED } else { Color32::from_rgb(72,213,188) };
-                ui.painter().circle_stroke(p, 10.0, egui::Stroke::new(2.0,color));
-                ui.painter().line_segment([p-egui::vec2(16.0,0.0),p+egui::vec2(16.0,0.0)],egui::Stroke::new(1.0,color));
-                ui.painter().line_segment([p-egui::vec2(0.0,16.0),p+egui::vec2(0.0,16.0)],egui::Stroke::new(1.0,color));
+                painter.circle_stroke(p, 10.0, egui::Stroke::new(2.0,color));
+                painter.line_segment([p-egui::vec2(16.0,0.0),p+egui::vec2(16.0,0.0)],egui::Stroke::new(1.0,color));
+                painter.line_segment([p-egui::vec2(0.0,16.0),p+egui::vec2(0.0,16.0)],egui::Stroke::new(1.0,color));
                 ui.monospace(format!("X {:.3}   Y {:.3}   TRIGGER {}   START {}   COIN {}",self.input.aim[0],self.input.aim[1],self.input.trigger,self.input.start,self.input.coin));
+                });
             });
-        });
-        settings_window(&ctx, &mut self.settings, &mut self.controls);
+        if self.session_open {
+            let mut open = true;
+            egui::Window::new("Session details")
+                .open(&mut open)
+                .default_width(600.0)
+                .show(&ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            ui.label(&self.message);
+                        });
+                });
+            self.session_open = open;
+        }
+        settings_window(&ctx, self, frame);
     }
 }
