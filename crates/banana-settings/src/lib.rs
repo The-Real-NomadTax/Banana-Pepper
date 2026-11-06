@@ -205,9 +205,58 @@ pub struct GameSettings {
     /// 1, or 2 in two-player games: each controller then drives its own
     /// player (controller 1 = player one, controller 2 = player two).
     pub players: u8,
+    /// With two players: what each player uses. At most one player has the
+    /// keyboard and mouse ([`GameSettings::set_input`] keeps it that way).
+    pub inputs: [PlayerInput; 2],
+}
+
+/// What one player plays with in a two-player game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerInput {
+    /// A controller (both on controllers: controller 1 is player one and
+    /// controller 2 player two; the mouse still aims for player one).
+    Controller,
+    /// The mouse aims and fires for this player; every controller plays the
+    /// other player.
+    KeyboardMouse,
+}
+
+impl PlayerInput {
+    pub const ALL: [Self; 2] = [Self::Controller, Self::KeyboardMouse];
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Controller => "controller",
+            Self::KeyboardMouse => "keyboard_mouse",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Controller => "Controller",
+            Self::KeyboardMouse => "Keyboard & mouse",
+        }
+    }
 }
 
 impl GameSettings {
+    /// Set what a player (0 or 1) uses. Giving one player the keyboard and
+    /// mouse puts the other on controllers.
+    pub fn set_input(&mut self, player: usize, input: PlayerInput) {
+        let player = player.min(1);
+        self.inputs[player] = input;
+        if input == PlayerInput::KeyboardMouse {
+            self.inputs[1 - player] = PlayerInput::Controller;
+        }
+    }
+
+    /// `ARCADE_INPUTS` for the adapters (`pad,pad`, `pad,kbm` or `kbm,pad`).
+    pub fn inputs_env(&self) -> &'static str {
+        match self.inputs {
+            [PlayerInput::Controller, PlayerInput::KeyboardMouse] => "pad,kbm",
+            [PlayerInput::KeyboardMouse, _] => "kbm,pad",
+            _ => "pad,pad",
+        }
+    }
+
     pub fn defaults(profile: &Profile) -> Self {
         Self {
             backend: Backend::Auto,
@@ -220,6 +269,7 @@ impl GameSettings {
             crosshair: profile.crosshair.clone().unwrap_or(Crosshair(None)),
             crosshair_size: banana_input::crosshair::SIZE_DEFAULT,
             players: 1,
+            inputs: [PlayerInput::Controller; 2],
         }
     }
 
@@ -243,7 +293,12 @@ impl GameSettings {
             },
             self.vsync.label().to_ascii_lowercase(),
             if self.audio { "on" } else { "off" },
-        ) + if self.players > 1 { " · 2 players" } else { "" }
+        ) + match (self.players > 1, self.inputs_env()) {
+            (false, _) => "",
+            (true, "pad,kbm") => " · 2 players (P2 keyboard & mouse)",
+            (true, "kbm,pad") => " · 2 players (P1 keyboard & mouse)",
+            (true, _) => " · 2 players",
+        }
     }
 
     /// Environment variables for the sandboxed game process. Read by the
@@ -260,6 +315,7 @@ impl GameSettings {
         }
         if self.players > 1 {
             env.push(("ARCADE_PLAYERS", self.players.to_string()));
+            env.push(("ARCADE_INPUTS", self.inputs_env().into()));
         }
         match self.vsync {
             VSync::Default => {}
@@ -339,6 +395,15 @@ impl GameSettings {
                     _ => return Err(format!("players must be 1 or 2, not \"{value}\"")),
                 }
             }
+            "p1_input" | "p2_input" => {
+                let input = PlayerInput::ALL
+                    .into_iter()
+                    .find(|i| i.id().eq_ignore_ascii_case(value))
+                    .ok_or_else(|| {
+                        format!("{key} must be controller or keyboard_mouse, not \"{value}\"")
+                    })?;
+                self.set_input(usize::from(key == "p2_input"), input);
+            }
             _ => return Err(format!("unknown setting \"{key}\"")),
         }
         Ok(())
@@ -412,7 +477,7 @@ impl Settings {
             {
                 return Err(at(format!("[{id}] has no crosshair setting")));
             }
-            if key.trim() == "players"
+            if matches!(key.trim(), "players" | "p1_input" | "p2_input")
                 && value.trim() != "1"
                 && profile(id).is_some_and(|p| p.max_players < 2)
             {
@@ -463,6 +528,13 @@ impl Settings {
                     "players = {}  # 1 | 2 (controller 2 drives player two)\n",
                     g.players
                 );
+                for (player, input) in g.inputs.iter().enumerate() {
+                    out += &format!(
+                        "p{}_input = {}  # controller | keyboard_mouse, when two play\n",
+                        player + 1,
+                        input.id()
+                    );
+                }
             }
         }
         out

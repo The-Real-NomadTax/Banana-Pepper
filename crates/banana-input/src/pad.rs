@@ -142,20 +142,66 @@ impl Pad {
 /// Most players any game adapter supports (the gun games are two-player).
 pub const MAX_PLAYERS: usize = 2;
 
-/// `ARCADE_PLAYERS` (from settings.cfg): `2` gives each controller its own
-/// player; anything else (or absent) is one player with every controller
-/// merged.
-pub fn players(value: Option<&[u8]>) -> usize {
-    match value {
-        Some(b"2") => 2,
-        _ => 1,
-    }
+/// Who plays with which device, from `ARCADE_PLAYERS` and `ARCADE_INPUTS`
+/// (settings.cfg `players`, `p1_input`, `p2_input`).
+///
+/// * One player: every controller, the mouse and the keyboard play player one.
+/// * Two players on controllers (`pad,pad`): the first connected controller
+///   plays player one, the rest player two; the mouse stays player one.
+/// * `pad,kbm`: every controller plays player one; the mouse (and keyboard
+///   aim/fire keys) play player two.
+/// * `kbm,pad`: the mouse plays player one; every controller plays player two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Inputs {
+    pub players: usize,
+    /// The player the mouse aims for (0 = player one).
+    pub mouse: usize,
+    /// Players driven by controllers, in connection order.
+    pads: [usize; MAX_PLAYERS],
+    pad_count: usize,
 }
 
-/// The player a controller drives: the first connected controller is player
-/// one, the second player two; any further controllers join the last player.
-pub fn player_for(index: usize, players: usize) -> usize {
-    index.min(players.clamp(1, MAX_PLAYERS) - 1)
+impl Inputs {
+    pub const ONE_PLAYER: Self = Self {
+        players: 1,
+        mouse: 0,
+        pads: [0; MAX_PLAYERS],
+        pad_count: 1,
+    };
+
+    pub fn parse(players: Option<&[u8]>, inputs: Option<&[u8]>) -> Self {
+        if players != Some(b"2") {
+            return Self::ONE_PLAYER;
+        }
+        let (mouse, pads, pad_count) = match inputs {
+            Some(b"pad,kbm") => (1, [0, 0], 1),
+            Some(b"kbm,pad") => (0, [1, 1], 1),
+            _ => (0, [0, 1], 2),
+        };
+        Self {
+            players: 2,
+            mouse,
+            pads,
+            pad_count,
+        }
+    }
+
+    /// The player the `index`th connected controller drives; any controllers
+    /// beyond the last listed player join that player.
+    pub fn pad_player(&self, index: usize) -> usize {
+        self.pads[index.min(self.pad_count - 1)]
+    }
+
+    /// True if any controller drives `player`.
+    pub fn pad_drives(&self, player: usize) -> bool {
+        self.pads[..self.pad_count].contains(&player)
+    }
+
+    /// True if `player` aims with a controller only (no mouse), so its aim
+    /// must reach the game some other way than the mouse pointer.
+    pub fn pad_aims(&self, player: usize) -> bool {
+        player < self.players && player != self.mouse && self.pad_drives(player)
+    }
 }
 
 /// Moves a pointer with stick input. Speed grows with deflection (squared
@@ -323,13 +369,21 @@ mod tests {
     }
 
     #[test]
-    fn controllers_are_assigned_to_players() {
-        assert_eq!(players(None), 1);
-        assert_eq!(players(Some(b"2")), 2);
-        assert_eq!(players(Some(b"4")), 1);
-        assert_eq!((player_for(0, 1), player_for(1, 1), player_for(3, 1)), (0, 0, 0));
-        assert_eq!((player_for(0, 2), player_for(1, 2), player_for(2, 2)), (0, 1, 1));
-        assert_eq!(player_for(1, 0), 0);
+    fn controllers_and_mouse_are_assigned_to_players() {
+        let one = Inputs::parse(None, Some(b"pad,kbm"));
+        assert_eq!(one, Inputs::ONE_PLAYER);
+        assert_eq!((one.pad_player(0), one.pad_player(3), one.mouse), (0, 0, 0));
+        assert_eq!(Inputs::parse(Some(b"4"), None), Inputs::ONE_PLAYER);
+        let pads = Inputs::parse(Some(b"2"), None);
+        assert_eq!((pads.pad_player(0), pads.pad_player(1), pads.pad_player(2)), (0, 1, 1));
+        assert_eq!(pads.mouse, 0);
+        assert!(!pads.pad_aims(0) && pads.pad_aims(1));
+        let p2_mouse = Inputs::parse(Some(b"2"), Some(b"pad,kbm"));
+        assert_eq!((p2_mouse.pad_player(0), p2_mouse.pad_player(1), p2_mouse.mouse), (0, 0, 1));
+        assert!(p2_mouse.pad_aims(0) && !p2_mouse.pad_aims(1) && !p2_mouse.pad_drives(1));
+        let p1_mouse = Inputs::parse(Some(b"2"), Some(b"kbm,pad"));
+        assert_eq!((p1_mouse.pad_player(0), p1_mouse.pad_player(1), p1_mouse.mouse), (1, 1, 0));
+        assert!(!p1_mouse.pad_drives(0) && p1_mouse.pad_aims(1));
     }
 
     #[test]

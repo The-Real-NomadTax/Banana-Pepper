@@ -290,10 +290,9 @@ impl Reader {
         }
     }
 
-    /// Controllers per player ([`pad::player_for`]), rescanning for new ones
-    /// every 2 s. One player merges every controller; with two, the first
-    /// connected controller drives player one and the rest player two.
-    pub fn read_players(&mut self, players: usize) -> [Pad; pad::MAX_PLAYERS] {
+    /// Controllers per player ([`pad::Inputs::pad_player`]), rescanning for
+    /// new ones every 2 s.
+    pub fn read_players(&mut self, inputs: &pad::Inputs) -> [Pad; pad::MAX_PLAYERS] {
         if self
             .last_scan
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(2))
@@ -308,16 +307,25 @@ impl Reader {
         }
         let mut out = [Pad::default(); pad::MAX_PLAYERS];
         for (index, device) in self.devices.iter().enumerate() {
-            let player = pad::player_for(index, players);
+            let player = inputs.pad_player(index);
             out[player] = out[player].merge(device.state());
         }
         out
     }
 }
 
-/// `ARCADE_PLAYERS` (settings.cfg `players`): 1 or 2.
-pub fn players() -> usize {
-    pad::players(std::env::var("ARCADE_PLAYERS").ok().as_deref().map(str::as_bytes))
+/// Who plays with which device (settings.cfg `players`, `p1_input`,
+/// `p2_input`, via `ARCADE_PLAYERS` and `ARCADE_INPUTS`).
+pub fn inputs() -> pad::Inputs {
+    static INPUTS: std::sync::OnceLock<pad::Inputs> = std::sync::OnceLock::new();
+    *INPUTS.get_or_init(|| {
+        let var = |name| std::env::var(name).ok();
+        let (players, inputs) = (var("ARCADE_PLAYERS"), var("ARCADE_INPUTS"));
+        pad::Inputs::parse(
+            players.as_deref().map(str::as_bytes),
+            inputs.as_deref().map(str::as_bytes),
+        )
+    })
 }
 
 /// Controller 2's bindings (`ARCADE_PAD_P2`), or `defaults` when unset.
@@ -427,7 +435,7 @@ mod tests {
     fn live_controllers() {
         let mut reader = Reader::new();
         for _ in 0..30 {
-            let [state, _] = reader.read_players(1);
+            let [state, _] = reader.read_players(&pad::Inputs::ONE_PLAYER);
             eprintln!("{state:?} aim={:?}", state.aim());
             std::thread::sleep(Duration::from_millis(100));
         }

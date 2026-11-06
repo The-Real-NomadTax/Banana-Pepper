@@ -14,11 +14,13 @@
 //!   press the action's own key, RT/LT click the left/right mouse button and
 //!   either stick moves the pointer, all through XTest so the game sees
 //!   ordinary X input. Back + Start exits.
-//! * Two players (settings.cfg `players = 2`): controller 2 presses player
-//!   two's keys (Start 2, Coin 2, Q/W = the game's player-two fire and
-//!   secondary) and its stick aims player two. The prepared image maps
-//!   player two's aim to the player-two gun sources, which are written here
-//!   through the game's own analog setter.
+//! * Two players (settings.cfg `players = 2`): each player's controller
+//!   presses that player's keys (Start 2 and Coin 2 for player two). The
+//!   player with the mouse fires with its buttons (RT/LT click them); the
+//!   other player fires with Q/W and aims with its stick through its gun
+//!   sources, which the prepared image maps to its aim and which are written
+//!   here through the game's own analog setter. With player two on keyboard
+//!   and mouse, player one is the controller-aimed player.
 //!
 //! Game windows are identified by the unique SDL_VIDEO_X11_WMCLASS the
 //! launcher sets. XCB is loaded with dlopen; it reports errors per request, so
@@ -512,9 +514,11 @@ type FakeInput = unsafe extern "C" fn(Conn, u8, u8, u32, u32, i16, i16, u8) -> C
 const DEFAULT_PAD_KEYS: &str = "49:16,49:4096,53:32,57:8192,273:1,274:2";
 /// Controller 2 with two players: Start 2 and Coin 2 keys instead.
 const DEFAULT_PAD_KEYS_P2: &str = "50:16,50:4096,54:32,57:8192,273:1,274:2";
-/// The engine's desktop-mode player-two fire and secondary keys (q, w).
-const P2_FIRE_KEY: u32 = 113;
-const P2_SECONDARY_KEY: u32 = 119;
+/// Fire and secondary keys (q, w) for the player without the mouse: the
+/// engine's desktop-mode player-two keys, or player one's in images where
+/// player two has the mouse.
+const Q_FIRE_KEY: u32 = 113;
+const W_SECONDARY_KEY: u32 = 119;
 /// Pointer speed at full stick deflection, in screen pixels per second.
 const POINTER_SPEED: i32 = 1200;
 const KEY_PRESS: u8 = 2;
@@ -526,10 +530,11 @@ const MOTION_NOTIFY: u8 = 6;
 const RAW_ANALOG: usize = 0x081b18d8;
 const SET_ANALOG: usize = 0x081b1234;
 const ANALOG_PROLOGUE: [u8; 6] = [0x55, 0x89, 0xe5, 0x83, 0xec, 0x10];
-/// Mouse x/y sources, and the player-two gun x/y sources the prepared image
-/// maps to player two's aim.
+/// Mouse x/y sources, and each player's gun x/y sources. A two-player image
+/// maps the gun sources to the aim of a player who aims with a controller
+/// only (see the preparer's `TwoPlayer`).
 const MOUSE_AXES: [i32; 2] = [0x144, 0x145];
-const PLAYER_TWO_AXES: [i32; 2] = [0x183, 0x184];
+const GUN_AXES: [[i32; 2]; 2] = [[0x181, 0x182], [0x183, 0x184]];
 /// The game's analog input record (0x2c bytes): flags, scaled value, delta,
 /// raw value, raw delta, then the min/max/range and output scale words.
 type Analog = [u32; 11];
@@ -557,8 +562,9 @@ fn mapped(address: usize, len: usize) -> bool {
     })
 }
 
-/// Player two's aim, written into the player-two gun records.
-struct PlayerTwoAim {
+/// A player's controller aim, written into that player's gun records.
+struct GunAim {
+    axes: [i32; 2],
     get: unsafe extern "C" fn(i32) -> *mut Analog,
     set: unsafe extern "C" fn(*mut Analog, f32),
     cursor: crate::pad::Cursor,
@@ -566,8 +572,8 @@ struct PlayerTwoAim {
     height: i32,
 }
 
-impl PlayerTwoAim {
-    fn new() -> Result<Self, String> {
+impl GunAim {
+    fn new(player: usize) -> Result<Self, String> {
         for address in [RAW_ANALOG, SET_ANALOG] {
             if !mapped(address, ANALOG_PROLOGUE.len())
                 || unsafe { std::slice::from_raw_parts(address as *const u8, 6) } != ANALOG_PROLOGUE
@@ -584,6 +590,7 @@ impl PlayerTwoAim {
             .filter(|&(w, h)| w > 0 && h > 0)
             .unwrap_or((1360, 768));
         Ok(Self {
+            axes: GUN_AXES[player.min(1)],
             get: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(i32) -> *mut Analog>(RAW_ANALOG) },
             set: unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(*mut Analog, f32)>(SET_ANALOG) },
             cursor: crate::pad::Cursor::new(width / 2, height / 2),
@@ -592,14 +599,14 @@ impl PlayerTwoAim {
         })
     }
 
-    /// Moves player two's aim and stores it in window pixels, scaled exactly
+    /// Moves the player's aim and stores it in window pixels, scaled exactly
     /// like the mouse: copy the mouse record's flags and ranges, then set the
     /// raw value through the game's own setter.
     fn update(&mut self, aim: (i32, i32), elapsed: u32) {
         self.cursor
             .step(aim, elapsed, POINTER_SPEED, self.width, self.height);
         let values = [self.cursor.x as f32, self.cursor.y as f32];
-        for ((mouse, gun), value) in MOUSE_AXES.into_iter().zip(PLAYER_TWO_AXES).zip(values) {
+        for ((mouse, gun), value) in MOUSE_AXES.into_iter().zip(self.axes).zip(values) {
             let (mouse, gun) = unsafe { ((self.get)(mouse), (self.get)(gun)) };
             if mouse.is_null() || gun.is_null() {
                 continue;
@@ -620,11 +627,12 @@ impl PlayerTwoAim {
 struct Controller {
     fake: FakeInput,
     reader: crate::evdev_pad::Reader,
-    players: usize,
+    inputs: crate::pad::Inputs,
     /// (event type, keycode/button, pad mask per player, currently pressed)
     outputs: Vec<(u8, u8, [u32; crate::pad::MAX_PLAYERS], bool)>,
     cursor: crate::pad::Cursor,
-    player_two: Option<PlayerTwoAim>,
+    /// Controller-only aim per player (players without the mouse).
+    guns: [Option<GunAim>; crate::pad::MAX_PLAYERS],
     last: Instant,
 }
 
@@ -641,7 +649,8 @@ impl Controller {
             return Err("libxcb-xtest lacks xcb_test_fake_input".into());
         }
         let fake: FakeInput = unsafe { std::mem::transmute::<*mut c_void, FakeInput>(pointer) };
-        let players = crate::evdev_pad::players();
+        let inputs = crate::evdev_pad::inputs();
+        let players = inputs.players;
         let mut outputs: Vec<(u8, u8, [u32; crate::pad::MAX_PLAYERS], bool)> = Vec::new();
         let mut add = |kind: u8, detail: u8, player: usize, mask: u32| {
             match outputs.iter_mut().find(|o| o.0 == kind && o.1 == detail) {
@@ -668,37 +677,51 @@ impl Controller {
                 }
             }
         }
-        add(BUTTON_PRESS, 1, 0, crate::pad::RT);
-        add(BUTTON_PRESS, 3, 0, crate::pad::LT);
-        let mut player_two = None;
-        if players > 1 {
-            for (sdl, mask) in [(P2_FIRE_KEY, crate::pad::RT), (P2_SECONDARY_KEY, crate::pad::LT)] {
+        // The mouse's player fires with the mouse buttons; the other player
+        // with Q/W (the prepared image gives those keys to that player).
+        add(BUTTON_PRESS, 1, inputs.mouse, crate::pad::RT);
+        add(BUTTON_PRESS, 3, inputs.mouse, crate::pad::LT);
+        let mut guns = [None, None];
+        for (player, gun) in guns.iter_mut().enumerate() {
+            if !inputs.pad_aims(player) {
+                continue;
+            }
+            for (sdl, mask) in [(Q_FIRE_KEY, crate::pad::RT), (W_SECONDARY_KEY, crate::pad::LT)] {
                 if let Some(keycode) = x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
-                    add(KEY_PRESS, keycode, 1, mask);
+                    add(KEY_PRESS, keycode, player, mask);
                 }
             }
-            match PlayerTwoAim::new() {
+            match GunAim::new(player) {
                 Ok(aim) => {
-                    eprintln!("[aliens] two players: controller 2 is player two");
-                    player_two = Some(aim);
+                    eprintln!(
+                        "[aliens] two players: a controller aims player {}; the mouse aims player {}",
+                        player + 1,
+                        inputs.mouse + 1
+                    );
+                    *gun = Some(aim);
                 }
-                Err(error) => eprintln!("[aliens] player-two aim disabled: {error}"),
+                Err(error) => eprintln!("[aliens] player {} aim disabled: {error}", player + 1),
             }
         }
         Ok(Self {
             fake,
             reader: crate::evdev_pad::Reader::new(),
-            players,
+            inputs,
             outputs,
             cursor: crate::pad::Cursor::new(1 << 20, 1 << 20),
-            player_two,
+            guns,
             last: Instant::now(),
         })
     }
 
     fn frame(&mut self, watcher: &Watcher) {
-        let states = self.reader.read_players(self.players);
-        let state = states[0];
+        let states = self.reader.read_players(&self.inputs);
+        // The controller moves the mouse pointer only for the mouse's player.
+        let pointer = if self.inputs.pad_drives(self.inputs.mouse) {
+            states[self.inputs.mouse]
+        } else {
+            crate::pad::Pad::default()
+        };
         let elapsed = self.last.elapsed().as_millis() as u32;
         self.last = Instant::now();
         let any = states
@@ -721,8 +744,10 @@ impl Controller {
             }
         }
         let mut sent = false;
-        if focused && let Some(aim) = self.player_two.as_mut() {
-            aim.update(states[1].aim(), elapsed);
+        for (gun, state) in self.guns.iter_mut().zip(states) {
+            if focused && let Some(gun) = gun {
+                gun.update(state.aim(), elapsed);
+            }
         }
         for output in &mut self.outputs {
             let now = focused && states.iter().zip(output.2).any(|(s, mask)| s.held(mask));
@@ -734,7 +759,7 @@ impl Controller {
             }
         }
         let (old_x, old_y) = (self.cursor.x, self.cursor.y);
-        if focused && self.cursor.step(state.aim(), elapsed, POINTER_SPEED, 1 << 21, 1 << 21) {
+        if focused && self.cursor.step(pointer.aim(), elapsed, POINTER_SPEED, 1 << 21, 1 << 21) {
             let (dx, dy) = (self.cursor.x - old_x, self.cursor.y - old_y);
             // Relative motion (detail 1). The virtual canvas keeps sub-pixel
             // remainders; recentre it only when it nears an edge.

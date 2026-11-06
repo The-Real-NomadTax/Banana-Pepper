@@ -4,9 +4,11 @@
 //! stick moves the aim: synthetic SDL_MOUSEMOTION events plus SDL_GetMouseState
 //! report the controller pointer until the real mouse moves again.
 //!
-//! Two players (settings.cfg `players = 2`): controller 2's buttons drive
-//! player two's targets and its stick moves player two's aim, which
-//! `jurassic_controls.rs` feeds to the game as the player-two gun.
+//! Two players (settings.cfg `players = 2`): each player's controller
+//! buttons drive that player's targets. A player who aims with a controller
+//! but not the mouse (player two on controllers, or player one while player
+//! two has the keyboard and mouse) gets a stick-driven aim of its own, which
+//! `jurassic_controls.rs` feeds to the game as that player's gun.
 use crate::evdev_pad::{Edges, Reader, bindings};
 use crate::pad::Cursor;
 use std::collections::VecDeque;
@@ -29,20 +31,24 @@ const EVENT_SIZE: usize = 20;
 
 pub static WIDTH: AtomicI32 = AtomicI32::new(0);
 pub static HEIGHT: AtomicI32 = AtomicI32::new(0);
-/// Player two's aim in window pixels; -1 until the window size is known.
-static P2_X: AtomicI32 = AtomicI32::new(-1);
-static P2_Y: AtomicI32 = AtomicI32::new(-1);
+/// Controller-only aim per player, in window pixels; -1 until the window
+/// size is known (and always for a player who aims with the mouse).
+static GUN_AIM: [[AtomicI32; 2]; crate::pad::MAX_PLAYERS] = [
+    [AtomicI32::new(-1), AtomicI32::new(-1)],
+    [AtomicI32::new(-1), AtomicI32::new(-1)],
+];
 
 struct State {
     reader: Reader,
-    players: usize,
+    inputs: crate::pad::Inputs,
     /// Per player; player two's are empty in one-player sessions.
     bindings: [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS],
     /// (target, keysym) for each bound action.
     sources: Vec<(u32, i32)>,
     edges: Edges,
     cursor: Cursor,
-    cursor_p2: Option<Cursor>,
+    /// Controller-only aim per player (see [`GUN_AIM`]).
+    guns: [Option<Cursor>; crate::pad::MAX_PLAYERS],
     /// The controller moved the pointer more recently than the mouse.
     aiming: bool,
     last_real: (i32, i32),
@@ -63,15 +69,14 @@ pub fn sources(bindings: &[(u32, u32)]) -> Vec<(u32, i32)> {
     sources
 }
 
-/// Players in this session (settings.cfg `players`).
-pub fn players() -> usize {
-    static PLAYERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *PLAYERS.get_or_init(crate::evdev_pad::players)
+/// Who plays with which device (settings.cfg `players`, `p1_input`, `p2_input`).
+pub fn inputs() -> crate::pad::Inputs {
+    crate::evdev_pad::inputs()
 }
 
 /// Each player's controller bindings.
 fn player_bindings() -> [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS] {
-    let p2 = if players() > 1 {
+    let p2 = if inputs().players > 1 {
         crate::evdev_pad::bindings_p2(DEFAULT_PAD_P2)
     } else {
         Vec::new()
@@ -84,9 +89,10 @@ pub fn configured_bindings() -> Vec<(u32, u32)> {
     player_bindings().concat()
 }
 
-/// Player two's aim in window pixels, once a window exists.
-pub fn player_two_aim() -> Option<(f32, f32)> {
-    let (x, y) = (P2_X.load(Ordering::Relaxed), P2_Y.load(Ordering::Relaxed));
+/// A player's controller-only aim in window pixels, once a window exists.
+pub fn gun_aim(player: usize) -> Option<(f32, f32)> {
+    let [x, y] = &GUN_AIM[player.min(crate::pad::MAX_PLAYERS - 1)];
+    let (x, y) = (x.load(Ordering::Relaxed), y.load(Ordering::Relaxed));
     (x >= 0 && y >= 0).then_some((x as f32, y as f32))
 }
 
@@ -94,12 +100,16 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let state = guard.get_or_insert_with(|| {
         let bindings = player_bindings();
-        if players() > 1 {
-            eprintln!("[jurassic] two players: controller 2 is player two");
+        let inputs = inputs();
+        if inputs.players > 1 {
+            eprintln!(
+                "[jurassic] two players: the mouse aims for player {}",
+                inputs.mouse + 1
+            );
         }
         State {
             reader: Reader::new(),
-            players: players(),
+            inputs,
             sources: sources(&bindings.concat()),
             bindings,
             edges: Edges::default(),
@@ -107,7 +117,7 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
                 WIDTH.load(Ordering::Relaxed) / 2,
                 HEIGHT.load(Ordering::Relaxed) / 2,
             ),
-            cursor_p2: None,
+            guns: [None; crate::pad::MAX_PLAYERS],
             aiming: false,
             last_real: (-1, -1),
             last: Instant::now(),
@@ -138,7 +148,7 @@ fn motion_event(x: i32, y: i32, dx: i32, dy: i32) -> [u8; EVENT_SIZE] {
 /// Once per frame (start of the engine's event drain): read controllers.
 pub fn frame() {
     with(|s| {
-        let states = s.reader.read_players(s.players);
+        let states = s.reader.read_players(&s.inputs);
         if states
             .iter()
             .any(|p| p.held(crate::pad::BACK) && p.held(crate::pad::START))
@@ -146,9 +156,15 @@ pub fn frame() {
             eprintln!("[jurassic] Back + Start: exiting");
             std::process::exit(0);
         }
-        let state = states[0];
+        // The controller moves the mouse pointer only for a player who also
+        // has the mouse (one player, or player one with both on controllers).
+        let pointer = if s.inputs.pad_drives(s.inputs.mouse) {
+            states[s.inputs.mouse]
+        } else {
+            crate::pad::Pad::default()
+        };
         let mut changes = Vec::new();
-        let players: Vec<(crate::pad::Pad, &[(u32, u32)])> = (0..s.players)
+        let players: Vec<(crate::pad::Pad, &[(u32, u32)])> = (0..s.inputs.players)
             .map(|p| (states[p], s.bindings[p].as_slice()))
             .collect();
         s.edges
@@ -168,17 +184,18 @@ pub fn frame() {
         if width <= 0 || height <= 0 {
             return;
         }
-        if s.players > 1 {
-            let p2 = s
-                .cursor_p2
-                .get_or_insert_with(|| Cursor::new(width / 2, height / 2));
-            p2.step(states[1].aim(), elapsed, width * SPEED_PER_WIDTH, width, height);
-            P2_X.store(p2.x.clamp(0, width - 1), Ordering::Relaxed);
-            P2_Y.store(p2.y.clamp(0, height - 1), Ordering::Relaxed);
+        for player in 0..s.inputs.players {
+            if !s.inputs.pad_aims(player) {
+                continue;
+            }
+            let gun = s.guns[player].get_or_insert_with(|| Cursor::new(width / 2, height / 2));
+            gun.step(states[player].aim(), elapsed, width * SPEED_PER_WIDTH, width, height);
+            GUN_AIM[player][0].store(gun.x.clamp(0, width - 1), Ordering::Relaxed);
+            GUN_AIM[player][1].store(gun.y.clamp(0, height - 1), Ordering::Relaxed);
         }
         let (old_x, old_y) = (s.cursor.x, s.cursor.y);
         if s.cursor
-            .step(state.aim(), elapsed, width * SPEED_PER_WIDTH, width, height)
+            .step(pointer.aim(), elapsed, width * SPEED_PER_WIDTH, width, height)
         {
             s.aiming = true;
             s.queue.push_back(motion_event(

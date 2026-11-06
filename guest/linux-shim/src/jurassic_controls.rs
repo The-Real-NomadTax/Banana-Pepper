@@ -44,7 +44,8 @@ const DEFAULT_BUTTONS: &[InputMap] = &[
     map(326, 333),
     map(327, 334), // left trigger, right secondary
 ];
-// Mouse position always drives player-one aim and the menu pointer.
+// The mouse drives player one's aim (or player two's, when player two has the
+// keyboard and mouse) and the menu pointer.
 const POINTER_MAPS: &[InputMap] = &[
     map(324, 331),
     map(325, 332), // mouse -> player one aim
@@ -53,10 +54,27 @@ const POINTER_MAPS: &[InputMap] = &[
     map(326, 391),
     map(326, 392), // menu pointer
 ];
-// Two players: the player-two gun sources (raw 353/354, filled from
-// controller 2 by `player_two_aim`) drive player two's aim. The cabinet's own
-// tables map them the same way; desktop maps are re-added last regardless.
-const PLAYER_TWO_MAPS: &[InputMap] = &[map(353, 341), map(354, 342)];
+const MOUSE_PLAYER_TWO_MAPS: &[InputMap] = &[
+    map(324, 341),
+    map(325, 342), // mouse -> player two aim
+    map(324, 387),
+    map(325, 388),
+    map(326, 391),
+    map(326, 392), // menu pointer
+];
+// A player who aims with a controller only: the gun sources (raw 351/352 for
+// player one, 353/354 for player two, filled by `gun_aim`) drive their aim.
+// The cabinet's own tables map them the same way; desktop maps are re-added
+// last regardless.
+const GUN_MAPS: [&[InputMap]; 2] = [
+    &[map(351, 331), map(352, 332)],
+    &[map(353, 341), map(354, 342)],
+];
+/// Gun x/y sources per player.
+const GUN_AXES: [[i32; 2]; 2] = [[351, 352], [353, 354]];
+/// Player one's trigger/secondary, and player two's: keyboard and mouse
+/// bindings for the gun move to whoever has the keyboard and mouse.
+const GUN_TARGETS: [[i32; 2]; 2] = [[333, 334], [343, 344]];
 // 343/344 are player two's trigger and secondary (controller 2 only).
 const BUTTON_TARGETS: &[i32] = &[
     371, 372, 379, 380, 378, 377, 383, 384, 385, 386, 333, 334, 343, 344,
@@ -65,10 +83,10 @@ const BUTTON_TARGETS: &[i32] = &[
 /// setter, which scales a raw value by the record's configured range.
 const RAW_ANALOG: usize = 0x0836674b;
 const SET_ANALOG: usize = 0x08366105;
-/// Mouse x/y sources and the player-two gun x/y sources.
+/// Mouse x/y sources.
 const MOUSE_AXES: [i32; 2] = [324, 325];
-const PLAYER_TWO_AXES: [i32; 2] = [353, 354];
-static TWO_PLAYERS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Session input assignment, set by [`initialize`].
+static INPUTS: std::sync::OnceLock<crate::pad::Inputs> = std::sync::OnceLock::new();
 
 static MAPS: std::sync::OnceLock<Vec<InputMap>> = std::sync::OnceLock::new();
 
@@ -97,12 +115,18 @@ fn parse_buttons(value: &str) -> Result<Vec<InputMap>, String> {
 fn build_maps(
     buttons: Option<&str>,
     pad: &[(u32, i32)],
-    two_players: bool,
+    inputs: crate::pad::Inputs,
 ) -> Result<Vec<InputMap>, String> {
     let mut maps = match buttons {
         Some(value) => parse_buttons(value)?,
         None => DEFAULT_BUTTONS.to_vec(),
     };
+    // Keyboard and mouse fire/secondary belong to the mouse's player.
+    for entry in &mut maps {
+        if let Some(i) = GUN_TARGETS[0].iter().position(|&t| t == entry.target) {
+            entry.target = GUN_TARGETS[inputs.mouse.min(1)][i];
+        }
+    }
     // Controller buttons arrive as private world keysyms (jurassic_pad.rs).
     for &(target, keysym) in pad {
         if BUTTON_TARGETS.contains(&(target as i32)) {
@@ -110,9 +134,15 @@ fn build_maps(
         }
     }
     // Pointer maps last so they win over any analog destination overlap.
-    maps.extend_from_slice(POINTER_MAPS);
-    if two_players {
-        maps.extend_from_slice(PLAYER_TWO_MAPS);
+    maps.extend_from_slice(if inputs.mouse == 1 {
+        MOUSE_PLAYER_TWO_MAPS
+    } else {
+        POINTER_MAPS
+    });
+    for (player, guns) in GUN_MAPS.iter().enumerate() {
+        if inputs.pad_aims(player) {
+            maps.extend_from_slice(guns);
+        }
     }
     maps.dedup();
     Ok(maps)
@@ -154,8 +184,8 @@ fn order_maps(
 pub fn initialize() -> Result<(), String> {
     let buttons = std::env::var("ARCADE_JURASSIC_KEYS").ok();
     let pad = crate::jurassic_pad::sources(&crate::jurassic_pad::configured_bindings());
-    let two_players = crate::jurassic_pad::players() > 1;
-    let built = build_maps(buttons.as_deref(), &pad, two_players)?;
+    let inputs = crate::jurassic_pad::inputs();
+    let built = build_maps(buttons.as_deref(), &pad, inputs)?;
     eprintln!(
         "[jurassic] {} desktop input maps ({})",
         built.len(),
@@ -191,7 +221,7 @@ pub fn initialize() -> Result<(), String> {
         }
     }
     eprintln!("[jurassic] desktop mode: physical RIO unavailable; disconnected overlay suppressed");
-    TWO_PLAYERS.store(two_players, Ordering::Relaxed);
+    let _ = INPUTS.set(inputs);
     Ok(())
 }
 
@@ -199,16 +229,17 @@ pub fn initialize() -> Result<(), String> {
 /// raw value, raw delta, then the min/max/range and output scale words.
 type Analog = [u32; 11];
 
-/// Feeds controller 2's aim to the player-two gun sources, scaled exactly like
-/// the mouse: copy the mouse record's flags and ranges, then set the raw value
-/// in window pixels through the game's own setter (as its mouse handler does).
-unsafe fn player_two_aim() {
-    let Some((x, y)) = crate::jurassic_pad::player_two_aim() else {
+/// Feeds a player's controller aim to that player's gun sources, scaled
+/// exactly like the mouse: copy the mouse record's flags and ranges, then set
+/// the raw value in window pixels through the game's own setter (as its mouse
+/// handler does).
+unsafe fn gun_aim(player: usize) {
+    let Some((x, y)) = crate::jurassic_pad::gun_aim(player) else {
         return;
     };
     let get: unsafe extern "C" fn(i32) -> *mut Analog = unsafe { std::mem::transmute(RAW_ANALOG) };
     let set: unsafe extern "C" fn(*mut Analog, f32) = unsafe { std::mem::transmute(SET_ANALOG) };
-    for ((mouse, gun), value) in MOUSE_AXES.into_iter().zip(PLAYER_TWO_AXES).zip([x, y]) {
+    for ((mouse, gun), value) in MOUSE_AXES.into_iter().zip(GUN_AXES[player]).zip([x, y]) {
         let (mouse, gun) = unsafe { (get(mouse), get(gun)) };
         if mouse.is_null() || gun.is_null() {
             continue;
@@ -240,8 +271,12 @@ pub unsafe fn update() {
             std::process::exit(1);
         }
     }
-    if TWO_PLAYERS.load(Ordering::Relaxed) {
-        unsafe { player_two_aim() };
+    if let Some(inputs) = INPUTS.get() {
+        for player in 0..inputs.players.min(2) {
+            if inputs.pad_aims(player) {
+                unsafe { gun_aim(player) };
+            }
+        }
     }
     // Hardware smoothing blends mapped aim with absent physical gun samples.
     // Absolute desktop mouse input needs no physical-gun smoothing.
@@ -253,10 +288,11 @@ pub unsafe fn update() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const ONE: crate::pad::Inputs = crate::pad::Inputs::ONE_PLAYER;
 
     #[test]
     fn desktop_aim_follows_late_cabinet_maps_and_survives_rebuilds() {
-        let desktop = build_maps(None, &[], false).unwrap();
+        let desktop = build_maps(None, &[], ONE).unwrap();
         let mut table = [InputMap::default(); 1024];
         let first = order_maps(&mut table, 0, &desktop).unwrap();
         let cabinet = map(351, 331);
@@ -273,7 +309,7 @@ mod tests {
 
     #[test]
     fn invalid_or_full_tables_are_unchanged() {
-        let desktop = build_maps(None, &[], false).unwrap();
+        let desktop = build_maps(None, &[], ONE).unwrap();
         let mut table = [map(1, 2); 20];
         let original = table;
         assert!(order_maps(&mut table, 21, &desktop).is_err());
@@ -284,33 +320,52 @@ mod tests {
 
     #[test]
     fn configured_buttons_replace_defaults_and_keep_pointer_maps() {
-        let defaults = build_maps(None, &[], false).unwrap();
+        let defaults = build_maps(None, &[], ONE).unwrap();
         // Same order as banana-input's default controls.cfg output.
         let configured = build_maps(
             Some("371:49,372:50,379:53,380:54,378:116,377:57,383:273,384:274,385:13,386:8,333:326,334:327"),
             &[],
-            false,
+            ONE,
         )
         .unwrap();
         assert_eq!(configured, defaults);
-        let custom = build_maps(Some("378:290,333:32,333:326"), &[], false).unwrap();
-        let with_pad = build_maps(Some("378:290"), &[(333, 160), (999, 161)], false).unwrap();
+        let custom = build_maps(Some("378:290,333:32,333:326"), &[], ONE).unwrap();
+        let with_pad = build_maps(Some("378:290"), &[(333, 160), (999, 161)], ONE).unwrap();
         assert_eq!(&with_pad[..2], &[map(290, 378), map(160, 333)]);
         assert!(with_pad.ends_with(POINTER_MAPS));
         assert_eq!(&custom[..3], &[map(290, 378), map(32, 333), map(326, 333)]);
         assert!(custom.ends_with(POINTER_MAPS));
-        assert!(build_maps(Some("999:49"), &[], false).is_err());
-        assert!(build_maps(Some("378:27"), &[], false).is_err());
-        assert!(build_maps(Some("378"), &[], false).is_err());
+        assert!(build_maps(Some("999:49"), &[], ONE).is_err());
+        assert!(build_maps(Some("378:27"), &[], ONE).is_err());
+        assert!(build_maps(Some("378"), &[], ONE).is_err());
     }
 
     #[test]
     fn two_players_add_controller_two_aim_and_buttons() {
-        let two = build_maps(None, &[(343, 168), (372, 169)], true).unwrap();
-        assert!(two.ends_with(PLAYER_TWO_MAPS));
+        let pads = crate::pad::Inputs::parse(Some(b"2"), Some(b"pad,pad"));
+        let two = build_maps(None, &[(343, 168), (372, 169)], pads).unwrap();
+        assert!(two.ends_with(GUN_MAPS[1]));
         assert!(two.contains(&map(168, 343)) && two.contains(&map(169, 372)));
-        let one = build_maps(None, &[], false).unwrap();
-        assert!(!one.iter().any(|m| PLAYER_TWO_MAPS.contains(m)));
+        assert!(two.contains(&map(324, 331)) && two.contains(&map(326, 333)));
+        let one = build_maps(None, &[], ONE).unwrap();
+        assert!(!one.iter().any(|m| GUN_MAPS.iter().any(|g| g.contains(m))));
         assert!(one.ends_with(POINTER_MAPS));
+    }
+
+    #[test]
+    fn keyboard_and_mouse_can_play_player_two() {
+        let inputs = crate::pad::Inputs::parse(Some(b"2"), Some(b"pad,kbm"));
+        let maps = build_maps(None, &[(333, 160)], inputs).unwrap();
+        // The mouse aims and fires for player two...
+        assert!(maps.contains(&map(324, 341)) && maps.contains(&map(325, 342)));
+        assert!(maps.contains(&map(326, 343)) && maps.contains(&map(327, 344)));
+        assert!(!maps.contains(&map(324, 331)) && !maps.contains(&map(326, 333)));
+        // ...while player one's controller aims through the player-one gun.
+        assert!(maps.ends_with(GUN_MAPS[0]));
+        assert!(maps.contains(&map(160, 333)));
+        // Player one on keyboard and mouse: player two's controller aims.
+        let inputs = crate::pad::Inputs::parse(Some(b"2"), Some(b"kbm,pad"));
+        let maps = build_maps(None, &[], inputs).unwrap();
+        assert!(maps.contains(&map(324, 331)) && maps.ends_with(GUN_MAPS[1]));
     }
 }

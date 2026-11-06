@@ -65,6 +65,29 @@ fn two_players_only_for_two_player_games() {
 }
 
 #[test]
+fn players_choose_controller_or_keyboard_and_mouse() {
+    setup();
+    let s = Settings::parse("[big_buck]\nplayers = 2\np2_input = keyboard_mouse\n").unwrap();
+    let g = s.game("big_buck");
+    assert_eq!(g.inputs, [PlayerInput::Controller, PlayerInput::KeyboardMouse]);
+    assert!(g.guest_env().contains(&("ARCADE_INPUTS", "pad,kbm".into())));
+    assert!(g.summary().ends_with("(P2 keyboard & mouse)"));
+    assert_eq!(Settings::parse(&s.to_text()).unwrap(), s);
+    // Only one player can have the keyboard and mouse.
+    let s = Settings::parse(
+        "[jurassic]\nplayers = 2\np2_input = keyboard_mouse\np1_input = keyboard_mouse\n",
+    )
+    .unwrap();
+    assert_eq!(s.game("jurassic").inputs_env(), "kbm,pad");
+    // Inputs only reach the game with two players.
+    let one = Settings::parse("[aliens]\np2_input = keyboard_mouse\n").unwrap();
+    assert!(!one.game("aliens").guest_env().iter().any(|e| e.0 == "ARCADE_INPUTS"));
+    assert!(Settings::parse("[aliens]\np1_input = gamepad\n").is_err());
+    assert!(Settings::parse("[ford]\np2_input = keyboard_mouse\n").is_err());
+    assert_eq!(Settings::default().game("aliens").inputs_env(), "pad,pad");
+}
+
+#[test]
 fn round_trip_and_partial_files() {
     setup();
     let mut s = Settings::default();

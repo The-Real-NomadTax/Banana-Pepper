@@ -31,14 +31,57 @@ const PLAYER_TWO_AIM_SITES: &[(usize, u32, u32)] = &[
     (0x0808199c, 0x145, 0x184),
 ];
 
+/// Player-two-has-the-mouse images: player one's desktop aim maps read the
+/// player-one gun sources 0x181/0x182 (filled from player one's controller
+/// by the shim), and player one's mouse-button fire maps trade sources with
+/// player two's Q/W/E key maps. (address, original source, new source); the
+/// preceding `mov [esp+4], target` operand is checked too.
+const MOUSE_PLAYER_TWO_SITES: &[(usize, u32, u32, u32)] = &[
+    (0x08081870, 0x14b, 0x144, 0x181), // P1 aim x: mouse x -> P1 gun x
+    (0x08081884, 0x14c, 0x145, 0x182), // P1 aim y
+    (0x08081898, 0x14d, 0x146, 0x71),  // P1 trigger: left button -> Q
+    (0x080818ac, 0x14e, 0x147, 0x77),  // P1 secondary: right button -> W
+    (0x080818c0, 0x14f, 0x148, 0x65),  // P1 third: middle button -> E
+    (0x080818fc, 0x157, 0x71, 0x146),  // P2 trigger: Q -> left button
+    (0x08081910, 0x158, 0x77, 0x147),  // P2 secondary: W -> right button
+    (0x08081924, 0x159, 0x65, 0x148),  // P2 third: E -> middle button
+];
+
+/// How a two-player image routes aim (settings.cfg `players`, `p1_input`,
+/// `p2_input`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoPlayer {
+    /// One player: the engine's own desktop maps, unchanged.
+    Off,
+    /// Player two aims with a controller (the player-two gun sources); the
+    /// mouse stays player one's.
+    ControllerPlayerTwo,
+    /// Player two has the mouse and its buttons; player one aims with a
+    /// controller (the player-one gun sources) and fires with Q/W/E.
+    MousePlayerTwo,
+}
+
+impl TwoPlayer {
+    /// From settings: `players` and `ARCADE_INPUTS` ([`GameSettings::inputs_env`]).
+    ///
+    /// [`GameSettings::inputs_env`]: banana_settings::GameSettings::inputs_env
+    pub fn from_settings(players: u8, inputs: &str) -> Self {
+        match (players > 1, inputs) {
+            (false, _) => Self::Off,
+            (true, "pad,kbm") => Self::MousePlayerTwo,
+            (true, _) => Self::ControllerPlayerTwo,
+        }
+    }
+}
+
 /// Writes a separate runtime image and returns its SHA-256. `keys` holds
 /// (cabinet switch source, SDL key symbol) pairs from [`crate::controls`].
-/// `two_players` gives player two its own (controller 2) aim.
+/// `two_player` routes each player's aim and fire ([`TwoPlayer`]).
 pub fn prepare(
     source: &Path,
     destination: &Path,
     keys: &[(u32, u32)],
-    two_players: bool,
+    two_player: TwoPlayer,
 ) -> Result<String, String> {
     let mut bytes = fs::read(source).map_err(|e| e.to_string())?;
     if format!("{:x}", Sha256::digest(&bytes)) != ORIGINAL_SHA256 {
@@ -132,8 +175,22 @@ pub fn prepare(
         {
             return Err("Unsupported Aliens player-two aim mapping; no snapshot written".into());
         }
-        if two_players {
+        if two_player == TwoPlayer::ControllerPlayerTwo {
             patched.push((offset + 3, gun));
+        }
+    }
+    for &(address, target, original, replacement) in MOUSE_PLAYER_TWO_SITES {
+        let offset = address - 0x08048000;
+        if offset < 8
+            || bytes.get(offset - 8..offset - 4) != Some(&[0xc7, 0x44, 0x24, 0x04])
+            || bytes.get(offset - 4..offset) != Some(target.to_le_bytes().as_slice())
+            || bytes.get(offset..offset + 3) != Some(&[0xc7, 0x04, 0x24])
+            || bytes.get(offset + 3..offset + 7) != Some(original.to_le_bytes().as_slice())
+        {
+            return Err("Unsupported Aliens player-one aim mapping; no snapshot written".into());
+        }
+        if two_player == TwoPlayer::MousePlayerTwo {
+            patched.push((offset + 3, replacement));
         }
     }
     for (offset, key) in patched {
@@ -209,7 +266,11 @@ mod tests {
         let keys = banana_input::controls::Bindings::default()
             .codes("aliens")
             .unwrap();
-        assert!(prepare(&source, &destination, &keys, true).is_err());
+        assert!(prepare(&source, &destination, &keys, TwoPlayer::MousePlayerTwo).is_err());
+        assert_eq!(TwoPlayer::from_settings(1, "pad,kbm"), TwoPlayer::Off);
+        assert_eq!(TwoPlayer::from_settings(2, "pad,pad"), TwoPlayer::ControllerPlayerTwo);
+        assert_eq!(TwoPlayer::from_settings(2, "kbm,pad"), TwoPlayer::ControllerPlayerTwo);
+        assert_eq!(TwoPlayer::from_settings(2, "pad,kbm"), TwoPlayer::MousePlayerTwo);
         assert_eq!(fs::read(&source).unwrap(), b"unknown game");
         assert_eq!(fs::read(&destination).unwrap(), b"existing snapshot");
         assert!(!destination.with_extension("preparing").exists());

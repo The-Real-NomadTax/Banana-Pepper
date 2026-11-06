@@ -271,7 +271,8 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
                         }
                         for (tab, label) in tabs {
                             if ui
-                                .selectable_label(app.settings.tab == tab, label)
+                                .add(egui::Button::selectable(app.settings.tab == tab, label)
+                                    .frame_when_inactive(true))
                                 .clicked()
                             {
                                 app.settings.tab = tab;
@@ -345,6 +346,24 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
     }
 }
 
+/// Framed choices keep both selected and available settings visible.
+fn settings_choice<T: PartialEq>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    value: T,
+    label: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    let mut response = ui.add(
+        egui::Button::selectable(*current == value, label.into())
+            .frame_when_inactive(true),
+    );
+    if response.clicked() && *current != value {
+        *current = value;
+        response.mark_changed();
+    }
+    response
+}
+
 /// One or two players, for two-player games (settings.cfg `players`).
 fn players_row(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings::Profile) {
     if profile.max_players < 2 {
@@ -355,16 +374,45 @@ fn players_row(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settin
     ui.horizontal(|ui| {
         ui.label("Players");
         for (players, label) in [(1, "1 player"), (2, "2 players")] {
-            if ui.radio_value(&mut game.players, players, label).clicked() {
+            if settings_choice(ui, &mut game.players, players, label).clicked() {
                 change = Some(format!("{} {label}", profile.title));
             }
         }
     });
-    ui.small(if game.players > 1 {
-        "Controller 1 plays player one, controller 2 plays player two with the same button layout. Mouse and keyboard stay player one. Connect both controllers before starting the game."
+    if game.players > 1 {
+        egui::Grid::new(("player-inputs", profile.id))
+            .num_columns(3)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                for player in 0..2 {
+                    ui.label(format!("Player {}", player + 1));
+                    for input in settings::PlayerInput::ALL {
+                        let selected = game.inputs[player] == input;
+                        let response = ui.add(
+                            egui::Button::selectable(selected, input.label())
+                                .frame_when_inactive(true),
+                        );
+                        if response.clicked() && !selected {
+                            game.set_input(player, input);
+                            change = Some(format!(
+                                "{} player {} uses {}",
+                                profile.title,
+                                player + 1,
+                                input.label().to_ascii_lowercase()
+                            ));
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+        ui.small(match game.inputs_env() {
+            "pad,kbm" => "Every controller plays player one. The mouse aims and fires for player two, with player two's keys (Start 2, Coin 2). Player two's own controller buttons below are not used.",
+            "kbm,pad" => "The mouse and keyboard play player one. Every controller plays player two, with player two's controller buttons below.",
+            _ => "Controller 1 plays player one and controller 2 plays player two, each with its own buttons below. The mouse and keyboard also play player one. Connect both controllers before starting the game.",
+        });
     } else {
-        "Every controller plays player one."
-    });
+        ui.small("Every controller, the mouse and the keyboard play player one.");
+    }
     if let Some(change) = change {
         app.save(&change);
     }
@@ -412,14 +460,12 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
 
             ui.label("Display mode");
             ui.horizontal(|ui| {
-                if ui
-                    .radio_value(&mut game.fullscreen, false, "Windowed")
+                if settings_choice(ui, &mut game.fullscreen, false, "Windowed")
                     .clicked()
                 {
                     change = Some("Windowed".into());
                 }
-                if ui
-                    .radio_value(&mut game.fullscreen, true, "Fullscreen")
+                if settings_choice(ui, &mut game.fullscreen, true, "Fullscreen")
                     .clicked()
                 {
                     change = Some("Fullscreen".into());
@@ -430,7 +476,7 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
             ui.label("VSync");
             ui.horizontal(|ui| {
                 for v in VSync::ALL {
-                    if ui.radio_value(&mut game.vsync, v, v.label()).clicked() {
+                    if settings_choice(ui, &mut game.vsync, v, v.label()).clicked() {
                         change = Some(format!("VSync {}", v.label().to_ascii_lowercase()));
                     }
                 }
@@ -444,64 +490,93 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
                     if r == profile.default_renderer {
                         label += "  (default)";
                     }
-                    if ui.radio_value(&mut game.renderer, r, label).clicked() {
+                    if settings_choice(ui, &mut game.renderer, r, label).clicked() {
                         change = Some(format!("Renderer {}", r.id()));
                     }
                 }
             });
             ui.end_row();
 
-            if profile.crosshair.is_some() {
-                ui.label("Crosshair");
-                ui.horizontal_wrapped(|ui| {
-                    for style in settings::Crosshair::all() {
-                        ui.vertical_centered(|ui| {
-                            ui.set_width(84.0);
-                            match style.0.and_then(|id| crosshair_texture(ui.ctx(), id)) {
-                                Some(texture) => {
-                                    ui.add(egui::Image::new((texture.id(), egui::vec2(44.0, 44.0))));
-                                }
-                                None => {
-                                    ui.add_space(44.0);
-                                }
-                            }
-                            if ui.radio(game.crosshair == style, style.label()).clicked() {
-                                change = Some(format!("Crosshair {}", style.label().to_ascii_lowercase()));
-                                game.crosshair = style;
-                            }
-                        });
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Crosshair size");
-                ui.vertical(|ui| {
-                    let on = game.crosshair.0.is_some();
-                    let slider = egui::Slider::new(
-                        &mut game.crosshair_size,
-                        banana_input::crosshair::SIZE_MIN..=banana_input::crosshair::SIZE_MAX,
-                    )
-                    .suffix("%")
-                    .step_by(5.0);
-                    let response = ui
-                        .add_enabled(on, slider)
-                        .on_disabled_hover_text("Choose a crosshair to set its size");
-                    // Save once a drag ends (or on a click/keyboard change).
-                    if response.drag_stopped() || (response.changed() && !response.dragged()) {
-                        change = Some(format!("Crosshair size {}%", game.crosshair_size));
-                    }
-                    if let Some(texture) = game.crosshair.0.and_then(|id| crosshair_texture(ui.ctx(), id)) {
-                        // Actual size in a 640x480 window; larger windows scale it up.
-                        let side = 110.0 * game.crosshair_size as f32 / 100.0;
-                        ui.add(egui::Image::new((texture.id(), egui::vec2(side, side))));
-                        ui.small("Shown at its size in a 640x480 window.");
+        });
+    if profile.crosshair.is_some() {
+        ui.add_space(12.0);
+        ui.separator();
+        ui.label(RichText::new("Crosshair").strong());
+        ui.small("Choose a style. Click a preview to select it.");
+        let styles = settings::Crosshair::all();
+        let gap = ui.spacing().item_spacing.x;
+        let columns = ((ui.available_width() + gap) / (112.0 + gap))
+            .floor().max(1.0) as usize;
+        let columns = columns.min(styles.len());
+        let card_width = ((ui.available_width() - gap * (columns - 1) as f32)
+            / columns as f32).min(140.0);
+        for row in styles.chunks(columns) {
+            ui.horizontal(|ui| {
+                for style in row {
+                    let selected = game.crosshair == *style;
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(card_width, 112.0), egui::Sense::click(),
+                    );
+                    response.widget_info(|| egui::WidgetInfo::selected(
+                        egui::WidgetType::Button, ui.is_enabled(), selected, style.label(),
+                    ));
+                    let visuals = ui.style().interact_selectable(&response, selected);
+                    let stroke = if selected {
+                        ui.visuals().selection.stroke
                     } else {
-                        ui.small("Crosshair is off: the game window shows no crosshair.");
+                        visuals.bg_stroke
+                    };
+                    ui.painter().rect(
+                        rect, 6.0, visuals.weak_bg_fill, stroke, egui::StrokeKind::Inside,
+                    );
+                    let center = egui::pos2(rect.center().x, rect.top() + 34.0);
+                    if let Some(texture) = style.0.and_then(|id| crosshair_texture(ui.ctx(), id)) {
+                        ui.painter().image(
+                            texture.id(),
+                            egui::Rect::from_center_size(center, egui::vec2(48.0, 48.0)),
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    } else {
+                        ui.painter().text(
+                            center, egui::Align2::CENTER_CENTER, "—",
+                            egui::FontId::proportional(28.0), ui.visuals().text_color(),
+                        );
                     }
-                });
-                ui.end_row();
+                    // Keep the large variants readable without widening the cards.
+                    let label = style.label().replace(", large", "\nLarge");
+                    ui.painter().text(
+                        egui::pos2(rect.center().x, rect.top() + 81.0),
+                        egui::Align2::CENTER_CENTER, label,
+                        egui::FontId::proportional(13.0), ui.visuals().text_color(),
+                    );
+                    if response.clicked() {
+                        game.crosshair = style.clone();
+                        change = Some(format!("Crosshair {}", style.label().to_ascii_lowercase()));
+                    }
+                    response.on_hover_text(style.label());
+                }
+            });
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Size");
+            let slider = egui::Slider::new(
+                &mut game.crosshair_size,
+                banana_input::crosshair::SIZE_MIN..=banana_input::crosshair::SIZE_MAX,
+            ).suffix("%").step_by(5.0);
+            let response = ui.add_enabled(game.crosshair.0.is_some(), slider)
+                .on_disabled_hover_text("Choose a crosshair to set its size");
+            if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                change = Some(format!("Crosshair size {}%", game.crosshair_size));
             }
         });
+        if game.crosshair.0.is_none() {
+            ui.small("Off: the normal mouse pointer is shown.");
+        } else {
+            ui.small("Size applies in game. Previews above show the available styles.");
+        }
+    }
     ui.add_space(6.0);
     ui.small(
         "Fullscreen fills the monitor the game window opens on; pick that monitor's resolution so the picture fills it. Fullscreen and non-default sizes are experimental. Esc still exits the game.",
@@ -618,11 +693,20 @@ fn controls_panel(ui: &mut egui::Ui, state: &mut ControlsUi, game_id: &str) {
     }
     ui.small(game.note);
     ui.add_space(4.0);
+    let two_player = !game.player_two.is_empty();
     egui::Grid::new(("controls", game.id))
-        .num_columns(3)
+        .num_columns(if two_player { 4 } else { 3 })
         .spacing([16.0, 6.0])
         .striped(true)
         .show(ui, |ui| {
+            if two_player {
+                ui.label("");
+                ui.label(RichText::new("Player 1: keys").small());
+                ui.label(RichText::new("Player 1 🎮").small());
+                ui.label(RichText::new("Player 2 🎮").small())
+                    .on_hover_text("Player two's own controller buttons (used when player two plays on a controller)");
+                ui.end_row();
+            }
             for action in game.actions {
                 ui.label(action.label);
                 let waiting = matches!(state.capturing,
@@ -685,9 +769,25 @@ fn controls_panel(ui: &mut egui::Ui, state: &mut ControlsUi, game_id: &str) {
                         }
                     }
                 });
+                if two_player {
+                    player_two_pad_cell(ui, state, game, action);
+                }
                 ui.end_row();
             }
         });
+    if two_player {
+        ui.horizontal(|ui| {
+            if state.bindings.p2_custom(game.id) {
+                ui.small("Player 2 has its own controller buttons.");
+                if ui.button("Use player 1's buttons").clicked() {
+                    state.bindings.reset_p2(game.id);
+                    state.save(format!("{} player 2 uses player 1's buttons", game.title));
+                }
+            } else {
+                ui.small("Player 2's controller uses player 1's buttons until you change one.");
+            }
+        });
+    }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         if ui.button("Reset to defaults").clicked() {
@@ -700,6 +800,41 @@ fn controls_panel(ui: &mut egui::Ui, state: &mut ControlsUi, game_id: &str) {
     if !state.message.is_empty() {
         ui.small(state.message.as_str());
     }
+}
+
+/// Player two's controller buttons for one action (two-player games). Rows
+/// that already are player two's (Start 2, Coin 2) are left empty: player
+/// two's start and coin are set on player one's rows.
+fn player_two_pad_cell(
+    ui: &mut egui::Ui,
+    state: &mut ControlsUi,
+    game: &'static controls::Game,
+    action: &'static controls::Action,
+) {
+    if game.player_two.iter().any(|(_, target)| *target == action.target) {
+        ui.label("");
+        return;
+    }
+    let pads = state.bindings.p2_pads(game.id, action.id);
+    let text = if pads.is_empty() {
+        "🎮 none".to_owned()
+    } else {
+        format!("🎮 {}", pads.join(", "))
+    };
+    ui.menu_button(RichText::new(text).monospace(), |ui| {
+        ui.label(RichText::new("Player 2's controller buttons (Xbox layout)").small());
+        for (name, _, label) in controls::PAD_BUTTONS {
+            let mut bound = pads.iter().any(|k| k == name);
+            if ui.checkbox(&mut bound, *label).changed() {
+                match state.bindings.toggle_pad_p2(game.id, action.id, name) {
+                    Ok(change) => state.save(change),
+                    Err(e) => state.message = format!("Not changed: {e}"),
+                }
+            }
+        }
+    })
+    .response
+    .on_hover_text("Player two's controller buttons for this action");
 }
 
 #[derive(Clone, Copy)]
@@ -831,25 +966,6 @@ impl ArcadeApp {
                 } else {
                     "Removed from My library. Game files and settings are preserved."
                 }.into();
-            }
-            Err(error) => self.folder_message = error,
-        }
-    }
-
-    fn save_games_folder(&mut self, ctx: egui::Context) {
-        let result = library_preferences::validate(&self.root).and_then(|root| {
-            let mut folders = self.folders.clone();
-            folders.root = root;
-            library_preferences::save(&folders)?;
-            Ok(folders)
-        });
-        match result {
-            Ok(folders) => {
-                self.root = folders.root.clone();
-                self.folders = folders;
-                self.folder_message =
-                    "Default library folder saved. Individual game folders take priority.".into();
-                self.rescan(ctx);
             }
             Err(error) => self.folder_message = error,
         }
@@ -1028,24 +1144,27 @@ impl eframe::App for ArcadeApp {
                             ui.close();
                         }
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let previous = self.folders.theme;
-                        egui::ComboBox::from_id_salt("theme-selector")
-                            .selected_text(self.folders.theme.name())
-                            .width(130.0)
-                            .show_ui(ui, |ui| {
-                                for theme in appearance::Theme::ALL {
-                                    ui.selectable_value(&mut self.folders.theme, theme, theme.name());
+                    let previous = self.folders.theme;
+                    ui.menu_button("Theme", |ui| {
+                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                            for theme in appearance::Theme::ALL {
+                                let label = RichText::new(format!("●  {}", theme.name()))
+                                    .color(theme.palette().accent);
+                                if ui.selectable_label(self.folders.theme == theme, label).clicked() {
+                                    self.folders.theme = theme;
+                                    ui.close();
                                 }
-                            });
-                        ui.label("Theme");
-                        if self.folders.theme != previous {
-                            appearance::install(&ctx, self.folders.theme);
-                            if let Err(error) = library_preferences::save(&self.folders) {
-                                self.folder_message = format!("Theme applied, but could not save it: {error}");
                             }
-                            ctx.request_repaint();
+                        });
+                    }).response.on_hover_text(format!("Current theme: {}", self.folders.theme.name()));
+                    if self.folders.theme != previous {
+                        appearance::install(&ctx, self.folders.theme);
+                        if let Err(error) = library_preferences::save(&self.folders) {
+                            self.folder_message = format!("Theme applied, but could not save it: {error}");
                         }
+                        ctx.request_repaint();
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(env!("CARGO_PKG_VERSION"))
                                 .small()
@@ -1055,38 +1174,6 @@ impl eframe::App for ArcadeApp {
                 });
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Game folder or ZArchive");
-                    let folder = ui.add_enabled(
-                        self.probe.is_none(),
-                        egui::TextEdit::singleline(&mut self.root)
-                            .hint_text("Folder path or games.zar")
-                            .desired_width((ui.available_width() - 430.0).clamp(210.0, 520.0)),
-                    );
-                    if folder.changed() {
-                        self.folder_message =
-                            "Source changed. Choose Save source to remember it.".into();
-                    }
-                    let mut selected_folder = false;
-                    let browse = ui.add_enabled_ui(self.probe.is_none(), source_browse_menu).inner;
-                    if let Some(kind) = browse {
-                        match pick_source(frame, "Choose default library source", &self.root, kind) {
-                            Ok(Some(folder)) => {
-                                self.root = folder;
-                                selected_folder = true;
-                            }
-                            Ok(None) => {}
-                            Err(error) => self.folder_message = error,
-                        }
-                    }
-                    let save = ui
-                        .add_enabled(self.probe.is_none(), egui::Button::new("Save source"))
-                        .on_hover_text("Remember this folder or archive and inspect its game files")
-                        .clicked();
-                    let enter = folder.lost_focus()
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                    if save || enter || selected_folder {
-                        self.save_games_folder(ctx.clone());
-                    }
                     if ui
                         .add_enabled(self.pending.is_none(), egui::Button::new("Refresh library"))
                         .clicked()

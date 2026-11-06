@@ -150,15 +150,23 @@ Xbox and other XInput-compatible controllers work in every desktop game except M
 
 #### Two players
 
-Aliens, Jurassic Park and Big Buck Hunter are two-player cabinets. Pick **2 players** at the top of the game's **Settings → Controls** tab, or set `players = 2` in that game's `settings.cfg` section. Controller 1 then plays player one and controller 2 plays player two, in the order the controllers were connected. Controller 2 uses player one's button layout: its Start, Coin, fire and secondary/pump act for player two, and its stick moves player two's aim. Test, service and menu buttons work from either controller. The mouse and keyboard stay player one. With the default `players = 1`, every controller plays player one, as before. The racing games are single-seat and Minecraft Dungeons has its own four-player setup, so they have no Players setting.
+Aliens, Jurassic Park and Big Buck Hunter are two-player cabinets. Pick **2 players** at the top of the game's **Settings → Controls** tab, or set `players = 2` in that game's `settings.cfg` section. Then choose what each player uses, **Controller** or **Keyboard & mouse** (`p1_input` / `p2_input = controller | keyboard_mouse`). Only one player can have the keyboard and mouse:
+
+| Player 1 | Player 2 | Who plays with what |
+| --- | --- | --- |
+| Controller | Controller (default) | Controller 1 plays player one and controller 2 plays player two, in the order they were connected. The mouse and keyboard also play player one |
+| Controller | Keyboard & mouse | Every controller plays player one. The mouse aims and fires for player two, and Start 2 / Coin 2 keys are player two's |
+| Keyboard & mouse | Controller | The mouse and keyboard play player one. Every controller plays player two |
+
+Each player has its own controller buttons. Player one's are the 🎮 buttons in the Controls table. Player two's are in the **Player 2 🎮** column, saved as a `[game.p2]` section in `controls.cfg` (`fire = PadA`, and so on). Until you change one of player two's buttons, player two uses player one's layout, and **Use player 1's buttons** goes back to that. Player two's Start and Coin are set on the Player 1 Start and Coin 1 rows. Test, service and menu buttons work from either controller. With the default `players = 1`, every controller, the mouse and the keyboard play player one, as before. The racing games are single-seat and Minecraft Dungeons has its own four-player setup, so they have no Players setting.
 
 | Game | Player two |
 | --- | --- |
-| Big Buck Hunter | Second gun: its own crosshair in the other colour, and gun-two shots, trigger and pump. Linux and Water |
-| Jurassic Park | Controller 2 drives the player-two gun inputs and its trigger/secondary. The game draws player two's reticle |
-| Aliens | The two-player image maps player two's aim to controller 2. RT/LT press **Q**/**W**, the game's player-two fire keys |
+| Big Buck Hunter | Second gun: its own crosshair in the other colour, and gun-two shots, trigger and pump. With player two on keyboard and mouse, the mouse, its buttons and the keyboard trigger key move gun two. Linux and Water |
+| Jurassic Park | Player two's controller drives the player-two gun inputs and its trigger/secondary. With player two on keyboard and mouse, the mouse and its fire/secondary bindings drive player two, and player one's controller aims through the player-one gun inputs. The game draws each player's reticle |
+| Aliens | The two-player image gives the controller-aimed player the gun inputs. The mouse's player fires with the mouse buttons (RT/LT click them); the other player fires with **Q**/**W** (RT/LT press them). With player two on keyboard and mouse, the image swaps these between the players |
 
-Two-player mode was built from the games' own input tables and is covered by unit tests. It has not yet been played with two controllers in any game.
+Two-player mode was built from the games' own input tables and is covered by unit tests. No mode has yet been played in any game.
 
 How controllers are read:
 

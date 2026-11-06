@@ -80,6 +80,41 @@ fn controller_two_drives_player_two() {
 }
 
 #[test]
+fn player_two_has_its_own_controller_layout() {
+    setup();
+    let mut b = Bindings::default();
+    assert!(!b.p2_custom("jurassic"));
+    // Player two fires with A instead of RT; A leaves menu select.
+    b.toggle_pad_p2("jurassic", "fire", "PadRT").unwrap();
+    b.toggle_pad_p2("jurassic", "fire", "PadA").unwrap();
+    assert!(b.p2_custom("jurassic"));
+    assert_eq!(b.p2_pads("jurassic", "fire"), ["PadA"]);
+    assert!(b.p2_pads("jurassic", "menu_select").is_empty());
+    let p2 = b.pad_env_value_p2("jurassic").unwrap();
+    assert!(p2.contains("343:4096") && !p2.contains("343:131072") && !p2.contains("385:"));
+    // Player one is untouched and stops being mirrored.
+    assert_eq!(b.keys("jurassic", "fire"), ["MouseLeft", "PadRT"]);
+    b.toggle_pad("jurassic", "coin1", "PadY").unwrap();
+    assert!(!b.pad_env_value_p2("jurassic").unwrap().contains("380:32768"));
+    // Saved as a [jurassic.p2] section and read back unchanged.
+    let text = b.to_text();
+    assert_eq!(text.matches("[jurassic.p2]").count(), 1);
+    assert_eq!(Bindings::parse(&text).unwrap(), b);
+    // Resetting player two mirrors player one again.
+    b.reset_p2("jurassic");
+    assert!(!b.p2_custom("jurassic"));
+    assert!(!b.to_text().contains(".p2]"));
+    assert!(b.pad_env_value_p2("jurassic").unwrap().contains("380:32768"));
+    // Only two-player games, and only controller buttons.
+    assert!(b.toggle_pad_p2("ford", "gas", "PadA").is_err());
+    assert!(Bindings::parse("[ford.p2]\ngas = PadA\n").is_err());
+    assert!(Bindings::parse("[big_buck.p2]\nfire = Space\n").is_err());
+    assert!(Bindings::parse("[big_buck.p2]\nfire = PadA\npump = PadA\n").is_err());
+    let custom = Bindings::parse("[big_buck.p2]\nfire = PadRB\n").unwrap();
+    assert_eq!(custom.pad_env_value_p2("big_buck").unwrap(), "258:512");
+}
+
+#[test]
 fn round_trip_and_overrides() {
     setup();
     let mut b = Bindings::default();

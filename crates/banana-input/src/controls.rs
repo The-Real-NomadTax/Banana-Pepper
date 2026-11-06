@@ -12,6 +12,10 @@
 //! ```
 //!
 //! Missing games/actions keep their defaults. Escape is reserved for exiting.
+//!
+//! Two-player games may add a `[game.p2]` section: player two's own
+//! controller buttons for each action. Without it, player two's controller
+//! uses player one's buttons.
 use std::{collections::BTreeMap, fs, io, path::Path};
 
 /// How a game receives key codes.
@@ -488,6 +492,9 @@ fn check_key(game: &Game, action: &Action, name: &str) -> Result<String, String>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bindings {
     keys: BTreeMap<(String, String), Vec<String>>,
+    /// Player two's own controller buttons, for games with a `[game.p2]`
+    /// section. A game without entries here mirrors player one's buttons.
+    p2: BTreeMap<(String, String), Vec<String>>,
 }
 
 impl Default for Bindings {
@@ -501,7 +508,10 @@ impl Default for Bindings {
                 );
             }
         }
-        Self { keys }
+        Self {
+            keys,
+            p2: BTreeMap::new(),
+        }
     }
 }
 
@@ -543,6 +553,77 @@ impl Bindings {
                 self.keys.insert((g, a), keys);
             }
         }
+        self.reset_p2(game);
+    }
+
+    /// True if player two has its own controller buttons in `game`.
+    pub fn p2_custom(&self, game: &str) -> bool {
+        self.p2.keys().any(|(g, _)| g == game)
+    }
+
+    /// Player two's controller buttons for an action: its own, or player
+    /// one's while player two has no layout of its own.
+    pub fn p2_pads(&self, game: &str, action: &str) -> Vec<String> {
+        if self.p2_custom(game) {
+            return self
+                .p2
+                .get(&(game.to_owned(), action.to_owned()))
+                .cloned()
+                .unwrap_or_default();
+        }
+        self.keys(game, action)
+            .iter()
+            .filter(|k| is_pad(k))
+            .cloned()
+            .collect()
+    }
+
+    /// Player two's controller goes back to player one's buttons.
+    pub fn reset_p2(&mut self, game: &str) {
+        self.p2.retain(|(g, _), _| g != game);
+    }
+
+    /// Add or remove one of player two's controller buttons. The first change
+    /// gives player two its own layout (a copy of player one's buttons);
+    /// adding a button moves it off player two's other actions.
+    pub fn toggle_pad_p2(&mut self, game: &str, action: &str, button: &str) -> Result<String, String> {
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        if g.player_two.is_empty() {
+            return Err(format!("{} is a one-player game", g.title));
+        }
+        if !g.actions.iter().any(|a| a.id == action) {
+            return Err(format!("unknown {} action \"{action}\"", g.title));
+        }
+        let button = normalize(button)
+            .filter(|b| is_pad(b))
+            .ok_or_else(|| format!("unknown controller button \"{button}\""))?;
+        let mut next = self.clone();
+        if !next.p2_custom(game) {
+            let copy: Vec<_> = g.actions.iter().map(|a| (a.id, next.p2_pads(game, a.id))).collect();
+            for (id, pads) in copy {
+                next.p2.insert((game.to_owned(), id.to_owned()), pads);
+            }
+        }
+        let key = (game.to_owned(), action.to_owned());
+        let had = next.p2[&key].contains(&button);
+        for pads in next
+            .p2
+            .iter_mut()
+            .filter(|((g, _), _)| g == game)
+            .map(|(_, pads)| pads)
+        {
+            pads.retain(|b| *b != button);
+        }
+        if !had {
+            next.p2.get_mut(&key).expect("materialized").push(button.clone());
+        }
+        next.validate()?;
+        *self = next;
+        Ok(format!(
+            "{} player 2 {action}: {} {button}",
+            g.title,
+            if had { "removed" } else { "added" }
+        ))
     }
 
     /// Actions in `game` other than `except` that already use `key`.
@@ -654,6 +735,29 @@ impl Bindings {
                     }
                 }
             }
+            let mut seen_p2: BTreeMap<&str, &str> = BTreeMap::new();
+            for ((g, action), pads) in &self.p2 {
+                if g != game.id {
+                    continue;
+                }
+                if game.player_two.is_empty() {
+                    return Err(format!("{} has no player-two controls", game.title));
+                }
+                for pad in pads {
+                    if !is_pad(pad) {
+                        return Err(format!(
+                            "{}: player two's \"{action}\" can only use controller buttons, not {pad}",
+                            game.title
+                        ));
+                    }
+                    if let Some(other) = seen_p2.insert(pad, action) {
+                        return Err(format!(
+                            "{}: player two's {pad} is bound to both \"{other}\" and \"{action}\"",
+                            game.title
+                        ));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -721,9 +825,10 @@ impl Bindings {
         Ok(pairs.join(","))
     }
 
-    /// Controller 2's `target:mask,...` in a two-player game (`ARCADE_PAD_P2`):
-    /// player one's buttons, with player-one actions moved to player two's
-    /// targets ([`Game::player_two`]). Empty for one-player games.
+    /// Player two's controller `target:mask,...` in a two-player game
+    /// (`ARCADE_PAD_P2`): player two's buttons ([`Bindings::p2_pads`]), with
+    /// player-one actions moved to player two's targets ([`Game::player_two`]).
+    /// Empty for one-player games.
     pub fn pad_env_value_p2(&self, game: &str) -> Result<String, String> {
         let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
         if g.player_two.is_empty() {
@@ -732,7 +837,7 @@ impl Bindings {
         let mut pairs = Vec::new();
         for action in g.actions {
             let target = player_two_target(g, action);
-            for mask in self.keys(game, action.id).iter().filter_map(|k| pad_mask(k)) {
+            for mask in self.p2_pads(game, action.id).iter().filter_map(|k| pad_mask(k)) {
                 pairs.push(format!("{target}:{mask}"));
             }
         }
@@ -762,7 +867,7 @@ impl Bindings {
             let Some(code) = first_key(keyed) else {
                 continue;
             };
-            for mask in self.keys(game, action.id).iter().filter_map(|k| pad_mask(k)) {
+            for mask in self.p2_pads(game, action.id).iter().filter_map(|k| pad_mask(k)) {
                 pairs.push(format!("{code}:{mask}"));
             }
         }
@@ -816,6 +921,7 @@ impl Bindings {
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut bindings = Self::default();
         let mut section: Option<&'static Game> = None;
+        let mut player_two = false;
         for (number, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
             let at = |e: String| format!("controls.cfg line {}: {e}", number + 1);
@@ -823,8 +929,23 @@ impl Bindings {
                 continue;
             }
             if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-                section =
-                    Some(game(name.trim()).ok_or_else(|| at(format!("unknown game [{name}]")))?);
+                let name = name.trim();
+                let (id, p2) = match name.strip_suffix(".p2") {
+                    Some(id) => (id, true),
+                    None => (name, false),
+                };
+                let g = game(id).ok_or_else(|| at(format!("unknown game [{name}]")))?;
+                if p2 && g.player_two.is_empty() {
+                    return Err(at(format!("{} is a one-player game", g.title)));
+                }
+                if p2 {
+                    // Every action is listed; an absent one has no buttons.
+                    for a in g.actions {
+                        bindings.p2.insert((g.id.to_owned(), a.id.to_owned()), Vec::new());
+                    }
+                }
+                section = Some(g);
+                player_two = p2;
                 continue;
             }
             let g = section.ok_or_else(|| at("binding before any [game] section".into()))?;
@@ -836,6 +957,23 @@ impl Bindings {
                 .map(str::trim)
                 .filter(|k| !k.is_empty())
                 .collect();
+            if player_two {
+                let action = action.trim();
+                if !g.actions.iter().any(|a| a.id == action) {
+                    return Err(at(format!("unknown {} action \"{action}\"", g.title)));
+                }
+                let mut pads = Vec::new();
+                for key in keys {
+                    let pad = normalize(key).filter(|k| is_pad(k)).ok_or_else(|| {
+                        at(format!("player two's section takes controller buttons, not \"{key}\""))
+                    })?;
+                    if !pads.contains(&pad) {
+                        pads.push(pad);
+                    }
+                }
+                bindings.p2.insert((g.id.to_owned(), action.to_owned()), pads);
+                continue;
+            }
             bindings.set(g.id, action.trim(), &keys).map_err(at)?;
         }
         bindings.validate()?;
@@ -856,6 +994,20 @@ impl Bindings {
                     self.keys(game.id, action.id).join(", "),
                     action.label
                 );
+            }
+            if self.p2_custom(game.id) {
+                out += &format!(
+                    "\n[{}.p2]  # Player two's controller buttons. Delete this section to use player one's.\n",
+                    game.id
+                );
+                for action in game.actions {
+                    out += &format!(
+                        "{} = {}  # {}\n",
+                        action.id,
+                        self.p2_pads(game.id, action.id).join(", "),
+                        action.label
+                    );
+                }
             }
         }
         out
