@@ -51,7 +51,7 @@ for key, source in [(e.KEY_ENTER, 40), (e.KEY_SPACE, 44),
 
 def make_pads(count):
     caps = {e.EV_KEY: BUTTONS, e.EV_ABS: AXES}
-    return [UInput(caps, name=f"Arcade Foundry Pad {i + 1}", vendor=0x045e, product=0x028e,
+    return [UInput(caps, name=f"Banana pepper Pad {i + 1}", vendor=0x045e, product=0x028e,
                    version=0x110 + i, bustype=e.BUS_USB) for i in range(count)]
 
 
@@ -70,7 +70,7 @@ def keyboards():
     for path in evdev.list_devices():
         device = evdev.InputDevice(path)
         keys = device.capabilities().get(e.EV_KEY, [])
-        if e.KEY_Z in keys and e.KEY_1 in keys and not device.name.startswith("Arcade Foundry"):
+        if e.KEY_Z in keys and e.KEY_1 in keys and not device.name.startswith("Banana pepper"):
             result.append(device)
     return result
 

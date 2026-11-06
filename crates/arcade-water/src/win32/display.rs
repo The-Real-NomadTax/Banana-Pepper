@@ -7,6 +7,130 @@ use windows_sys::Win32::{
 #[path = "gl_words.rs"]
 mod gl_words;
 
+/// Big Buck crosshair (settings.cfg `crosshair`, via ARCADE_CROSSHAIR), drawn
+/// over each finished frame at the aim position. All GL state is restored.
+mod crosshair {
+    use super::*;
+    /// Padded to a power of two for old GL 1.x drivers.
+    const SIDE: u32 = 128;
+    static TEXTURE: OnceLock<Option<(u32, u32, u32)>> = OnceLock::new();
+
+    pub fn enabled() -> bool {
+        style().is_some()
+    }
+    fn style() -> Option<&'static [u8]> {
+        std::env::var("ARCADE_CROSSHAIR")
+            .ok()
+            .and_then(|id| arcade_core::crosshair::png(&id))
+    }
+    unsafe fn upload() -> Option<(u32, u32, u32)> {
+        let image = match image::load_from_memory_with_format(style()?, image::ImageFormat::Png) {
+            Ok(image) => image.to_rgba8(),
+            Err(e) => {
+                eprintln!("[water] crosshair disabled: {e}");
+                return None;
+            }
+        };
+        let (w, h) = image.dimensions();
+        if w > SIDE || h > SIDE {
+            eprintln!("[water] crosshair disabled: {w}x{h} is larger than {SIDE}x{SIDE}");
+            return None;
+        }
+        let mut square = image::RgbaImage::new(SIDE, SIDE);
+        image::imageops::replace(&mut square, &image, 0, 0);
+        let mut texture = 0;
+        glPushAttrib(GL_ALL_ATTRIB_BITS);
+        glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
+        glGenTextures(1, &mut texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR as i32);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR as i32);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812f); // CLAMP_TO_EDGE
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812f);
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA as i32,
+            SIDE as i32,
+            SIDE as i32,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            square.as_raw().as_ptr().cast(),
+        );
+        glPopClientAttrib();
+        glPopAttrib();
+        eprintln!("[water] crosshair enabled ({w}x{h})");
+        Some((texture, w, h))
+    }
+    pub unsafe fn draw() {
+        let Some((texture, w, h)) = *TEXTURE.get_or_init(|| upload()) else {
+            return;
+        };
+        let (x, y) = jamma::aim_position();
+        static SIZE: OnceLock<u32> = OnceLock::new();
+        let size = *SIZE.get_or_init(|| {
+            arcade_core::crosshair::size_percent(
+                std::env::var("ARCADE_CROSSHAIR_SIZE").ok().as_deref(),
+            )
+        });
+        let [left, top, right, bottom] =
+            arcade_core::crosshair::quad(x, y, w, h, size, WIDTH, HEIGHT);
+        let (s, t) = (w as f32 / SIDE as f32, h as f32 / SIDE as f32);
+        glPushAttrib(GL_ALL_ATTRIB_BITS);
+        for mode in [GL_PROJECTION, GL_MODELVIEW, GL_TEXTURE] {
+            glMatrixMode(mode);
+            glPushMatrix();
+            glLoadIdentity();
+        }
+        glMatrixMode(GL_PROJECTION);
+        glOrtho(0.0, WIDTH as f64, HEIGHT as f64, 0.0, -1.0, 1.0);
+        glViewport(0, 0, WIDTH, HEIGHT);
+        for cap in [
+            GL_DEPTH_TEST,
+            GL_LIGHTING,
+            GL_CULL_FACE,
+            GL_FOG,
+            GL_ALPHA_TEST,
+            GL_STENCIL_TEST,
+            GL_SCISSOR_TEST,
+            GL_COLOR_MATERIAL,
+            GL_TEXTURE_GEN_S,
+            GL_TEXTURE_GEN_T,
+            GL_TEXTURE_1D,
+        ] {
+            glDisable(cap);
+        }
+        glEnable(GL_TEXTURE_2D);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColorMask(1, 1, 1, 1);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE as i32);
+        glColor4f(1.0, 1.0, 1.0, 1.0);
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0, 0.0);
+        glVertex2f(left, top);
+        glTexCoord2f(s, 0.0);
+        glVertex2f(right, top);
+        glTexCoord2f(s, t);
+        glVertex2f(right, bottom);
+        glTexCoord2f(0.0, t);
+        glVertex2f(left, bottom);
+        glEnd();
+        for mode in [GL_TEXTURE, GL_MODELVIEW, GL_PROJECTION] {
+            glMatrixMode(mode);
+            glPopMatrix();
+        }
+        glPopAttrib();
+    }
+}
+
 static mut WINDOW: HWND = ptr::null_mut();
 static mut DC: HDC = ptr::null_mut();
 static mut WIDTH: i32 = 640;
@@ -37,6 +161,11 @@ unsafe extern "system" fn wndproc(window: HWND, message: u32, w: WPARAM, l: LPAR
             return 0;
         }
         WM_KILLFOCUS => jamma::release(),
+        // The drawn crosshair replaces the pointer inside the window.
+        WM_SETCURSOR if (l & 0xffff) as u32 == HTCLIENT && crosshair::enabled() => {
+            SetCursor(ptr::null_mut());
+            return 1;
+        }
         WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MOUSEMOVE => {
             let x = (l as i16 as i32) * 640 / WIDTH.max(1);
             let y = ((l >> 16) as i16 as i32) * 480 / HEIGHT.max(1);
@@ -77,7 +206,7 @@ unsafe extern "C" fn create(_title: *const i8) -> i32 {
         style: CS_OWNDC,
         lpfnWndProc: Some(wndproc),
         hInstance: GetModuleHandleA(ptr::null()),
-        lpszClassName: c"ArcadeFoundryELF32".as_ptr().cast(),
+        lpszClassName: c"BananaPepperELF32".as_ptr().cast(),
         hCursor: LoadCursorW(ptr::null_mut(), IDC_CROSS),
         ..std::mem::zeroed()
     };
@@ -92,7 +221,7 @@ unsafe extern "C" fn create(_title: *const i8) -> i32 {
     WINDOW = CreateWindowExA(
         0,
         class.lpszClassName,
-        c"Arcade Foundry - Big Buck Hunter Pro (Water)"
+        c"Banana pepper - Big Buck Hunter Pro (Water)"
             .as_ptr()
             .cast(),
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -233,6 +362,7 @@ unsafe extern "C" fn main_loop() -> ! {
     let mut message: MSG = std::mem::zeroed();
     loop {
         probe();
+        jamma::controller_frame(GetForegroundWindow() == WINDOW);
         while PeekMessageA(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
             if message.message == WM_QUIT {
                 ExitProcess(0);
@@ -264,6 +394,9 @@ unsafe extern "C" fn swap() {
                 .elapsed()
                 .as_secs()
         ));
+    }
+    if crosshair::enabled() {
+        crosshair::draw();
     }
     SwapBuffers(DC);
     Sleep(1);

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds android/build/ArcadeFoundry.apk without Gradle (Android SDK build-tools only).
+# Builds android/build/BananaPepper.apk without Gradle (Android SDK build-tools only).
 # Inputs:
 #   build/rootfs.tar.gz      from rootfs/make-rootfs.sh
 #   build/proot/             from fetch-proot.sh
@@ -28,9 +28,9 @@ ln "$B/rootfs.tar.gz" "$A/rootfs.tar.gz" 2>/dev/null || cp "$B/rootfs.tar.gz" "$
 # Runtime version = rootfs content hash, so the app re-extracts only when it changes.
 sha256sum "$B/rootfs.tar.gz" | cut -c1-16 > "$A/version.txt"
 
-mkdir -p "$B/apk/src/com/arcadefoundry"
-cat > "$B/apk/src/com/arcadefoundry/BuildInfo.java" <<JAVA
-package com.arcadefoundry;
+mkdir -p "$B/apk/src/com/bananapepper"
+cat > "$B/apk/src/com/bananapepper/BuildInfo.java" <<JAVA
+package com.bananapepper;
 final class BuildInfo {
     static final int VERSION_CODE = $VERSION_CODE;
     static final String VERSION_NAME = "$VERSION_NAME";
@@ -55,9 +55,9 @@ cp "$B/apk/base.apk" "$B/apk/unsigned.apk"
 "$BT/zipalign" -p -f 4 "$B/apk/unsigned.apk" "$B/apk/aligned.apk"
 KS="$here/debug.keystore"
 if [[ ! -f $KS ]]; then
-    keytool -genkeypair -keystore "$KS" -storepass android -keypass android -alias arcadefoundry \
-        -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Arcade Foundry Debug" >/dev/null
+    keytool -genkeypair -keystore "$KS" -storepass android -keypass android -alias bananapepper \
+        -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Banana pepper Debug" >/dev/null
 fi
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
-    --out "$B/ArcadeFoundry.apk" "$B/apk/aligned.apk"
-ls -la "$B/ArcadeFoundry.apk"
+    --out "$B/BananaPepper.apk" "$B/apk/aligned.apk"
+ls -la "$B/BananaPepper.apk"

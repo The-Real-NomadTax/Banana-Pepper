@@ -16,7 +16,7 @@ apt-get install -y --no-install-recommends \
     gcc libc6-dev libx11-dev libxext-dev libxtst-dev
 # Bridge between Xvfb and the Android app.
 gcc -O2 -Wall -o /usr/local/bin/afbridge /af/afbridge.c -lX11 -lXext -lXtst -lpthread
-# box64 (built with BOX32 and the Arcade Foundry section-less ELF patch).
+# box64 (built with BOX32 and the Banana pepper section-less ELF patch).
 cp -a /af/box64-install/. /
 strip --strip-debug /usr/local/bin/box64
 apt-get purge -y gcc libc6-dev libx11-dev libxext-dev libxtst-dev binutils

@@ -26,13 +26,13 @@ FMOD_SHA256 = "53231260b694286807995714bb11011afe08361eb4873bc75cf335873e167137"
 
 
 def setup_fmod(output):
-    """Cache the archived SDK locally; never bundle its binaries with Foundry."""
+    """Cache the archived SDK locally; never bundle its binaries with Banana pepper."""
     archive = output / "packages/fmodstudioapi11020linux.tar.gz"
     if not archive.exists() or hashlib.sha256(archive.read_bytes()).hexdigest() != FMOD_SHA256:
         url = FMOD_URL
         temporary = archive.with_suffix(".download")
         for attempt in range(3):
-            request = urllib.request.Request(url, headers={"User-Agent": "ArcadeFoundry/0.1"})
+            request = urllib.request.Request(url, headers={"User-Agent": "BananaPepper/0.1"})
             with urllib.request.urlopen(request, timeout=45) as response:
                 first = response.read(1024)
                 if first.startswith(b"\x1f\x8b"):
@@ -74,7 +74,7 @@ def setup_fmod(output):
             records[name] = hashlib.sha256(content).hexdigest()
     (output / "fmod-source.json").write_text(json.dumps({
         "url": FMOD_URL, "archive_sha256": FMOD_SHA256, "files": records,
-        "note": "Local SDK cache only. See lib/FMOD-LICENSE.TXT. Not included in Foundry source distributions."
+        "note": "Local SDK cache only. See lib/FMOD-LICENSE.TXT. Not included in Banana pepper source distributions."
     }, indent=2))
     print("FMOD 1.10.20 x86-64 libraries staged and checksummed.", flush=True)
 

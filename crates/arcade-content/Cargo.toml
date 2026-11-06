@@ -3,7 +3,7 @@ name = "arcade-content"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Folder and ZArchive game sources for Arcade Foundry"
+description = "Folder and ZArchive game sources for Banana pepper"
 
 [dependencies]
 zarchive-rs = "0.1.1"

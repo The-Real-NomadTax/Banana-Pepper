@@ -29,6 +29,7 @@ pub fn run(root: &Path, launch: bool) -> Result<String, String> {
         .arg(root);
     if launch {
         command.arg("--launch");
+        command.envs(crate::runtime::pad_env(&project, "aliens")?);
         crate::runtime::settings_env(&mut command, &settings);
     }
     let status = command.status().map_err(|e| e.to_string())?;

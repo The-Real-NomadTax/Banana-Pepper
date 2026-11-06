@@ -25,7 +25,7 @@ cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu
 cargo run -p arcade-desktop -- --probe-big-buck games
 ```
 
-Or start the workbench with `cargo run -p arcade-desktop`, select Big Buck Hunter Pro, and click **Test Big Buck Hunter progression**. The workbench displays the resulting still frame. The test automatically sends TEST, START, COIN and a fixed sequence of mouse shots to the private game window. The workbench input monitor is still local only; this is not an interactive game view.
+Or start the workbench with `cargo run -p arcade-desktop`, select Big Buck Hunter Pro, and click **Test Big Buck Hunter progression**. The workbench displays the resulting still frame. The test automatically sends TEST, START, COIN and a fixed sequence of mouse shots to the private game window. The resulting still frame is not an interactive game view.
 
 Requirements: Linux x86 with 32-bit glibc, GL/GLU/FreeGLUT and software Mesa; Rust's `i686-unknown-linux-gnu` target and a 32-bit linker toolchain; Bubblewrap, Bash, GNU timeout, strace, Xvfb, xdotool and ImageMagick `import`. The tested host already had the 32-bit game libraries. Xvfb was downloaded from the configured distribution mirror and extracted locally under `runtime/tools/xvfb`; no system package was installed. Other distributions will need their matching packages, not that CachyOS binary.
 

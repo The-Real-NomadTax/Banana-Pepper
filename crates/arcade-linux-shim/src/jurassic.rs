@@ -14,7 +14,10 @@ unsafe extern "C" {
     fn SDL_GL_SetAttribute(attribute: i32, value: i32) -> i32;
     fn SDL_SetVideoMode(width: i32, height: i32, bits: i32, flags: u32) -> *mut c_void;
     fn SDL_PollEvent(event: *mut c_void) -> i32;
+    fn SDL_GetMouseState(x: *mut i32, y: *mut i32) -> u8;
 }
+/// The engine drained its events last call: the next call starts a frame.
+static DRAINED: AtomicBool = AtomicBool::new(true);
 #[link(name = "GL")]
 unsafe extern "C" {
     fn glGetString(query: u32) -> *const c_char;
@@ -23,8 +26,17 @@ unsafe extern "C" {
 extern "C" fn poll_event(event: *mut c_void) -> i32 {
     if DESKTOP_CONTROLS.load(Ordering::Relaxed) {
         unsafe { controls::update() };
+        if DRAINED.swap(false, Ordering::Relaxed) {
+            crate::jurassic_pad::frame();
+        }
+        if crate::jurassic_pad::next(event) {
+            return 1;
+        }
     }
     let result = unsafe { SDL_PollEvent(event) };
+    if result == 0 {
+        DRAINED.store(true, Ordering::Relaxed);
+    }
     if result > 0 && !event.is_null() {
         let event = event as *const u8;
         let kind = unsafe { *event };
@@ -50,6 +62,8 @@ extern "C" fn set_video_mode(width: i32, height: i32, bits: i32, flags: u32) -> 
     };
     let surface = unsafe { SDL_SetVideoMode(width, height, bits, flags) };
     if !surface.is_null() {
+        crate::jurassic_pad::WIDTH.store(width, Ordering::Relaxed);
+        crate::jurassic_pad::HEIGHT.store(height, Ordering::Relaxed);
         let renderer = unsafe { glGetString(0x1f01) };
         if !renderer.is_null() {
             eprintln!(
@@ -60,6 +74,26 @@ extern "C" fn set_video_mode(width: i32, height: i32, bits: i32, flags: u32) -> 
         }
     }
     surface
+}
+
+/// Mouse position for aiming: the controller pointer while a stick is in use.
+extern "C" fn get_mouse_state(x: *mut i32, y: *mut i32) -> u8 {
+    let (mut real_x, mut real_y) = (0, 0);
+    let buttons = unsafe { SDL_GetMouseState(&mut real_x, &mut real_y) };
+    let (px, py) = if DESKTOP_CONTROLS.load(Ordering::Relaxed) {
+        crate::jurassic_pad::pointer(real_x, real_y)
+    } else {
+        (real_x, real_y)
+    };
+    unsafe {
+        if !x.is_null() {
+            *x = px;
+        }
+        if !y.is_null() {
+            *y = py;
+        }
+    }
+    buttons
 }
 
 // SM_SetVSync/VidReset can run before a GL context exists. Let SDL keep the
@@ -207,6 +241,8 @@ fn rebind() -> Result<(), String> {
             set_video_mode as *const () as *mut c_void
         } else if binding.plt == 0x0813b340 {
             set_vsync as *const () as *mut c_void
+        } else if binding.plt == 0x0813b390 {
+            get_mouse_state as *const () as *mut c_void
         } else {
             unsafe { dlsym((-1isize) as *mut c_void, binding.symbol.as_ptr()) }
         };

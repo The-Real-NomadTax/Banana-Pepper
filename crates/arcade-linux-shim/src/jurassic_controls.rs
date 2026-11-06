@@ -79,11 +79,17 @@ fn parse_buttons(value: &str) -> Result<Vec<InputMap>, String> {
     Ok(maps)
 }
 
-fn build_maps(buttons: Option<&str>) -> Result<Vec<InputMap>, String> {
+fn build_maps(buttons: Option<&str>, pad: &[(u32, i32)]) -> Result<Vec<InputMap>, String> {
     let mut maps = match buttons {
         Some(value) => parse_buttons(value)?,
         None => DEFAULT_BUTTONS.to_vec(),
     };
+    // Controller buttons arrive as private world keysyms (jurassic_pad.rs).
+    for &(target, keysym) in pad {
+        if BUTTON_TARGETS.contains(&(target as i32)) {
+            maps.push(map(keysym, target as i32));
+        }
+    }
     // Pointer maps last so they win over any analog destination overlap.
     maps.extend_from_slice(POINTER_MAPS);
     maps.dedup();
@@ -125,7 +131,8 @@ fn order_maps(
 
 pub fn initialize() -> Result<(), String> {
     let buttons = std::env::var("ARCADE_JURASSIC_KEYS").ok();
-    let built = build_maps(buttons.as_deref())?;
+    let pad = crate::jurassic_pad::sources(&crate::jurassic_pad::configured_bindings());
+    let built = build_maps(buttons.as_deref(), &pad)?;
     eprintln!(
         "[jurassic] {} desktop input maps ({})",
         built.len(),
@@ -192,7 +199,7 @@ mod tests {
 
     #[test]
     fn desktop_aim_follows_late_cabinet_maps_and_survives_rebuilds() {
-        let desktop = build_maps(None).unwrap();
+        let desktop = build_maps(None, &[]).unwrap();
         let mut table = [InputMap::default(); 1024];
         let first = order_maps(&mut table, 0, &desktop).unwrap();
         let cabinet = map(351, 331);
@@ -209,7 +216,7 @@ mod tests {
 
     #[test]
     fn invalid_or_full_tables_are_unchanged() {
-        let desktop = build_maps(None).unwrap();
+        let desktop = build_maps(None, &[]).unwrap();
         let mut table = [map(1, 2); 20];
         let original = table;
         assert!(order_maps(&mut table, 21, &desktop).is_err());
@@ -220,18 +227,22 @@ mod tests {
 
     #[test]
     fn configured_buttons_replace_defaults_and_keep_pointer_maps() {
-        let defaults = build_maps(None).unwrap();
+        let defaults = build_maps(None, &[]).unwrap();
         // Same order as arcade-core's default controls.cfg output.
-        let configured = build_maps(Some(
-            "371:49,372:50,379:53,380:54,378:116,377:57,383:273,384:274,385:13,386:8,333:326,334:327",
-        ))
+        let configured = build_maps(
+            Some("371:49,372:50,379:53,380:54,378:116,377:57,383:273,384:274,385:13,386:8,333:326,334:327"),
+            &[],
+        )
         .unwrap();
         assert_eq!(configured, defaults);
-        let custom = build_maps(Some("378:290,333:32,333:326")).unwrap();
+        let custom = build_maps(Some("378:290,333:32,333:326"), &[]).unwrap();
+        let with_pad = build_maps(Some("378:290"), &[(333, 160), (999, 161)]).unwrap();
+        assert_eq!(&with_pad[..2], &[map(290, 378), map(160, 333)]);
+        assert!(with_pad.ends_with(POINTER_MAPS));
         assert_eq!(&custom[..3], &[map(290, 378), map(32, 333), map(326, 333)]);
         assert!(custom.ends_with(POINTER_MAPS));
-        assert!(build_maps(Some("999:49")).is_err());
-        assert!(build_maps(Some("378:27")).is_err());
-        assert!(build_maps(Some("378")).is_err());
+        assert!(build_maps(Some("999:49"), &[]).is_err());
+        assert!(build_maps(Some("378:27"), &[]).is_err());
+        assert!(build_maps(Some("378"), &[]).is_err());
     }
 }

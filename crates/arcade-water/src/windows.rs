@@ -382,7 +382,7 @@ impl State {
                 let mut bytes = [0u8; 65 * 6];
                 for (index, value) in [
                     "Linux",
-                    "arcade-foundry",
+                    "banana-pepper",
                     "6.0.0-arcade",
                     "native Windows ABI translator",
                     "x86_64",

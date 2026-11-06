@@ -3,6 +3,8 @@
 pub mod aliens;
 pub mod big_buck;
 pub mod controls;
+pub mod crosshair;
+pub mod pad;
 pub mod ford;
 pub mod ford_packet;
 pub mod jurassic;

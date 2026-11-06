@@ -35,7 +35,7 @@ Added `--launch-big-buck` and the workbench's **Play on my display** button. The
 
 ## OSS audio bridge
 
-The game now initializes its audio mixer and streams S16LE stereo at 24000 Hz through the Rust OSS compatibility layer to PipeWire/PulseAudio. A private test-sink capture contained non-silent audio (peak 16289, RMS 1632.06 over 1,277,952 frames). The current run had no sound-load/no-free-player failures and no unsupported audio ioctls. The test sink was removed after capture. A normal desktop relaunch produced an active, unmuted `Arcade Foundry` / `Big Buck Hunter Pro` playback stream with the expected format. No microphone or normal desktop mix was captured.
+The game now initializes its audio mixer and streams S16LE stereo at 24000 Hz through the Rust OSS compatibility layer to PipeWire/PulseAudio. A private test-sink capture contained non-silent audio (peak 16289, RMS 1632.06 over 1,277,952 frames). The current run had no sound-load/no-free-player failures and no unsupported audio ioctls. The test sink was removed after capture. A normal desktop relaunch produced an active, unmuted `Banana pepper` / `Big Buck Hunter Pro` playback stream with the expected format. No microphone or normal desktop mix was captured.
 
 All three native i686 tests passed, including OSS negotiation and the C ABI/file-I/O checks. Workspace tests and Clippy passed; i686 Clippy passed with warnings denied. Audible quality and latency still need user testing.
 

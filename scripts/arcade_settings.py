@@ -16,6 +16,20 @@ def resolution():
     return value if re.fullmatch(r'[1-9][0-9]{2,3}x[1-9][0-9]{2,3}', value) else DEFAULT_RESOLUTION
 
 
+def pad_args():
+    """Bubblewrap arguments for controllers: the bindings the Rust launcher
+    prepared from controls.cfg, and only the controller device nodes it found
+    (never keyboards). Empty for diagnostic runs."""
+    args = []
+    for key in ('ARCADE_PAD', 'ARCADE_PAD_KEYS', 'ARCADE_PAD_DEVICES'):
+        if key in os.environ:
+            args += ['--setenv', key, os.environ[key]]
+    for device in os.environ.get('ARCADE_PAD_DEVICES', '').split(':'):
+        if re.fullmatch(r'/dev/input/event[0-9]+', device) and os.path.exists(device):
+            args += ['--dev-bind', device, device]
+    return args
+
+
 def guest_env_args():
     """Bubblewrap --setenv arguments for the guest settings environment."""
     args = []

@@ -19,7 +19,7 @@ timeout -k 1s 45s strace -f -s 160 -o /work/startup.strace \
     > /work/stdout.log 2> /work/stderr.log &
 gpid=$!
 sleep 2
-window=$(xdotool search --name 'Arcade Foundry - Big Buck Hunter Pro' | head -1)
+window=$(xdotool search --name 'Banana pepper - Big Buck Hunter Pro' | head -1)
 xdotool key --window "$window" t
 sleep 1
 import -window root /work/tracking.png
@@ -51,7 +51,7 @@ sleep 3
 import -window root /work/records.png
 xdotool mousemove --window "$window" 160 180 click --window "$window" 1
 sleep 3
-xdotool search --name 'Arcade Foundry - Big Buck Hunter Pro' > /work/windows.txt || true
+xdotool search --name 'Banana pepper - Big Buck Hunter Pro' > /work/windows.txt || true
 # Sampling several frames avoids presenting a capture taken during a redraw.
 best=0
 for frame in {1..5}; do

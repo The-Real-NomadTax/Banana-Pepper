@@ -24,7 +24,8 @@ pub fn launch(root: &Path) -> Result<String, String> {
         .arg(project.join("scripts/jurassic-explore.py"))
         .args(["--launch", "--desktop", "--games-root"])
         .arg(root)
-        .env("ARCADE_JURASSIC_KEYS", controls.env_value("jurassic")?);
+        .env("ARCADE_JURASSIC_KEYS", controls.env_value("jurassic")?)
+        .envs(crate::runtime::pad_env(&project, "jurassic")?);
     crate::runtime::settings_env(&mut command, &settings);
     let status = command
         .status()

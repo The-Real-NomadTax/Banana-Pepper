@@ -74,6 +74,41 @@ impl Renderer {
     }
 }
 
+/// On-screen crosshair for gun games: off, or a style from
+/// [`crate::crosshair::STYLES`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Crosshair(pub Option<&'static str>);
+
+impl Crosshair {
+    pub fn id(&self) -> &'static str {
+        self.0.unwrap_or("off")
+    }
+    pub fn label(&self) -> &'static str {
+        crate::crosshair::STYLES
+            .iter()
+            .find(|s| Some(s.0) == self.0)
+            .map_or("Off", |s| s.1)
+    }
+    /// Off, then every style.
+    pub fn all() -> Vec<Self> {
+        std::iter::once(Self(None))
+            .chain(crate::crosshair::STYLES.iter().map(|s| Self(Some(s.0))))
+            .collect()
+    }
+    fn parse(value: &str) -> Result<Self, String> {
+        if value.eq_ignore_ascii_case("off") {
+            return Ok(Self(None));
+        }
+        crate::crosshair::STYLES
+            .iter()
+            .find(|s| s.0.eq_ignore_ascii_case(value))
+            .map(|s| Self(Some(s.0)))
+            .ok_or_else(|| {
+                format!("crosshair must be off, p1, p1_large, p2 or p2_large, not \"{value}\"")
+            })
+    }
+}
+
 /// What a game's runtime can honour.
 #[derive(Debug)]
 pub struct Profile {
@@ -83,6 +118,8 @@ pub struct Profile {
     pub default_renderer: Renderer,
     /// Shown under the resolution picker.
     pub resolution_note: &'static str,
+    /// Default crosshair, or `None` if the game cannot draw one.
+    pub crosshair: Option<Crosshair>,
 }
 
 pub const PROFILES: &[Profile] = &[
@@ -92,6 +129,7 @@ pub const PROFILES: &[Profile] = &[
         default_resolution: (1360, 768),
         default_renderer: Renderer::Gpu,
         resolution_note: "Passed to the game's own -f option. 1360x768 is the cabinet mode and the tested size.",
+        crosshair: None,
     },
     Profile {
         id: "jurassic",
@@ -99,6 +137,7 @@ pub const PROFILES: &[Profile] = &[
         default_resolution: (1360, 768),
         default_renderer: Renderer::Gpu,
         resolution_note: "Passed to the game's own -f option. 1360x768 is the cabinet mode and the tested size.",
+        crosshair: None,
     },
     Profile {
         id: "big_buck",
@@ -106,6 +145,7 @@ pub const PROFILES: &[Profile] = &[
         default_resolution: (640, 480),
         default_renderer: if cfg!(windows){Renderer::Gpu}else{Renderer::Software},
         resolution_note: "Window size. The game still renders at 640x480; aiming is rescaled to the window.",
+        crosshair: Some(Crosshair(Some("p1"))),
     },
     Profile {
         id: "super_cars",
@@ -113,8 +153,9 @@ pub const PROFILES: &[Profile] = &[
         default_resolution: (1920, 1080),
         default_renderer: Renderer::Gpu,
         resolution_note: "Passed to the game's own -res option: 640x480, 800x600, 1024x768, 1280x1024, 1360x768, 1600x1200 or 1920x1080. Also the Wine window size. Renderer: WineD3D on OpenGL (GPU) or Mesa llvmpipe (software).",
+        crosshair: None,
     },
-    Profile {id:"ford",title:"Ford Racing Full Blown",default_resolution:(640,480),default_renderer:Renderer::Gpu,resolution_note:"Native Direct3D 9 on Windows; Wine on Linux. Cabinet resolutions: 640x480, 800x600, 1024x768, 1280x1024, 1600x1200. Default is windowed."},
+    Profile {id:"ford",title:"Ford Racing Full Blown",default_resolution:(640,480),default_renderer:Renderer::Gpu,resolution_note:"Native Direct3D 9 on Windows; Wine on Linux. Cabinet resolutions: 640x480, 800x600, 1024x768, 1280x1024, 1600x1200. Default is windowed.",crosshair:None},
 ];
 
 pub const RESOLUTIONS: &[(u32, u32)] = &[
@@ -146,6 +187,10 @@ pub struct GameSettings {
     pub audio: bool,
     /// Empty = the desktop's default output.
     pub audio_sink: String,
+    /// Only for games whose profile supports one (Big Buck).
+    pub crosshair: Crosshair,
+    /// Crosshair size, percent of the image (crosshair::SIZE_MIN..=SIZE_MAX).
+    pub crosshair_size: u32,
 }
 
 impl GameSettings {
@@ -158,6 +203,8 @@ impl GameSettings {
             renderer: profile.default_renderer,
             audio: true,
             audio_sink: String::new(),
+            crosshair: profile.crosshair.clone().unwrap_or(Crosshair(None)),
+            crosshair_size: crate::crosshair::SIZE_DEFAULT,
         }
     }
 
@@ -189,6 +236,10 @@ impl GameSettings {
     /// and NVIDIA (`__GL_SYNC_TO_VBLANK`).
     pub fn guest_env(&self) -> Vec<(&'static str, String)> {
         let mut env = vec![("ARCADE_RESOLUTION", self.resolution_text())];
+        if let Some(style) = self.crosshair.0 {
+            env.push(("ARCADE_CROSSHAIR", style.into()));
+            env.push(("ARCADE_CROSSHAIR_SIZE", self.crosshair_size.to_string()));
+        }
         if self.fullscreen {
             env.push(("ARCADE_FULLSCREEN", "1".into()));
         }
@@ -249,6 +300,19 @@ impl GameSettings {
                     return Err("audio_sink cannot contain spaces".into());
                 }
                 self.audio_sink = value.to_owned();
+            }
+            "crosshair" => self.crosshair = Crosshair::parse(value)?,
+            "crosshair_size" => {
+                use crate::crosshair::{SIZE_MAX, SIZE_MIN};
+                let size: u32 = value.trim_end_matches('%').trim().parse().map_err(|_| {
+                    format!("crosshair_size must be a percentage, not \"{value}\"")
+                })?;
+                if !(SIZE_MIN..=SIZE_MAX).contains(&size) {
+                    return Err(format!(
+                        "crosshair_size must be {SIZE_MIN} to {SIZE_MAX} (percent), not {size}"
+                    ));
+                }
+                self.crosshair_size = size;
             }
             _ => return Err(format!("unknown setting \"{key}\"")),
         }
@@ -318,6 +382,11 @@ impl Settings {
             let (key, value) = line
                 .split_once('=')
                 .ok_or_else(|| at("expected setting = value".into()))?;
+            if key.trim().starts_with("crosshair")
+                && profile(id).is_some_and(|p| p.crosshair.is_none())
+            {
+                return Err(at(format!("[{id}] has no crosshair setting")));
+            }
             settings
                 .games
                 .get_mut(id)
@@ -330,7 +399,7 @@ impl Settings {
 
     pub fn to_text(&self) -> String {
         let mut out = String::from(
-            "# Arcade Foundry per-game settings. Edit here or in each game's Settings window.\n\
+            "# Banana pepper per-game settings. Edit here or in each game's Settings window.\n\
              # Key bindings live in controls.cfg. Changes apply the next time a game starts.\n",
         );
         for p in PROFILES {
@@ -346,6 +415,18 @@ impl Settings {
                 "audio_sink = {}  # PulseAudio/PipeWire sink; empty = default output\n",
                 g.audio_sink
             );
+            if p.crosshair.is_some() {
+                out += &format!(
+                    "crosshair = {}  # off | p1 | p1_large | p2 | p2_large\n",
+                    g.crosshair.id()
+                );
+                out += &format!(
+                    "crosshair_size = {}  # percent, {} to {}\n",
+                    g.crosshair_size,
+                    crate::crosshair::SIZE_MIN,
+                    crate::crosshair::SIZE_MAX
+                );
+            }
         }
         out
     }
@@ -383,6 +464,30 @@ mod tests {
         assert_eq!(bbh.resolution, (640, 480));
         assert_eq!(bbh.renderer, if cfg!(windows){Renderer::Gpu}else{Renderer::Software});
         assert!(!bbh.fullscreen && bbh.audio);
+        assert_eq!(bbh.crosshair.id(), "p1");
+        assert!(bbh.guest_env().contains(&("ARCADE_CROSSHAIR", "p1".into())));
+    }
+
+    #[test]
+    fn crosshair_setting_only_for_gun_games() {
+        let s = Settings::parse("[big_buck]\ncrosshair = P2_LARGE\n").unwrap();
+        assert_eq!(s.game("big_buck").crosshair.label(), "Blue, large (P2)");
+        assert_eq!(Settings::parse(&s.to_text()).unwrap(), s);
+        let off = Settings::parse("[big_buck]\ncrosshair = off\n").unwrap();
+        assert!(!off.game("big_buck").guest_env().iter().any(|e| e.0 == "ARCADE_CROSSHAIR"));
+        assert!(Settings::parse("[big_buck]\ncrosshair = green\n").is_err());
+        assert!(Settings::parse("[aliens]\ncrosshair = p1\n").is_err());
+        assert!(Settings::parse("[aliens]\ncrosshair_size = 50\n").is_err());
+        let sized = Settings::parse("[big_buck]\ncrosshair_size = 35%\n").unwrap();
+        assert_eq!(sized.game("big_buck").crosshair_size, 35);
+        assert!(sized.game("big_buck").guest_env().contains(&("ARCADE_CROSSHAIR_SIZE", "35".into())));
+        assert_eq!(Settings::parse(&sized.to_text()).unwrap(), sized);
+        assert!(Settings::parse("[big_buck]\ncrosshair_size = 5\n").is_err());
+        assert!(Settings::parse("[big_buck]\ncrosshair_size = huge\n").is_err());
+        // Only Big Buck writes a crosshair line.
+        assert_eq!(Settings::default().to_text().matches("crosshair =").count(), 1);
+        assert_eq!(Settings::default().to_text().matches("crosshair_size =").count(), 1);
+        assert_eq!(Crosshair::all().len(), 5);
     }
 
     #[test]

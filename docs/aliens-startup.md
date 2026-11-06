@@ -53,7 +53,7 @@ Test, Start 1 and Start 2 are also re-registered by a second setup routine at `0
 
 ## Quitting
 
-The engine ignores SDL quit requests, and its statically linked SDL loads X11 itself, so the Jurassic-style SDL event hook cannot be used. The launcher gives the window the unique class `ArcadeFoundryAliens` (`SDL_VIDEO_X11_WMCLASS`). A shim thread (`aliens_exit.rs`) then watches it on its own XCB connection:
+The engine ignores SDL quit requests, and its statically linked SDL loads X11 itself, so the Jurassic-style SDL event hook cannot be used. The launcher gives the window the unique class `BananaPepperAliens` (`SDL_VIDEO_X11_WMCLASS`). A shim thread (`aliens_exit.rs`) then watches it on its own XCB connection:
 
 - **Esc** (keycode 9) while an Aliens window has keyboard focus ends the process. Esc pressed in other windows is ignored.
 - WM_DELETE_WINDOW is removed from the window's `WM_PROTOCOLS` (re-checked every second). The **close button** then makes the window manager disconnect the client instead of sending a request the game ignores. The resulting Xlib "connection broken" exit is reported as a normal close (`closed_by` in `result.json`).

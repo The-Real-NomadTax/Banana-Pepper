@@ -30,7 +30,7 @@ pub fn big_buck(project: &Path, game: &Path, probe: bool) -> Result<String, Stri
         .arg("bash")
         .arg("-c")
         .arg("cd -- \"$1\" && exec target/wsl/debug/arcade-desktop \"$2\" \"$3\"")
-        .arg("arcade-foundry")
+        .arg("banana-pepper")
         .arg(&project)
         .arg(if probe {
             "--probe-big-buck"

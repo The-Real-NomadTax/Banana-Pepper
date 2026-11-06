@@ -5,16 +5,29 @@ mod aliens;
 #[cfg(target_arch = "x86")]
 mod aliens_exit;
 #[cfg(any(target_arch = "x86", test))]
+#[path = "../../arcade-core/src/crosshair.rs"]
+mod crosshair;
+#[cfg(any(target_arch = "x86", test))]
+mod crosshair_gl;
+#[cfg(any(target_arch = "x86", test))]
+mod evdev_pad;
+#[cfg(any(target_arch = "x86", test))]
 mod inputs;
 #[cfg(target_arch = "x86")]
 mod jamma;
 #[cfg(target_arch = "x86")]
 mod jurassic;
+#[cfg(any(target_arch = "x86", test))]
+mod jurassic_pad;
 
 #[cfg(target_arch = "x86")]
 mod audio;
 mod display;
 mod legacy_csv;
+#[cfg(any(target_arch = "x86", test))]
+#[allow(dead_code)]
+#[path = "../../arcade-core/src/pad.rs"]
+mod pad;
 
 use std::ffi::{c_char, c_int};
 
@@ -36,6 +49,10 @@ unsafe extern "C" {
     fn glutMotionFunc(callback: extern "C" fn(c_int, c_int));
     #[cfg(target_arch = "x86")]
     fn glutPassiveMotionFunc(callback: extern "C" fn(c_int, c_int));
+    #[cfg(target_arch = "x86")]
+    fn glutSetCursor(cursor: c_int);
+    #[cfg(target_arch = "x86")]
+    fn glutTimerFunc(milliseconds: std::ffi::c_uint, callback: extern "C" fn(c_int), value: c_int);
 }
 
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -49,7 +66,7 @@ pub extern "C" fn glutEnterGameMode() -> c_int {
         jamma::install();
         let (width, height) = window_size();
         glutInitWindowSize(width, height);
-        let id = glutCreateWindow(c"Arcade Foundry - Big Buck Hunter Pro".as_ptr());
+        let id = glutCreateWindow(c"Banana pepper - Big Buck Hunter Pro".as_ptr());
         WINDOW.store(id, Ordering::Relaxed);
         if std::env::var_os("ARCADE_FULLSCREEN").is_some_and(|v| v == "1") {
             glutFullScreen();
@@ -61,6 +78,10 @@ pub extern "C" fn glutEnterGameMode() -> c_int {
             glutMouseFunc(mouse);
             glutMotionFunc(motion);
             glutPassiveMotionFunc(motion);
+            glutTimerFunc(16, controller_frame, 0);
+            if crosshair_gl::enabled() {
+                glutSetCursor(0x65); // GLUT_CURSOR_NONE: the crosshair replaces it
+            }
         }
         id
     }
@@ -121,6 +142,32 @@ extern "C" fn initialize() {
 #[used]
 #[unsafe(link_section = ".init_array")]
 static INITIALIZE: extern "C" fn() = initialize;
+
+/// The game's buffer swap: draw the crosshair over the finished frame first.
+#[cfg(target_arch = "x86")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glutSwapBuffers() {
+    static REAL: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let real = *REAL.get_or_init(|| unsafe {
+        libc::dlsym(libc::RTLD_NEXT, c"glutSwapBuffers".as_ptr()) as usize
+    });
+    if WINDOW.load(Ordering::Relaxed) > 0 && crosshair_gl::enabled() {
+        let (x, y) = jamma::aim_position();
+        unsafe { crosshair_gl::draw(x, y, glutGet(0x66).max(1), glutGet(0x67).max(1)) };
+    }
+    if real != 0 {
+        let real: extern "C" fn() = unsafe { std::mem::transmute(real) };
+        real();
+    }
+}
+
+/// Controllers are polled from a GLUT timer, so aim callbacks run on the
+/// GLUT thread exactly like the mouse callbacks.
+#[cfg(target_arch = "x86")]
+extern "C" fn controller_frame(_value: c_int) {
+    jamma::controller_frame();
+    unsafe { glutTimerFunc(16, controller_frame, 0) };
+}
 
 #[cfg(target_arch = "x86")]
 extern "C" fn mouse(button: c_int, state: c_int, x: c_int, y: c_int) {

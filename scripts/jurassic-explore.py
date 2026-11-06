@@ -15,7 +15,7 @@ import shutil
 import subprocess
 
 from arcade_audio import sdl_audio_args
-from arcade_settings import guest_env_args, resolution
+from arcade_settings import guest_env_args, pad_args, resolution
 
 
 def stage_shader_overrides(game, output):
@@ -155,7 +155,7 @@ def main():
                 args += ["--setenv", "ARCADE_JURASSIC_KEYS", keys]
             # Resolution, fullscreen, vsync and renderer from settings.cfg.
             if options.launch:
-                args += ["--setenv", "ARCADE_RESOLUTION", resolution()] + guest_env_args()
+                args += ["--setenv", "ARCADE_RESOLUTION", resolution()] + guest_env_args() + pad_args()
             authority = Path(os.environ.get("XAUTHORITY", str(Path.home() / ".Xauthority")))
             if authority.is_file():
                 args += ["--ro-bind", str(authority), "/tmp/game.Xauthority", "--setenv", "XAUTHORITY", "/tmp/game.Xauthority"]

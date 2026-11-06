@@ -8,6 +8,8 @@ use std::{
 };
 use zarchive_rs::{Archive, ExtractOptions};
 
+pub mod pack;
+
 const CACHE_VERSION: &str = "v1";
 const MAX_ENTRIES: usize = 1_000_000;
 const MAX_DEPTH: usize = 64;

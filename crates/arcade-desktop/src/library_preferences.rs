@@ -1,13 +1,15 @@
 //! Desktop-only preferences, separate from game runtime settings.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
 #[derive(Default, Clone, Debug, PartialEq)]
 pub struct Preferences {
     pub root: String,
+    pub theme: crate::appearance::Theme,
     pub games: BTreeMap<String, String>,
+    pub added: BTreeSet<String>,
 }
 
 fn preference_path() -> Result<PathBuf, String> {
@@ -21,7 +23,7 @@ fn preference_path() -> Result<PathBuf, String> {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
     };
-    base.map(|base| base.join("arcade-foundry/library.json"))
+    base.map(|base| base.join("banana-pepper/library.json"))
         .ok_or_else(|| "Cannot locate your user configuration directory.".into())
 }
 
@@ -53,12 +55,22 @@ fn load_from(path: &Path) -> Result<Preferences, String> {
         .get("root")
         .and_then(|v| v.as_str())
         .ok_or("Invalid saved library folder")?;
-    let games =
+    let games: BTreeMap<String, String> =
         serde_json::from_value(value.get("games").cloned().unwrap_or(serde_json::json!({})))
             .map_err(|error| format!("Invalid saved game folders: {error}"))?;
+    // Existing individually configured games were explicitly chosen by the user.
+    let added = match value.get("added") {
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|error| format!("Invalid saved user library: {error}"))?,
+        None => games.keys().cloned().collect(),
+    };
     Ok(Preferences {
         root: root.into(),
         games,
+        added,
+        theme: crate::appearance::Theme::from_id(
+            value.get("theme").and_then(|value| value.as_str()).unwrap_or_default(),
+        ),
     })
 }
 
@@ -68,7 +80,7 @@ pub fn save(preferences: &Preferences) -> Result<(), String> {
 
 fn write_to(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(
-        &serde_json::json!({"root": preferences.root, "games": preferences.games}),
+        &serde_json::json!({"root": preferences.root, "games": preferences.games, "theme": preferences.theme.id(), "added": preferences.added}),
     )
     .map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {
@@ -207,6 +219,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn collection_is_explicit_persistent_and_independent_of_game_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("library.json");
+        let mut prefs = load_from(&config).unwrap();
+        assert!(prefs.added.is_empty());
+        prefs.games.insert("aliens".into(), "local game files".into());
+        // Finding or configuring files does not add a game to a new collection.
+        write_to(&config, &prefs).unwrap();
+        assert!(load_from(&config).unwrap().added.is_empty());
+        prefs.added.insert("aliens".into());
+        prefs.added.insert("aliens".into());
+        write_to(&config, &prefs).unwrap();
+        let mut reloaded = load_from(&config).unwrap();
+        assert_eq!(reloaded.added.len(), 1);
+        assert!(reloaded.added.contains("aliens"));
+        reloaded.added.remove("aliens");
+        write_to(&config, &reloaded).unwrap();
+        let removed = load_from(&config).unwrap();
+        assert!(removed.added.is_empty());
+        assert_eq!(removed.games["aliens"], "local game files");
+        // Migrate only explicitly configured games from older preferences.
+        std::fs::write(&config, br#"{"root":"games","games":{"jurassic":"old folder"}}"#).unwrap();
+        let legacy = load_from(&config).unwrap();
+        assert_eq!(legacy.added, BTreeSet::from(["jurassic".into()]));
+    }
+
+    #[test]
     fn archive_preferences_persist_and_bad_archives_only_disable_their_game() {
         let temp = tempfile::tempdir().unwrap();
         let archive = temp.path().join("broken.ZAR");
@@ -216,6 +255,8 @@ mod tests {
         let preferences = Preferences {
             root: temp.path().to_str().unwrap().into(),
             games: BTreeMap::from([("minecraft".into(), source)]),
+            theme: crate::appearance::Theme::FieryRed,
+            added: BTreeSet::from(["minecraft".into()]),
         };
         let config = temp.path().join("preferences/library.json");
         write_to(&config, &preferences).unwrap();
@@ -266,6 +307,8 @@ mod tests {
         std::fs::write(&config, br#""old library""#).unwrap();
         let mut prefs = load_from(&config).unwrap();
         assert_eq!(prefs.root, "old library");
+        assert_eq!(prefs.theme, crate::appearance::Theme::Teal);
+        prefs.theme = crate::appearance::Theme::FieryRed;
         for id in arcade_core::profiles().into_iter().map(|p| p.id) {
             let folder = temp.join(format!("{id} game files"));
             std::fs::create_dir_all(&folder).unwrap();

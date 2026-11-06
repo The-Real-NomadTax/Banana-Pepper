@@ -1,8 +1,13 @@
 #![allow(non_snake_case, unsafe_op_in_unsafe_fn)]
 #[path = "../../arcade-core/src/ford_packet.rs"]
 mod packet;
+#[allow(dead_code)]
+#[path = "../../arcade-core/src/pad.rs"]
+mod pad;
 #[path = "../../arcade-wine-hook/src/rt.rs"]
 mod rt;
+#[path = "../../arcade-wine-hook/src/xinput.rs"]
+mod xinput;
 use core::{mem::transmute, ptr};
 #[link(
     name = "kernel32",
@@ -55,6 +60,46 @@ static mut START: u32 = 0;
 static mut BINDINGS: [(u32, i32); 64] = [(0, 0); 64];
 static mut BIND_COUNT: usize = 0;
 static mut CONFIGURED: bool = false;
+/// Controller (target, XInput mask) bindings from ARCADE_PAD.
+static mut PAD_BINDINGS: [(u32, u32); 64] = [(0, 0); 64];
+static mut PAD_COUNT: usize = 0;
+static mut PAD: pad::Pad = pad::Pad {
+    buttons: 0,
+    lx: 0,
+    ly: 0,
+    rx: 0,
+    ry: 0,
+    lt: 0,
+    rt: 0,
+};
+static mut PADS_SEEN: u32 = 0;
+/// controls.cfg's default controller buttons for Ford.
+const DEFAULT_PAD: &[u8] = b"1:4,2:8,3:131072,4:65536,5:16,5:4096,6:32768,7:512,8:256,9:32";
+unsafe fn pad_bindings() {
+    let mut bytes = [0u8; 1024];
+    let n = GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), bytes.as_mut_ptr(), bytes.len() as u32)
+        as usize;
+    let set = n > 0 || GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), bytes.as_mut_ptr(), 0) == 1;
+    let text = if set && n < bytes.len() { &bytes[..n] } else { DEFAULT_PAD };
+    PAD_COUNT = pad::parse_bindings(text, &mut *ptr::addr_of_mut!(PAD_BINDINGS));
+}
+unsafe fn pad_bound() -> &'static [(u32, u32)] {
+    core::slice::from_raw_parts(ptr::addr_of!(PAD_BINDINGS).cast::<(u32, u32)>(), PAD_COUNT)
+}
+/// Analog 0..=255 for a pedal: keys are full travel, triggers are analog.
+unsafe fn pedal(target: u32, focused: bool) -> u8 {
+    if key_action(target, focused) {
+        255
+    } else if focused {
+        pad::target_level(&*ptr::addr_of!(PAD), pad_bound(), target)
+    } else {
+        0
+    }
+}
+unsafe fn action(target: u32, focused: bool) -> bool {
+    key_action(target, focused)
+        || (focused && pad::target_held(&*ptr::addr_of!(PAD), pad_bound(), target))
+}
 unsafe fn bindings() {
     let mut bytes = [0u8; 1024];
     let n = GetEnvironmentVariableA(
@@ -90,7 +135,7 @@ unsafe fn bindings() {
         }
     }
 }
-unsafe fn action(target: u32, focused: bool) -> bool {
+unsafe fn key_action(target: u32, focused: bool) -> bool {
     if CONFIGURED {
         for i in 0..BIND_COUNT {
             if BINDINGS[i].0 == target && down(BINDINGS[i].1, focused) {
@@ -184,8 +229,17 @@ unsafe extern "C" fn poll(packet: *mut u8) -> i32 {
     let mut pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
     let focused = pid == GetCurrentProcessId();
-    if down(27, focused) {
-        log(b"arcade-ford: Escape exit");
+    let state = xinput::read();
+    PAD = state;
+    let pads = xinput::connected();
+    if pads != PADS_SEEN {
+        PADS_SEEN = pads;
+        log(b"arcade-ford: XInput controller count changed:");
+        hex(pads);
+    }
+    let pad_exit = focused && state.held(pad::BACK) && state.held(pad::START);
+    if down(27, focused) || pad_exit {
+        log(b"arcade-ford: Escape (or Back + Start) exit");
         ExitProcess(0);
     }
     let now = GetTickCount();
@@ -193,7 +247,11 @@ unsafe extern "C" fn poll(packet: *mut u8) -> i32 {
     LAST_TICK = now;
     let left = action(1, focused);
     let right = action(2, focused);
-    if left != right {
+    let stick = if focused { pad::Pad::axis(state.lx) } else { 0 };
+    if left == right && stick != 0 {
+        // The stick is an absolute wheel position.
+        STEER = (128 + stick * 127 / pad::AXIS_MAX).clamp(0, 255);
+    } else if left != right {
         STEER = (STEER + if left { -delta } else { delta }).clamp(0, 255);
     } else if STEER < 128 {
         STEER = (STEER + delta * 2).min(128);
@@ -202,15 +260,16 @@ unsafe extern "C" fn poll(packet: *mut u8) -> i32 {
     }
     let elapsed = now.wrapping_sub(START);
     let start = action(5, focused) || (PROBE && elapsed > 3000 && elapsed % 5000 < 250);
-    let gas = action(3, focused) || (PROBE && elapsed > 14000);
-    let brake = action(4, focused);
+    let gas_level = if PROBE && elapsed > 14000 { 255 } else { pedal(3, focused) };
+    let gas = gas_level > 0;
+    let brake_level = pedal(4, focused);
     let view = action(6, focused);
     let gear = action(7, focused);
     let start_mask = 4;
     let report = packet::Inputs {
         steering: STEER as u8,
-        gas: if gas { 255 } else { 0 },
-        brake: if brake { 255 } else { 0 },
+        gas: gas_level,
+        brake: brake_level,
         start,
         view,
         shift_up: gear,
@@ -278,6 +337,7 @@ pub unsafe extern "system" fn _DllMainCRTStartup(
         START = GetTickCount();
         LAST_TICK = START;
         bindings();
+        pad_bindings();
         // All sites are checked before applying either patch. The launcher also
         // verifies the complete executable SHA256 before staging this DLL.
         let init = &[0x83, 0xec, 0x18, 0x57, 0x33, 0xff];

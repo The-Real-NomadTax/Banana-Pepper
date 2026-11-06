@@ -3,13 +3,13 @@
      executed from the app's private files directory, which Android only
      permits for apps targeting API 28 or lower (the same approach Termux uses). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.arcadefoundry">
+    package="com.bananapepper">
 
     <uses-feature android:glEsVersion="0x00020000" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
-        android:label="Arcade Foundry"
+        android:label="Banana pepper"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"

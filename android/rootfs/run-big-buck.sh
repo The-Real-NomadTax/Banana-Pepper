@@ -30,7 +30,7 @@ for i in $(seq 1 100); do
     kill -0 $xpid 2>/dev/null || { echo "X server failed; see xvfb.log"; exit 1; }
     sleep 0.1
 done
-afbridge "$S/frame.bin" "${AF_INPUT_SOCKET:-arcadefoundry.input}" 60 > "$S/bridge.log" 2>&1 &
+afbridge "$S/frame.bin" "${AF_INPUT_SOCKET:-bananapepper.input}" 60 > "$S/bridge.log" 2>&1 &
 bpid=$!
 echo $bpid >> "$S/pids"
 

@@ -21,7 +21,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Water Big Buck worker build failed.' }
     }
     & cargo build -p arcade-desktop
-    if ($LASTEXITCODE -ne 0) { throw 'Arcade Foundry build failed.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Banana pepper build failed.' }
     $action = if ($Mode -ne 'workbench' -and $Game -eq 'ford') { '--launch-ford' }
     elseif ($Mode -ne 'workbench' -and $Game -eq 'big-buck') {
         if ($Mode -eq 'setup') { throw 'See docs/big-buck-windows.md for WSL library setup.' }
@@ -36,7 +36,7 @@ try {
     try {
     if ($Game -eq 'big-buck') { $env:ARCADE_BBH_BACKEND = $Backend }
     & (Join-Path $projectRoot 'target\debug\arcade-desktop.exe') $action $GamesRoot
-    if ($LASTEXITCODE -ne 0) { throw 'Arcade Foundry reported a runtime failure. See the diagnostic output above.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Banana pepper reported a runtime failure. See the diagnostic output above.' }
     } finally { $env:ARCADE_BBH_BACKEND = $previousBackend }
 }
 finally { Pop-Location }

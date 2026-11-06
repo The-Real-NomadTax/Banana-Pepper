@@ -1,11 +1,11 @@
 # Android: Big Buck Hunter Pro
 
-Arcade Foundry has an Android app (`android/`) that runs the supplied 2008 Linux build of Big Buck Hunter Pro on ARM64 phones. Gameplay was verified on a Samsung Galaxy S24 FE (SM-S721U, Exynos 2400, Android 17, ARM64 only with no 32-bit support): attract mode, game and mode menus, a Whitetail hunt with scored shots, and initials entry. Audio reaches an active Android AudioTrack. Audibility, long sessions and other devices are not yet verified.
+Banana pepper has an Android app (`android/`) that runs the supplied 2008 Linux build of Big Buck Hunter Pro on ARM64 phones. Gameplay was verified on a Samsung Galaxy S24 FE (SM-S721U, Exynos 2400, Android 17, ARM64 only with no 32-bit support): attract mode, game and mode menus, a Whitetail hunt with scored shots, and initials entry. Audio reaches an active Android AudioTrack. Audibility, long sessions and other devices are not yet verified.
 
 ## Using the app
 
-1. Install `ArcadeFoundry.apk`. The first launch unpacks the game runtime, which takes a few seconds.
-2. Tap **Import game folder…** and choose your own `Big Bug Hunter Pro` folder, the one containing `game` and `bbh3data` (about 640 MB). The app copies it into private storage and checks that `game` is the supported build (SHA-256 `c569677c…`). Files placed in `Android/data/com.arcadefoundry/files/games/` (for example with `adb push`) are also found, and are used in place.
+1. Install `BananaPepper.apk`. The first launch unpacks the game runtime, which takes a few seconds.
+2. Tap **Import game folder…** and choose your own `Big Bug Hunter Pro` folder, the one containing `game` and `bbh3data` (about 640 MB). The app copies it into private storage and checks that `game` is the supported build (SHA-256 `c569677c…`). Files placed in `Android/data/com.bananapepper/files/games/` (for example with `adb push`) are also found, and are used in place.
 3. Tap **Play**. The game screen is landscape:
    - Tap the picture to aim and fire. A held finger can be dragged to aim.
    - Pump or reload: the **PUMP** button, a second finger, or a tap beside the picture.
@@ -46,11 +46,11 @@ Requirements: Android SDK (build-tools, platform 36+), JDK 17, Rust with the `i6
 android/fetch-proot.sh               # proot for Android, from the Termux repo
 android/rootfs/setup-dev-device.sh   # one-time: Debian + box64 build on the phone
 android/rootfs/make-rootfs.sh        # build the trimmed runtime rootfs on the phone
-android/build-apk.sh                 # -> android/build/ArcadeFoundry.apk
-adb install -r android/build/ArcadeFoundry.apk
+android/build-apk.sh                 # -> android/build/BananaPepper.apk
+adb install -r android/build/BananaPepper.apk
 ```
 
-The rootfs is built on the phone itself, through proot over adb, so the host needs no ARM toolchain or QEMU. `make-rootfs.sh` installs only runtime packages and removes the i386 Mesa and LLVM that package dependencies pull in, since box32 uses the native GL. The archive is about 127 MB. `TRIM_ONLY=1` re-trims and repacks without reinstalling. `build-apk.sh` builds a debuggable APK, so `adb shell run-as com.arcadefoundry` can read `files/run/*.log`. `RELEASE=1` builds a non-debuggable one. Signing uses `android/debug.keystore`, which is generated on first build and not committed.
+The rootfs is built on the phone itself, through proot over adb, so the host needs no ARM toolchain or QEMU. `make-rootfs.sh` installs only runtime packages and removes the i386 Mesa and LLVM that package dependencies pull in, since box32 uses the native GL. The archive is about 127 MB. `TRIM_ONLY=1` re-trims and repacks without reinstalling. `build-apk.sh` builds a debuggable APK, so `adb shell run-as com.bananapepper` can read `files/run/*.log`. `RELEASE=1` builds a non-debuggable one. Signing uses `android/debug.keystore`, which is generated on first build and not committed.
 
 ## Known limits
 

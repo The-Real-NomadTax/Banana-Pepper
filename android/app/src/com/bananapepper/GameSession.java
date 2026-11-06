@@ -1,4 +1,4 @@
-package com.arcadefoundry;
+package com.bananapepper;
 
 import android.content.Context;
 
@@ -26,8 +26,8 @@ final class GameSession {
         frameFile = new File(runDir, "frame.bin");
         logFile = new File(runDir, "session.log");
         String token = Long.toHexString(new SecureRandom().nextLong());
-        inputSocket = "arcadefoundry." + token + ".input";
-        audioSocket = "arcadefoundry." + token + ".audio";
+        inputSocket = "bananapepper." + token + ".input";
+        audioSocket = "bananapepper." + token + ".audio";
     }
 
     void start(Context context, File gameDir, File prepared, File saves, boolean audio) throws IOException {

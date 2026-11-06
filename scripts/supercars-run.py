@@ -4,7 +4,7 @@
 The game is a Windows build. This harness keeps a private Wine prefix in
 runtime/supercars/prefix, maps the supplied game directory into it as
 C:\\rawart (large assets are symlinks, small writable files such as prefs and
-audits are private copies), installs the Arcade Foundry input adapter
+audits are private copies), installs the Banana pepper input adapter
 (dinput8.dll, built from crates/arcade-wine-hook), and starts sdaemon.exe.
 Original files are never written.
 

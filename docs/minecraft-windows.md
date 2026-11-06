@@ -16,7 +16,7 @@ for this diagnostic. See `runtime/minecraft/license-probe.log` and the
 `licensing` field in `report.json`. A successful diagnostic is not a claim of
 gameplay. The normal runner never replaces the key check with a success result.
 
-Arcade Foundry builds natively on Windows x86-64. This game's executable is
+Banana pepper builds natively on Windows x86-64. This game's executable is
 Linux x86-64 ELF, so its guest process runs in WSL2/Ubuntu and its window uses
 WSLg. No TeknoParrot code, profiles or executable are used.
 
@@ -67,7 +67,7 @@ The archive is pinned to SHA256
 Only the two x86-64 runtime libraries and their license are extracted to
 `runtime/minecraft/lib/`. Provenance and file hashes are saved in
 `runtime/minecraft/fmod-source.json`. The SDK and its libraries are local
-runtime files, excluded from source control and Foundry distributions. Windows
+runtime files, excluded from source control and Banana pepper distributions. Windows
 DLLs and newer FMOD major versions do not satisfy this ABI.
 
 ## Isolation and current limitations
@@ -77,7 +77,7 @@ Execution is restricted to the measured `gamedump.exec` SHA256:
 `663b147927e7b9d60cef7bd41cf49d3fd64058619880391083ea1ba872d6be3b`
 
 This is an already modified executable supplied in the folder. Its GOT retains
-stale library addresses from the machine where it was dumped. Foundry rebuilds
+stale library addresses from the machine where it was dumped. Banana pepper rebuilds
 659 import relocations from the named records retained in the snapshot, adds a
 data LOAD segment for normal ELF linker metadata, and lets the Linux linker
 resolve the imports. Game instruction bytes and security checks remain
@@ -121,7 +121,7 @@ diagnostics now report `protected_asset_decoder_required` and avoid repeatedly
 launching a known crash. The investigative trace is retained locally as
 `runtime/minecraft/gdb-desktop-asset-failure.log`.
 
-The FMOD issue is resolved; **Minecraft remains unplayable** in Foundry until
+The FMOD issue is resolved; **Minecraft remains unplayable** in Banana pepper until
 protected asset decoding and the cabinet interfaces are implemented and tested.
 
 ### Further asset-reader investigation

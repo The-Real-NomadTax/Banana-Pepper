@@ -5,6 +5,10 @@ mod crt;
 mod display;
 mod jamma;
 mod sound;
+/// XInput controllers (shared with the Super Cars and Ford adapter DLLs).
+#[path = "../../../arcade-wine-hook/src/xinput.rs"]
+mod xinput;
+use arcade_core::pad;
 
 use goblin::elf::{Elf, program_header::PT_LOAD};
 use std::{
@@ -400,7 +404,7 @@ pub(super) fn path(name: &str, write: bool) -> Result<PathBuf, String> {
                 / started.elapsed().as_secs_f64()
                 / 1_000_000.0
         });
-            fs::write(&file,format!("processor\t: 0\nvendor_id\t: ArcadeFoundry\nmodel name\t: Windows x86 host\ncpu MHz\t\t: {mhz:.3}\nbogomips\t: {:.3}\nflags\t\t: fpu tsc mmx sse sse2\n",mhz*2.0)).map_err(|e|e.to_string())?;
+            fs::write(&file,format!("processor\t: 0\nvendor_id\t: BananaPepper\nmodel name\t: Windows x86 host\ncpu MHz\t\t: {mhz:.3}\nbogomips\t: {:.3}\nflags\t\t: fpu tsc mmx sse sse2\n",mhz*2.0)).map_err(|e|e.to_string())?;
         return Ok(file);
     }
     let name = name.replace('\\', "/");

@@ -1,4 +1,4 @@
-package com.arcadefoundry;
+package com.bananapepper;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -48,7 +48,7 @@ public final class MainActivity extends Activity {
         page.setPadding(dp(20), dp(24), dp(20), dp(24));
         scroll.addView(page);
 
-        TextView title = text("Arcade Foundry", 28, Color.WHITE);
+        TextView title = text("Banana pepper", 28, Color.WHITE);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         page.addView(title);
         TextView subtitle = text("Play your own arcade game files on Android", 14, 0xffaaaaaa);
@@ -106,7 +106,7 @@ public final class MainActivity extends Activity {
                 + "then START.\n\n"
                 + "Game files\n"
                 + "Import copies your own \"Big Bug Hunter Pro\" folder (the one containing \"game\" and "
-                + "\"bbh3data\", about 640 MB) into the app. Game files are not included with Arcade Foundry.",
+                + "\"bbh3data\", about 640 MB) into the app. Game files are not included with Banana pepper.",
                 13, 0xff9a9a9a);
         help.setPadding(0, dp(20), 0, 0);
         page.addView(help);

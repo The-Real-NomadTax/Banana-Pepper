@@ -10,6 +10,11 @@
 //!   game's own SDL 1.2 fullscreen covers the whole X screen instead, i.e.
 //!   every monitor at once, so the launcher always builds a windowed image.
 //!
+//! * Controllers (evdev): while an Aliens window has focus, bound buttons
+//!   press the action's own key, RT/LT click the left/right mouse button and
+//!   either stick moves the pointer, all through XTest so the game sees
+//!   ordinary X input. Back + Start exits.
+//!
 //! Game windows are identified by the unique SDL_VIDEO_X11_WMCLASS the
 //! launcher sets. XCB is loaded with dlopen; it reports errors per request, so
 //! nothing here touches the game's own Xlib error handlers.
@@ -68,6 +73,14 @@ struct PropertyReply {
     pad0: [u8; 12],
 }
 #[repr(C)]
+struct KeyboardMappingReply {
+    response_type: u8,
+    keysyms_per_keycode: u8,
+    sequence: u16,
+    length: u32,
+    pad0: [u8; 24],
+}
+#[repr(C)]
 struct ScreenIterator {
     data: *const u32, // xcb_screen_t begins with its root window
     rem: c_int,
@@ -99,6 +112,10 @@ struct Xcb {
     get_property_value_length: unsafe extern "C" fn(*const PropertyReply) -> c_int,
     delete_property: unsafe extern "C" fn(Conn, u32, u32) -> Cookie,
     send_event: unsafe extern "C" fn(Conn, u8, u32, u32, *const u8) -> Cookie,
+    get_keyboard_mapping: unsafe extern "C" fn(Conn, u8, u8) -> Cookie,
+    get_keyboard_mapping_reply: unsafe extern "C" fn(Conn, Cookie, Err) -> *mut KeyboardMappingReply,
+    get_keyboard_mapping_keysyms: unsafe extern "C" fn(*const KeyboardMappingReply) -> *const u32,
+    get_keyboard_mapping_keysyms_length: unsafe extern "C" fn(*const KeyboardMappingReply) -> c_int,
 }
 
 impl Xcb {
@@ -149,6 +166,12 @@ impl Xcb {
                 get_property_value_length: sym!(c"xcb_get_property_value_length"),
                 delete_property: sym!(c"xcb_delete_property"),
                 send_event: sym!(c"xcb_send_event"),
+                get_keyboard_mapping: sym!(c"xcb_get_keyboard_mapping"),
+                get_keyboard_mapping_reply: sym!(c"xcb_get_keyboard_mapping_reply"),
+                get_keyboard_mapping_keysyms: sym!(c"xcb_get_keyboard_mapping_keysyms"),
+                get_keyboard_mapping_keysyms_length: sym!(
+                    c"xcb_get_keyboard_mapping_keysyms_length"
+                ),
             },
             connect,
         ))
@@ -413,6 +436,173 @@ impl Watcher {
     pub fn alive(&self) -> bool {
         unsafe { (self.x.connection_has_error)(self.conn) == 0 }
     }
+
+    /// The X keycode that produces `keysym` (unshifted or shifted column).
+    fn keycode(&self, keysym: u32) -> Option<u8> {
+        let setup = unsafe { (self.x.get_setup)(self.conn) }.cast::<u8>();
+        // xcb_setup_t: min_keycode at byte 32, max_keycode at 33.
+        let (min, max) = unsafe { (*setup.add(32), *setup.add(33)) };
+        if max < min {
+            return None;
+        }
+        let mut error = std::ptr::null_mut();
+        let cookie = unsafe { (self.x.get_keyboard_mapping)(self.conn, min, max - min + 1) };
+        let reply = take(
+            unsafe { (self.x.get_keyboard_mapping_reply)(self.conn, cookie, &mut error) },
+            error,
+        )?;
+        let per = usize::from(unsafe { (*reply).keysyms_per_keycode }).max(1);
+        let length = unsafe { (self.x.get_keyboard_mapping_keysyms_length)(reply) }.max(0) as usize;
+        let keysyms = unsafe {
+            std::slice::from_raw_parts((self.x.get_keyboard_mapping_keysyms)(reply), length)
+        };
+        let found = keysyms
+            .chunks(per)
+            .position(|syms| syms.iter().take(2).any(|s| *s == keysym))
+            .map(|i| min + i as u8);
+        release(reply);
+        found
+    }
+}
+
+/// SDL 1.2 key symbol (as patched into the Aliens image) -> X keysym.
+fn x_keysym(sdl: u32) -> Option<u32> {
+    Some(match sdl {
+        32..=126 => sdl,
+        8 => 0xff08,
+        9 => 0xff09,
+        13 => 0xff0d,
+        19 => 0xff13,
+        127 => 0xffff,
+        256..=265 => 0xffb0 + (sdl - 256),
+        266 => 0xffae,
+        267 => 0xffaf,
+        268 => 0xffaa,
+        269 => 0xffad,
+        270 => 0xffab,
+        271 => 0xff8d,
+        273 => 0xff52,
+        274 => 0xff54,
+        275 => 0xff53,
+        276 => 0xff51,
+        277 => 0xff63,
+        278 => 0xff50,
+        279 => 0xff57,
+        280 => 0xff55,
+        281 => 0xff56,
+        282..=293 => 0xffbe + (sdl - 282),
+        303 => 0xffe2,
+        304 => 0xffe1,
+        305 => 0xffe4,
+        306 => 0xffe3,
+        307 => 0xffea,
+        308 => 0xffe9,
+        _ => return None,
+    })
+}
+
+type FakeInput = unsafe extern "C" fn(Conn, u8, u8, u32, u32, i16, i16, u8) -> Cookie;
+
+/// controls.cfg's default controller buttons for Aliens, as `sdlkey:mask`.
+const DEFAULT_PAD_KEYS: &str = "49:16,49:4096,53:32,57:8192,273:1,274:2";
+/// Pointer speed at full stick deflection, in screen pixels per second.
+const POINTER_SPEED: i32 = 1200;
+const KEY_PRESS: u8 = 2;
+const BUTTON_PRESS: u8 = 4;
+const MOTION_NOTIFY: u8 = 6;
+
+/// Controller input for Aliens, sent as XTest events to the focused game.
+struct Controller {
+    fake: FakeInput,
+    reader: crate::evdev_pad::Reader,
+    /// (event type, keycode/button, pad mask, currently pressed)
+    outputs: Vec<(u8, u8, u32, bool)>,
+    cursor: crate::pad::Cursor,
+    last: Instant,
+}
+
+impl Controller {
+    fn new(watcher: &Watcher) -> Result<Self, String> {
+        let handle = unsafe {
+            libc::dlopen(c"libxcb-xtest.so.0".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL)
+        };
+        if handle.is_null() {
+            return Err("libxcb-xtest.so.0 is unavailable".into());
+        }
+        let pointer = unsafe { libc::dlsym(handle, c"xcb_test_fake_input".as_ptr()) };
+        if pointer.is_null() {
+            return Err("libxcb-xtest lacks xcb_test_fake_input".into());
+        }
+        let fake: FakeInput = unsafe { std::mem::transmute::<*mut c_void, FakeInput>(pointer) };
+        let text = std::env::var("ARCADE_PAD_KEYS").unwrap_or_else(|_| DEFAULT_PAD_KEYS.into());
+        let mut pairs = [(0, 0); 64];
+        let n = crate::pad::parse_bindings(text.as_bytes(), &mut pairs);
+        let mut outputs: Vec<(u8, u8, u32, bool)> = Vec::new();
+        let mut add = |kind: u8, detail: u8, mask: u32| {
+            match outputs.iter_mut().find(|o| o.0 == kind && o.1 == detail) {
+                Some(o) => o.2 |= mask,
+                None => outputs.push((kind, detail, mask, false)),
+            }
+        };
+        for &(sdl, mask) in &pairs[..n] {
+            match x_keysym(sdl).and_then(|k| watcher.keycode(k)) {
+                Some(keycode) => add(KEY_PRESS, keycode, mask),
+                None => eprintln!("[aliens] controller: no X key for SDL key {sdl}"),
+            }
+        }
+        add(BUTTON_PRESS, 1, crate::pad::RT);
+        add(BUTTON_PRESS, 3, crate::pad::LT);
+        Ok(Self {
+            fake,
+            reader: crate::evdev_pad::Reader::new(),
+            outputs,
+            cursor: crate::pad::Cursor::new(1 << 20, 1 << 20),
+            last: Instant::now(),
+        })
+    }
+
+    fn frame(&mut self, watcher: &Watcher) {
+        let state = self.reader.read();
+        let elapsed = self.last.elapsed().as_millis() as u32;
+        self.last = Instant::now();
+        let any = state.buttons != 0 || state.aim() != (0, 0);
+        let pressed = self.outputs.iter().any(|o| o.3);
+        if !any && !pressed {
+            return;
+        }
+        let focused = !watcher.windows.is_empty() && watcher.focused_game();
+        if focused && state.held(crate::pad::BACK) && state.held(crate::pad::START) {
+            eprintln!("[aliens] Back + Start pressed; exiting");
+            unsafe {
+                libc::fflush(std::ptr::null_mut());
+                libc::_exit(0);
+            }
+        }
+        let mut sent = false;
+        for output in &mut self.outputs {
+            let now = focused && state.held(output.2);
+            if now != output.3 {
+                output.3 = now;
+                let kind = if now { output.0 } else { output.0 + 1 };
+                unsafe { (self.fake)(watcher.conn, kind, output.1, 0, 0, 0, 0, 0) };
+                sent = true;
+            }
+        }
+        let (old_x, old_y) = (self.cursor.x, self.cursor.y);
+        if focused && self.cursor.step(state.aim(), elapsed, POINTER_SPEED, 1 << 21, 1 << 21) {
+            let (dx, dy) = (self.cursor.x - old_x, self.cursor.y - old_y);
+            // Relative motion (detail 1). The virtual canvas keeps sub-pixel
+            // remainders; recentre it only when it nears an edge.
+            unsafe { (self.fake)(watcher.conn, MOTION_NOTIFY, 1, 0, 0, dx as i16, dy as i16, 0) };
+            if (self.cursor.x - (1 << 20)).abs() > 1 << 19 || (self.cursor.y - (1 << 20)).abs() > 1 << 19 {
+                self.cursor = crate::pad::Cursor::new(1 << 20, 1 << 20);
+            }
+            sent = true;
+        }
+        if sent {
+            unsafe { (watcher.x.flush)(watcher.conn) };
+        }
+    }
 }
 
 /// Start the watcher thread for launcher-run Aliens sessions.
@@ -438,6 +628,13 @@ pub fn start() {
                 }
             };
             eprintln!("[aliens] desktop exit: Esc or the window close button");
+            let mut controller = match Controller::new(&watcher) {
+                Ok(controller) => Some(controller),
+                Err(error) => {
+                    eprintln!("[aliens] controllers disabled: {error}");
+                    None
+                }
+            };
             let fullscreen = std::env::var_os("ARCADE_FULLSCREEN").is_some_and(|v| v == "1");
             let mut last_scan = Instant::now() - Duration::from_secs(10);
             let mut announced = false;
@@ -460,7 +657,10 @@ pub fn start() {
                         libc::_exit(0);
                     }
                 }
-                std::thread::sleep(Duration::from_millis(25));
+                if let Some(controller) = controller.as_mut() {
+                    controller.frame(&watcher);
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
         });
 }
@@ -471,3 +671,4 @@ const _: () = assert!(std::mem::size_of::<TreeReply>() == 32);
 const _: () = assert!(std::mem::size_of::<KeymapReply>() == 40);
 const _: () = assert!(std::mem::size_of::<AtomReply>() == 12);
 const _: () = assert!(std::mem::size_of::<PropertyReply>() == 32);
+const _: () = assert!(std::mem::size_of::<KeyboardMappingReply>() == 32);

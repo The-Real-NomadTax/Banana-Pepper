@@ -79,7 +79,7 @@ pub fn launch(root: &Path) -> Result<String, String> {
         let mut c = Command::new("wine");
         c.arg(output.join("FordRacing/fordracing.exe"));
         let prefix=if std::fs::read_to_string("/proc/sys/kernel/osrelease").is_ok_and(|s|s.to_ascii_lowercase().contains("microsoft")){
-            std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from).or_else(||std::env::var_os("HOME").map(|h|std::path::PathBuf::from(h).join(".cache"))).ok_or("No Linux cache directory for the Wine prefix")?.join("arcade-foundry/ford-wine")
+            std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from).or_else(||std::env::var_os("HOME").map(|h|std::path::PathBuf::from(h).join(".cache"))).ok_or("No Linux cache directory for the Wine prefix")?.join("banana-pepper/ford-wine")
         }else{output.join("prefix")};
         fs::create_dir_all(&prefix).map_err(|e|e.to_string())?;
         c.env("WINEPREFIX", prefix)
@@ -106,7 +106,8 @@ pub fn launch(root: &Path) -> Result<String, String> {
                 "ARCADE_FORD_KEYS",
                 arcade_core::controls::Bindings::load(&project.join("controls.cfg"))?
                     .env_value("ford")?,
-            );
+            )
+            .envs(crate::runtime::pad_env(&project, "ford")?);
         let status = command.status().map_err(|e| e.to_string())?;
         if !status.success() {
             return Err(format!(

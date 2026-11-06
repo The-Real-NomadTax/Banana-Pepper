@@ -1,6 +1,6 @@
 # Minecraft seed capture on Windows (handoff)
 
-Goal: record the two decrypted asset seed tables that TeknoParrot's dongle emulation produces for Minecraft Dungeons Arcade 3.07, so Arcade Foundry's own Linux runner can use them without TeknoParrot.
+Goal: record the two decrypted asset seed tables that TeknoParrot's dongle emulation produces for Minecraft Dungeons Arcade 3.07, so Banana pepper's own Linux runner can use them without TeknoParrot.
 
 ## Why
 

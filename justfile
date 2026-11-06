@@ -11,6 +11,6 @@ build:
 setup-runtime:
     bash scripts/setup-desktop-runtime.sh
 
-# Build everything, then open Arcade Foundry.
+# Build everything, then open Banana pepper.
 run: build
     ./target/release/arcade-desktop

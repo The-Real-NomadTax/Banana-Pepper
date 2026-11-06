@@ -1,4 +1,4 @@
-package com.arcadefoundry;
+package com.bananapepper;
 
 import android.app.Activity;
 import android.app.AlertDialog;

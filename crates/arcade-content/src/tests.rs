@@ -220,3 +220,128 @@ fn linux_executables_and_interpreter_scripts_regain_execute_permission() {
         0
     );
 }
+
+#[test]
+fn converter_round_trips_through_the_game_loader() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir_all(source.join("data/café/empty")).unwrap();
+    fs::write(source.join("game.exe"), b"MZ game").unwrap();
+    let data: Vec<u8> = (0..200_000).map(|i| (i * 37 % 251) as u8).collect();
+    fs::write(source.join("data/café/assets.bin"), &data).unwrap();
+    fs::write(source.join("zero"), []).unwrap();
+    let output = temp.path().join("game.zar");
+    let mut last = pack::Progress::default();
+    pack::convert(&source, &output, &false.into(), |p| last = p).unwrap();
+    assert_eq!(last.phase, "Complete");
+    assert_eq!(last.files_done, 3);
+    assert_eq!(last.bytes_done, last.bytes_total);
+    let tree = prepare(&output, &temp.path().join("cache")).unwrap();
+    assert_eq!(fs::read(tree.join("game.exe")).unwrap(), b"MZ game");
+    assert_eq!(fs::read(tree.join("data/café/assets.bin")).unwrap(), data);
+    assert!(tree.join("data/café/empty").is_dir());
+    assert_eq!(fs::metadata(tree.join("zero")).unwrap().len(), 0);
+    assert_eq!(fs::read(source.join("data/café/assets.bin")).unwrap(), data);
+}
+
+#[test]
+fn converter_rejects_overwrite_and_output_inside_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let output = temp.path().join("game.zar");
+    fs::write(&output, b"keep existing").unwrap();
+    assert!(
+        pack::convert(&source, &output, &false.into(), |_| {})
+            .unwrap_err()
+            .contains("already exists")
+    );
+    assert_eq!(fs::read(&output).unwrap(), b"keep existing");
+    assert!(
+        pack::convert(&source, &source.join("game.zar"), &false.into(), |_| {})
+            .unwrap_err()
+            .contains("outside")
+    );
+    assert_eq!(fs::read_dir(&source).unwrap().count(), 0);
+}
+
+#[test]
+fn converter_cancellation_cleans_partial_output() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("game"), vec![42; 2 * 1024 * 1024]).unwrap();
+    let output = temp.path().join("game.zar");
+    let cancel = AtomicBool::new(false);
+    let result = pack::convert(&source, &output, &cancel, |p| {
+        if p.bytes_done > 0 {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    });
+    assert!(result.unwrap_err().contains("cancelled"));
+    assert!(!output.exists());
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn converter_rejects_case_collisions_and_cleans_up_on_changed_input() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let file = source.join("game");
+    fs::write(&file, b"original").unwrap();
+    let output = temp.path().join("game.zar");
+    let result = pack::convert(&source, &output, &false.into(), |p| {
+        if p.phase == "Compressing" && p.bytes_done == 0 {
+            fs::write(&file, b"changed size").unwrap();
+        }
+    });
+    assert!(result.unwrap_err().contains("changed"));
+    assert!(!output.exists());
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    // Only case-sensitive filesystems can represent both source names.
+    fs::write(source.join("GAME"), b"collision").unwrap();
+    if fs::read_dir(&source).unwrap().count() == 2 {
+        assert!(
+            pack::convert(&source, &output, &false.into(), |_| {})
+                .unwrap_err()
+                .contains("case")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn converter_rejects_links_without_following_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    std::os::unix::fs::symlink(temp.path(), source.join("loop")).unwrap();
+    let output = temp.path().join("game.zar");
+    assert!(
+        pack::convert(&source, &output, &false.into(), |_| {})
+            .unwrap_err()
+            .contains("Links")
+    );
+    assert!(!output.exists());
+}
+
+#[test]
+fn converter_can_pack_an_empty_folder_and_refuses_a_late_output_collision() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let output = temp.path().join("game.zar");
+    pack::convert(&source, &output, &false.into(), |_| {}).unwrap();
+    let tree = prepare(&output, &temp.path().join("cache")).unwrap();
+    assert_eq!(fs::read_dir(tree).unwrap().count(), 0);
+    fs::remove_file(&output).unwrap();
+    let result = pack::convert(&source, &output, &false.into(), |p| {
+        if p.phase == "Verifying archive" {
+            fs::write(&output, b"another writer").unwrap();
+        }
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(&output).unwrap(), b"another writer");
+}

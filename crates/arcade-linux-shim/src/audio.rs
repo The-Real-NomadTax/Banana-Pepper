@@ -388,7 +388,7 @@ pub unsafe extern "C" fn write(fd: c_int, data: *const c_void, bytes: usize) -> 
         let stream = unsafe {
             pa_simple_new(
                 std::ptr::null(),
-                c"Arcade Foundry".as_ptr(),
+                c"Banana pepper".as_ptr(),
                 1,
                 std::ptr::null(),
                 c"Big Buck Hunter Pro".as_ptr(),

@@ -3,7 +3,7 @@ name = "arcade-water"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Water Adapts The ELF Runtime: Linux-to-Windows compatibility for Arcade Foundry"
+description = "Water Adapts The ELF Runtime: Linux-to-Windows compatibility for Banana pepper"
 
 [dependencies]
 goblin.workspace = true

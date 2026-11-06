@@ -18,7 +18,8 @@ pub fn launch(root: &Path) -> Result<String, String> {
         .arg(project.join("scripts/supercars-run.py"))
         .arg("--games-root")
         .arg(root)
-        .env("ARCADE_SUPERCARS_KEYS", controls.env_value("super_cars")?);
+        .env("ARCADE_SUPERCARS_KEYS", controls.env_value("super_cars")?)
+        .envs(crate::runtime::pad_env(&project, "super_cars")?);
     crate::runtime::settings_env(&mut command, &settings);
     let status = command
         .status()

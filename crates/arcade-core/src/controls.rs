@@ -33,8 +33,11 @@ pub struct Action {
     /// target or Big Buck switch index.
     pub target: u32,
     pub default: &'static [&'static str],
-    /// Exactly one key is required (Aliens patches one operand per action).
+    /// Exactly one keyboard key is required (Aliens patches one operand per
+    /// action). Controller buttons do not count toward this.
     pub single: bool,
+    /// Only controller buttons may be bound (e.g. Big Buck's aimed shot).
+    pub pad_only: bool,
 }
 
 #[derive(Debug)]
@@ -60,6 +63,7 @@ const fn one(
         target,
         default: key,
         single: true,
+        pad_only: false,
     }
 }
 const fn any(
@@ -74,29 +78,45 @@ const fn any(
         target,
         default: keys,
         single: false,
+        pad_only: false,
+    }
+}
+const fn pad(
+    id: &'static str,
+    label: &'static str,
+    target: u32,
+    buttons: &'static [&'static str],
+) -> Action {
+    Action {
+        id,
+        label,
+        target,
+        default: buttons,
+        single: false,
+        pad_only: true,
     }
 }
 
 pub const GAMES: &[Game] = &[
-    Game {id:"ford",title:"Ford Racing Full Blown",keys:KeySpace::DirectInput,mouse_buttons:false,note:"Keyboard steering ramps and recentres. The cabinet adapter runs on Windows and Wine; Escape exits.",actions:&[
-        any("steer_left","Steer left",1,&["Left"]),any("steer_right","Steer right",2,&["Right"]),any("gas","Gas / menu confirm",3,&["Up"]),any("brake","Brake",4,&["Down"]),
-        any("start1","Start",5,&["Enter","1"]),any("view","Change view",6,&["V"]),any("gear_up","Shift up",7,&["Space"]),any("gear_down","Shift down",8,&["X"]),any("coin1","Coin",9,&["5"]),
+    Game {id:"ford",title:"Ford Racing Full Blown",keys:KeySpace::DirectInput,mouse_buttons:false,note:"Keyboard steering ramps and recentres. Controllers (XInput): left stick steers, triggers bound to gas/brake are analog. The cabinet adapter runs on Windows and Wine; Escape exits.",actions:&[
+        any("steer_left","Steer left",1,&["Left","PadLeft"]),any("steer_right","Steer right",2,&["Right","PadRight"]),any("gas","Gas / menu confirm",3,&["Up","PadRT"]),any("brake","Brake",4,&["Down","PadLT"]),
+        any("start1","Start",5,&["Enter","1","PadStart","PadA"]),any("view","Change view",6,&["V","PadY"]),any("gear_up","Shift up",7,&["Space","PadRB"]),any("gear_down","Shift down",8,&["X","PadLB"]),any("coin1","Coin",9,&["5","PadBack"]),
     ]},
     Game {
         id: "aliens",
         title: "Aliens Armageddon",
         keys: KeySpace::Sdl,
         mouse_buttons: false,
-        note: "Mouse aim and fire use the game's own desktop mouse controls. One key per action.",
+        note: "Mouse aim and fire use the game's own desktop mouse controls. One key per action (plus any controller buttons). Controllers: either stick moves the pointer, RT = left click, LT = right click.",
         actions: &[
-            one("start1", "Player 1 Start / menu confirm", 0x154, &["1"]),
+            one("start1", "Player 1 Start / menu confirm", 0x154, &["1", "PadStart", "PadA"]),
             one("start2", "Player 2 Start", 0x155, &["2"]),
-            one("coin1", "Coin 1", 0x14c, &["5"]),
+            one("coin1", "Coin 1", 0x14c, &["5", "PadBack"]),
             one("coin2", "Coin 2", 0x14d, &["6"]),
             one("test", "Test (operator menu) / menu select", 0x150, &["T"]),
-            one("service", "Service / menu back", 0x151, &["9"]),
-            one("volume_up", "Volume up / menu up", 0x152, &["Up"]),
-            one("volume_down", "Volume down / menu down", 0x153, &["Down"]),
+            one("service", "Service / menu back", 0x151, &["9", "PadB"]),
+            one("volume_up", "Volume up / menu up", 0x152, &["Up", "PadUp"]),
+            one("volume_down", "Volume down / menu down", 0x153, &["Down", "PadDown"]),
         ],
     },
     Game {
@@ -104,20 +124,20 @@ pub const GAMES: &[Game] = &[
         title: "Jurassic Park 2015",
         keys: KeySpace::Sdl,
         mouse_buttons: true,
-        note: "Mouse movement always aims for player one.",
+        note: "Mouse movement always aims for player one. Controllers: either stick moves the aim.",
         actions: &[
-            any("start1", "Player 1 Start", 371, &["1"]),
+            any("start1", "Player 1 Start", 371, &["1", "PadStart"]),
             any("start2", "Player 2 Start", 372, &["2"]),
-            any("coin1", "Coin 1", 379, &["5"]),
+            any("coin1", "Coin 1", 379, &["5", "PadBack"]),
             any("coin2", "Coin 2", 380, &["6"]),
             any("test", "Test (operator menu)", 378, &["T"]),
             any("service", "Service", 377, &["9"]),
-            any("menu_up", "Menu up", 383, &["Up"]),
-            any("menu_down", "Menu down", 384, &["Down"]),
-            any("menu_select", "Menu select", 385, &["Enter"]),
-            any("menu_back", "Menu back", 386, &["Backspace"]),
-            any("fire", "Fire (player one)", 333, &["MouseLeft"]),
-            any("secondary", "Secondary trigger", 334, &["MouseRight"]),
+            any("menu_up", "Menu up", 383, &["Up", "PadUp"]),
+            any("menu_down", "Menu down", 384, &["Down", "PadDown"]),
+            any("menu_select", "Menu select", 385, &["Enter", "PadA"]),
+            any("menu_back", "Menu back", 386, &["Backspace", "PadB"]),
+            any("fire", "Fire (player one)", 333, &["MouseLeft", "PadRT"]),
+            any("secondary", "Secondary trigger", 334, &["MouseRight", "PadLT"]),
         ],
     },
     Game {
@@ -125,15 +145,17 @@ pub const GAMES: &[Game] = &[
         title: "Big Buck Hunter Pro",
         keys: KeySpace::Glut,
         mouse_buttons: false,
-        note: "Left mouse fires and right mouse pumps. Letters, digits, Space, Enter, Tab, Backspace and punctuation only.",
+        note: "Left mouse fires and right mouse pumps. Letters, digits, Space, Enter, Tab, Backspace and punctuation only. Controllers: either stick moves the crosshair.",
         actions: &[
-            any("start1", "Player 1 Start", 5, &["1", "Enter"]),
+            any("start1", "Player 1 Start", 5, &["1", "Enter", "PadStart"]),
             any("start2", "Player 2 Start", 6, &["2"]),
-            any("coin1", "Coin 1", 7, &["5"]),
+            any("coin1", "Coin 1", 7, &["5", "PadBack"]),
             any("coin2", "Coin 2", 8, &["6"]),
             any("test", "Test (operator menu)", 11, &["T"]),
             any("service", "Service", 10, &["9"]),
             any("trigger", "Trigger switch (keyboard)", 1, &["Space"]),
+            pad("fire", "Fire at the crosshair (controller)", 0x100, &["PadRT", "PadA"]),
+            pad("pump", "Pump (controller)", 0x101, &["PadLT", "PadB"]),
         ],
     },
     Game {
@@ -141,22 +163,22 @@ pub const GAMES: &[Game] = &[
         title: "Fast and Furious Super Cars",
         keys: KeySpace::DirectInput,
         mouse_buttons: false,
-        note: "Steering ramps while held and recentres on release; gas and brake are on/off. Targets are the cabinet I/O board's input codes.",
+        note: "Steering ramps while held and recentres on release; gas and brake keys are on/off. Controllers (XInput): left stick steers, triggers bound to gas/brake are analog. Targets are the cabinet I/O board's input codes.",
         actions: &[
-            any("steer_left", "Steer left", 1, &["Left"]),
-            any("steer_right", "Steer right", 2, &["Right"]),
-            any("gas", "Gas", 3, &["Up"]),
-            any("brake", "Brake", 4, &["Down"]),
-            any("start1", "Start / select", 0x10000, &["Enter", "1"]),
-            any("view1", "View 1", 0x10001, &["C"]),
-            any("view2", "View 2", 0x10002, &["V"]),
-            any("view3", "View 3", 0x10003, &["B"]),
-            any("tunes", "Music (tunes)", 0x10004, &["M"]),
-            any("gear1", "Gear 1", 0x10005, &["Q"]),
-            any("gear2", "Gear 2", 0x10006, &["W"]),
-            any("gear3", "Gear 3", 0x10007, &["E"]),
-            any("gear4", "Gear 4", 0x10008, &["R"]),
-            any("coin1", "Coin 1", 0x10009, &["5"]),
+            any("steer_left", "Steer left", 1, &["Left", "PadLeft"]),
+            any("steer_right", "Steer right", 2, &["Right", "PadRight"]),
+            any("gas", "Gas", 3, &["Up", "PadRT"]),
+            any("brake", "Brake", 4, &["Down", "PadLT"]),
+            any("start1", "Start / select", 0x10000, &["Enter", "1", "PadStart", "PadA"]),
+            any("view1", "View 1", 0x10001, &["C", "PadX"]),
+            any("view2", "View 2", 0x10002, &["V", "PadY"]),
+            any("view3", "View 3", 0x10003, &["B", "PadB"]),
+            any("tunes", "Music (tunes)", 0x10004, &["M", "PadRS"]),
+            any("gear1", "Gear 1", 0x10005, &["Q", "PadLB"]),
+            any("gear2", "Gear 2", 0x10006, &["W", "PadRB"]),
+            any("gear3", "Gear 3", 0x10007, &["E", "PadUp"]),
+            any("gear4", "Gear 4", 0x10008, &["R", "PadDown"]),
+            any("coin1", "Coin 1", 0x10009, &["5", "PadBack"]),
             any("coin2", "Coin 2", 0x1000a, &["6"]),
             any("test", "Test (operator menu)", 0x1000b, &["T"]),
             any("service", "Service", 0x1000c, &["9"]),
@@ -270,10 +292,70 @@ const ALIASES: &[(&str, &str)] = &[
     ("kpminus", "KeypadMinus"),
 ];
 
+/// Controller buttons by canonical name, with their XInput `wButtons` mask
+/// (Xbox layout). The triggers have no XInput button bit; they use the two
+/// bits above it and count as pressed past a quarter of their travel.
+/// Every backend reads controllers into this same mask: XInput on Windows
+/// and Wine, evdev on Linux.
+pub const PAD_BUTTONS: &[(&str, u32, &str)] = &[
+    ("PadA", 0x1000, "A"),
+    ("PadB", 0x2000, "B"),
+    ("PadX", 0x4000, "X"),
+    ("PadY", 0x8000, "Y"),
+    ("PadLB", 0x0100, "Left bumper"),
+    ("PadRB", 0x0200, "Right bumper"),
+    ("PadLT", 0x1_0000, "Left trigger"),
+    ("PadRT", 0x2_0000, "Right trigger"),
+    ("PadBack", 0x0020, "Back / View"),
+    ("PadStart", 0x0010, "Start / Menu"),
+    ("PadLS", 0x0040, "Left stick click"),
+    ("PadRS", 0x0080, "Right stick click"),
+    ("PadUp", 0x0001, "D-pad up"),
+    ("PadDown", 0x0002, "D-pad down"),
+    ("PadLeft", 0x0004, "D-pad left"),
+    ("PadRight", 0x0008, "D-pad right"),
+];
+pub const PAD_LT: u32 = 0x1_0000;
+pub const PAD_RT: u32 = 0x2_0000;
+
+const PAD_ALIASES: &[(&str, &str)] = &[
+    ("padview", "PadBack"),
+    ("padselect", "PadBack"),
+    ("padmenu", "PadStart"),
+    ("padl1", "PadLB"),
+    ("padr1", "PadRB"),
+    ("padl2", "PadLT"),
+    ("padr2", "PadRT"),
+    ("padl3", "PadLS"),
+    ("padr3", "PadRS"),
+    ("paddpadup", "PadUp"),
+    ("paddpaddown", "PadDown"),
+    ("paddpadleft", "PadLeft"),
+    ("paddpadright", "PadRight"),
+];
+
+/// XInput-style mask for a canonical controller button name.
+pub fn pad_mask(canonical: &str) -> Option<u32> {
+    PAD_BUTTONS
+        .iter()
+        .find(|(n, _, _)| *n == canonical)
+        .map(|(_, m, _)| *m)
+}
+
+pub fn is_pad(canonical: &str) -> bool {
+    pad_mask(canonical).is_some()
+}
+
 /// Canonical key name for a user/egui spelling, e.g. "Num1" → "1", "ArrowUp" → "Up".
 pub fn normalize(name: &str) -> Option<String> {
     let name = name.trim();
     let lower = name.to_ascii_lowercase();
+    if let Some((n, _, _)) = PAD_BUTTONS.iter().find(|(n, _, _)| n.eq_ignore_ascii_case(name)) {
+        return Some((*n).to_owned());
+    }
+    if let Some(&(_, canonical)) = PAD_ALIASES.iter().find(|(alias, _)| *alias == lower) {
+        return Some(canonical.to_owned());
+    }
     if name.len() == 1 && name.as_bytes()[0].is_ascii_alphanumeric() {
         return Some(name.to_ascii_uppercase());
     }
@@ -447,8 +529,14 @@ pub fn code(keys: KeySpace, canonical: &str) -> Option<u32> {
     }
 }
 
-fn check_key(game: &Game, name: &str) -> Result<String, String> {
+fn check_key(game: &Game, action: &Action, name: &str) -> Result<String, String> {
     let canonical = normalize(name).ok_or_else(|| format!("unknown key \"{name}\""))?;
+    if is_pad(&canonical) {
+        return Ok(canonical);
+    }
+    if action.pad_only {
+        return Err(format!("\"{}\" takes controller buttons only", action.label));
+    }
     if canonical == "Escape" {
         return Err("Escape is reserved for exiting the game".into());
     }
@@ -493,16 +581,20 @@ impl Bindings {
     /// set (duplicates, single-key actions) happens in [`Bindings::validate`].
     pub fn set(&mut self, game: &str, action: &str, keys: &[&str]) -> Result<(), String> {
         let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
-        if !g.actions.iter().any(|a| a.id == action) {
-            return Err(format!("unknown {} action \"{action}\"", g.title));
-        }
+        let a = g
+            .actions
+            .iter()
+            .find(|a| a.id == action)
+            .ok_or_else(|| format!("unknown {} action \"{action}\"", g.title))?;
         let mut canonical = Vec::new();
         for key in keys {
-            let key = check_key(g, key)?;
+            let key = check_key(g, a, key)?;
             if !canonical.contains(&key) {
                 canonical.push(key);
             }
         }
+        // Keyboard/mouse first, then controller buttons (stable within each).
+        canonical.sort_by_key(|k| is_pad(k));
         self.keys
             .insert((game.to_owned(), action.to_owned()), canonical);
         Ok(())
@@ -541,10 +633,20 @@ impl Bindings {
         append: bool,
     ) -> Result<String, String> {
         let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
-        let key = check_key(g, key)?;
+        let a = g
+            .actions
+            .iter()
+            .find(|a| a.id == action)
+            .ok_or_else(|| format!("unknown {} action \"{action}\"", g.title))?;
+        let key = check_key(g, a, key)?;
         let mut next = self.clone();
         let old = next.keys(game, action).to_vec();
-        let mut keys = if append { old.clone() } else { Vec::new() };
+        // Replacing a key keeps the action's controller buttons.
+        let mut keys = if append {
+            old.clone()
+        } else {
+            old.iter().filter(|k| is_pad(k)).cloned().collect()
+        };
         if !keys.contains(&key) {
             keys.push(key.clone());
         }
@@ -556,8 +658,13 @@ impl Bindings {
                 .filter(|k| k.as_str() != key)
                 .cloned()
                 .collect();
-            if remaining.is_empty() {
-                remaining = old.iter().filter(|k| !keys.contains(k)).cloned().collect();
+            // Left without a keyboard key: take this action's previous keys (a swap).
+            if !remaining.iter().any(|k| !is_pad(k)) {
+                remaining.extend(
+                    old.iter()
+                        .filter(|k| !keys.contains(k) && !is_pad(k))
+                        .cloned(),
+                );
             }
             let refs: Vec<&str> = remaining.iter().map(String::as_str).collect();
             next.set(game, other, &refs)?;
@@ -595,14 +702,14 @@ impl Bindings {
             let mut seen: BTreeMap<String, &str> = BTreeMap::new();
             for action in game.actions {
                 let keys = self.keys(game.id, action.id);
-                if action.single && keys.len() != 1 {
+                if action.single && keys.iter().filter(|k| !is_pad(k)).count() != 1 {
                     return Err(format!(
                         "{}: \"{}\" needs exactly one key",
                         game.title, action.label
                     ));
                 }
                 for key in keys {
-                    check_key(game, key).map_err(|e| format!("{}: {e}", game.title))?;
+                    check_key(game, action, key).map_err(|e| format!("{}: {e}", game.title))?;
                     if let Some(other) = seen.insert(key.clone(), action.id) {
                         return Err(format!(
                             "{}: {key} is bound to both \"{other}\" and \"{}\"",
@@ -615,17 +722,101 @@ impl Bindings {
         Ok(())
     }
 
-    /// (target, code) pairs for one game, in action order.
+    /// (target, code) keyboard/mouse pairs for one game, in action order.
+    /// Controller buttons are reported separately by [`Bindings::pad_codes`].
     pub fn codes(&self, game: &str) -> Result<Vec<(u32, u32)>, String> {
         self.validate()?;
         let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
         let mut pairs = Vec::new();
         for action in g.actions {
-            for key in self.keys(game, action.id) {
+            for key in self.keys(game, action.id).iter().filter(|k| !is_pad(k)) {
                 pairs.push((action.target, code(g.keys, key).expect("validated key")));
             }
         }
         Ok(pairs)
+    }
+
+    /// (target, controller button mask) pairs for one game, in action order.
+    pub fn pad_codes(&self, game: &str) -> Result<Vec<(u32, u32)>, String> {
+        self.validate()?;
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        let mut pairs = Vec::new();
+        for action in g.actions {
+            for key in self.keys(game, action.id) {
+                if let Some(mask) = pad_mask(key) {
+                    pairs.push((action.target, mask));
+                }
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// Compact `target:mask,...` controller form passed to the game adapters
+    /// (`ARCADE_PAD`). Analog behaviour (sticks, analog triggers) is fixed
+    /// per game and described in each game's note.
+    pub fn pad_env_value(&self, game: &str) -> Result<String, String> {
+        Ok(self
+            .pad_codes(game)?
+            .iter()
+            .map(|(t, m)| format!("{t}:{m}"))
+            .collect::<Vec<_>>()
+            .join(","))
+    }
+
+    /// `keycode:mask,...` for games whose adapter presses the action's own
+    /// keyboard key when a controller button is held (Aliens, whose image is
+    /// patched to one key per action). Uses each action's first key.
+    pub fn pad_key_env_value(&self, game: &str) -> Result<String, String> {
+        self.validate()?;
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        let mut pairs = Vec::new();
+        for action in g.actions {
+            let keys = self.keys(game, action.id);
+            let Some(key) = keys.iter().find(|k| !is_pad(k)) else {
+                continue;
+            };
+            let Some(code) = code(g.keys, key) else {
+                continue;
+            };
+            for mask in keys.iter().filter_map(|k| pad_mask(k)) {
+                pairs.push(format!("{code}:{mask}"));
+            }
+        }
+        Ok(pairs.join(","))
+    }
+
+    /// Add or remove one controller button on an action. Adding moves the
+    /// button off any other action in the same game.
+    pub fn toggle_pad(&mut self, game: &str, action: &str, button: &str) -> Result<String, String> {
+        let g = self::game(game).ok_or_else(|| format!("unknown game \"{game}\""))?;
+        let button = normalize(button)
+            .filter(|b| is_pad(b))
+            .ok_or_else(|| format!("unknown controller button \"{button}\""))?;
+        let mut next = self.clone();
+        let mut keys = next.keys(game, action).to_vec();
+        let message;
+        if let Some(i) = keys.iter().position(|k| *k == button) {
+            keys.remove(i);
+            message = format!("{} {action}: removed {button}", g.title);
+        } else {
+            for other in next.conflicts(game, action, &button) {
+                let rest: Vec<String> = next
+                    .keys(game, other)
+                    .iter()
+                    .filter(|k| **k != button)
+                    .cloned()
+                    .collect();
+                let refs: Vec<&str> = rest.iter().map(String::as_str).collect();
+                next.set(game, other, &refs)?;
+            }
+            keys.push(button.clone());
+            message = format!("{} {action}: added {button}", g.title);
+        }
+        let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        next.set(game, action, &refs)?;
+        next.validate()?;
+        *self = next;
+        Ok(message)
     }
 
     /// Compact `target:code,...` form passed to the guest shim.
@@ -669,7 +860,7 @@ impl Bindings {
 
     pub fn to_text(&self) -> String {
         let mut out = String::from(
-            "# Arcade Foundry desktop controls. Edit here or in the workbench's Controls panel.\n\
+            "# Banana pepper desktop controls. Edit here or in the workbench's Controls panel.\n\
              # Separate multiple keys with commas. Escape always exits a game.\n",
         );
         for game in GAMES {
@@ -721,6 +912,31 @@ mod tests {
         let cars = b.env_value("super_cars").unwrap();
         assert!(cars.starts_with("1:203,2:205,3:200,4:208,65536:28,65536:2,65537:46"));
         assert!(cars.ends_with("65547:20,65548:10,65550:201,65551:209"));
+        // The Linux shim's controller fallbacks (jamma.rs, jurassic_pad.rs,
+        // aliens_exit.rs) must match too.
+        assert_eq!(
+            b.pad_env_value("big_buck").unwrap(),
+            "5:16,7:32,256:131072,256:4096,257:65536,257:8192"
+        );
+        assert_eq!(
+            b.pad_env_value("jurassic").unwrap(),
+            "371:16,379:32,383:1,384:2,385:4096,386:8192,333:131072,334:65536"
+        );
+        assert_eq!(
+            b.pad_key_env_value("aliens").unwrap(),
+            "49:16,49:4096,53:32,57:8192,273:1,274:2"
+        );
+        // Ford's adapter has the same controller fallback (DEFAULT_PAD).
+        assert_eq!(
+            b.pad_env_value("ford").unwrap(),
+            "1:4,2:8,3:131072,4:65536,5:16,5:4096,6:32768,7:512,8:256,9:32"
+        );
+        // ... and its built-in controller fallback (DEFAULT_PAD in hook.rs).
+        assert_eq!(
+            b.pad_env_value("super_cars").unwrap(),
+            "1:4,2:8,3:131072,4:65536,65536:16,65536:4096,65537:16384,65538:32768,\
+65539:8192,65540:128,65541:256,65542:512,65543:1,65544:2,65545:32"
+        );
     }
 
     #[test]
@@ -732,7 +948,7 @@ mod tests {
         assert_eq!(parsed, b);
         let p = Bindings::parse("[aliens]\ntest = f9 # comment\n").unwrap();
         assert_eq!(p.codes("aliens").unwrap()[4], (0x150, 290));
-        assert_eq!(p.keys("aliens", "start1"), ["1"]);
+        assert_eq!(p.keys("aliens", "start1"), ["1", "PadStart", "PadA"]);
     }
 
     #[test]
@@ -740,15 +956,15 @@ mod tests {
         let mut b = Bindings::default();
         // Aliens: T to start1 swaps start1's old key "1" onto test.
         b.rebind("aliens", "start1", "T", false).unwrap();
-        assert_eq!(b.keys("aliens", "start1"), ["T"]);
+        assert_eq!(b.keys("aliens", "start1"), ["T", "PadStart", "PadA"]);
         assert_eq!(b.keys("aliens", "test"), ["1"]);
         b.validate().unwrap();
         // Jurassic: adding Space to fire keeps the mouse button.
         b.rebind("jurassic", "fire", "Space", true).unwrap();
-        assert_eq!(b.keys("jurassic", "fire"), ["MouseLeft", "Space"]);
+        assert_eq!(b.keys("jurassic", "fire"), ["MouseLeft", "Space", "PadRT"]);
         // Big Buck: Enter moves from start1 (which keeps "1").
         b.rebind("big_buck", "test", "Enter", false).unwrap();
-        assert_eq!(b.keys("big_buck", "start1"), ["1"]);
+        assert_eq!(b.keys("big_buck", "start1"), ["1", "PadStart"]);
         assert_eq!(b.keys("big_buck", "test"), ["Enter"]);
         // Invalid keys change nothing.
         let before = b.clone();
@@ -759,6 +975,47 @@ mod tests {
         assert_eq!(b, before);
         b.clear("jurassic", "secondary").unwrap();
         assert!(b.keys("jurassic", "secondary").is_empty());
+    }
+
+    #[test]
+    fn controller_buttons_are_separate_from_keys() {
+        let b = Bindings::default();
+        // Keyboard codes are unchanged by the controller defaults.
+        assert_eq!(b.codes("aliens").unwrap().len(), 8);
+        let pads = b.pad_codes("super_cars").unwrap();
+        assert!(pads.contains(&(3, PAD_RT)));
+        assert!(pads.contains(&(0x10000, 0x10)));
+        assert!(b.pad_env_value("jurassic").unwrap().contains("333:131072"));
+        // Aliens presses each action's own key: start1 "1" (49) for Start and A.
+        assert!(b.pad_key_env_value("aliens").unwrap().starts_with("49:16,49:4096,"));
+        assert_eq!(b.pad_codes("big_buck").unwrap()[..1], [(5, 0x10)]);
+        // Pad-only actions refuse keyboard keys; keys are not pads.
+        let mut c = b.clone();
+        assert!(c.set("big_buck", "fire", &["Space"]).is_err());
+        assert!(c.set("big_buck", "fire", &["PadX"]).is_ok());
+        assert_eq!(normalize("pad_a".replace('_', "").as_str()).as_deref(), Some("PadA"));
+        assert_eq!(normalize("PadView").as_deref(), Some("PadBack"));
+    }
+
+    #[test]
+    fn toggling_and_rebinding_keep_controller_buttons() {
+        let mut b = Bindings::default();
+        // Replacing a key keeps the controller buttons.
+        b.rebind("aliens", "start1", "F1", false).unwrap();
+        assert_eq!(b.keys("aliens", "start1"), ["F1", "PadStart", "PadA"]);
+        // Moving a single action's only key swaps, even with pads left over.
+        b.rebind("aliens", "start1", "Up", false).unwrap();
+        assert_eq!(b.keys("aliens", "volume_up"), ["F1", "PadUp"]);
+        b.validate().unwrap();
+        // Toggling a pad moves it from another action, then removes it.
+        b.toggle_pad("aliens", "test", "PadA").unwrap();
+        assert!(!b.keys("aliens", "start1").contains(&"PadA".to_owned()));
+        assert!(b.keys("aliens", "test").contains(&"PadA".to_owned()));
+        b.toggle_pad("aliens", "test", "PadA").unwrap();
+        assert!(!b.keys("aliens", "test").contains(&"PadA".to_owned()));
+        assert!(b.toggle_pad("aliens", "test", "Space").is_err());
+        let parsed = Bindings::parse(&b.to_text()).unwrap();
+        assert_eq!(parsed, b);
     }
 
     #[test]

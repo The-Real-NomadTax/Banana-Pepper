@@ -10,7 +10,7 @@ import shutil
 import subprocess
 
 from arcade_audio import sdl_audio_args
-from arcade_settings import guest_env_args, resolution
+from arcade_settings import guest_env_args, pad_args, resolution
 
 
 def main():
@@ -64,7 +64,7 @@ def main():
                     '--setenv', 'HOME', '/tmp', '--setenv', 'LD_LIBRARY_PATH', '/runtime-libs:/usr/lib32',
                     '--setenv', 'ARCADE_ALIENS', '1',
                     # Unique class lets the shim find this window for Esc / close-button exit.
-                    '--setenv', 'SDL_VIDEO_X11_WMCLASS', 'ArcadeFoundryAliens',
+                    '--setenv', 'SDL_VIDEO_X11_WMCLASS', 'BananaPepperAliens',
                     '--setenv', 'SDL_VIDEO_X11_XRANDR', '0', '--setenv', 'SDL_VIDEO_X11_VIDMODE', '0',
                     '--setenv', 'SDL_VIDEO_X11_DGAMOUSE', '0', '--chdir', '/pm']
         # The game's statically linked SDL 1.2 includes a PulseAudio driver ("pulse").
@@ -75,7 +75,7 @@ def main():
         command += audio_args
         # Fullscreen, vsync and renderer choices from settings.cfg (launch only).
         if args.launch:
-            command += guest_env_args()
+            command += guest_env_args() + pad_args()
         # Use supplied development definitions instead of encrypted prod copies.
         for name in ['aud', 'adj', 'conf', 'attract', 'cpmgui', 'online', 'locales', 'translation', 'ttf']:
             source = game / 'g6/aa/data' / name

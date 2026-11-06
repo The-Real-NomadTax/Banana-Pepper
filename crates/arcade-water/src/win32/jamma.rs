@@ -124,7 +124,93 @@ pub unsafe fn release() {
         switch(index, false);
     }
 }
+/// Last aimed position (mouse or controller), in 640x480 game coordinates.
+static mut AIM_X: i32 = 320;
+static mut AIM_Y: i32 = 240;
+/// controls.cfg's default controller buttons for Big Buck.
+const DEFAULT_PAD: &str = "5:16,7:32,256:131072,256:4096,257:65536,257:8192";
+const PAD_FIRE: u32 = 0x100;
+const PAD_PUMP: u32 = 0x101;
+/// Crosshair speed at full stick deflection, in game pixels per second.
+const CROSSHAIR_SPEED: i32 = 700;
+struct Controller {
+    bindings: Vec<(u32, u32)>,
+    /// Pad-held state per bound target, for press/release edges.
+    held: Vec<(u32, bool)>,
+    last: std::time::Instant,
+    connected: u32,
+}
+static mut CONTROLLER: Option<Controller> = None;
+
+/// One message-loop pass: XInput crosshair, shots, pump and switches.
+pub unsafe fn controller_frame(focused: bool) {
+    let c = (*ptr::addr_of_mut!(CONTROLLER)).get_or_insert_with(|| {
+        let text = std::env::var("ARCADE_PAD").unwrap_or_else(|_| DEFAULT_PAD.into());
+        let mut bindings = vec![(0, 0); 128];
+        let n = pad::parse_bindings(text.as_bytes(), &mut bindings);
+        bindings.truncate(n);
+        if !xinput::available() {
+            eprintln!("[water] XInput unavailable; controllers disabled");
+        }
+        Controller {
+            bindings,
+            held: Vec::new(),
+            last: std::time::Instant::now(),
+            connected: 0,
+        }
+    });
+    let state = if focused { xinput::read() } else { pad::Pad::default() };
+    if focused && xinput::connected() != c.connected {
+        c.connected = xinput::connected();
+        eprintln!("[water] {} XInput controller(s) connected", c.connected);
+    }
+    if state.held(pad::BACK) && state.held(pad::START) {
+        release();
+        eprintln!("[water] Back + Start: exiting");
+        std::process::exit(0);
+    }
+    let elapsed = c.last.elapsed().as_millis() as u32;
+    c.last = std::time::Instant::now();
+    let mut cursor = pad::Cursor::new(AIM_X, AIM_Y);
+    if cursor.step(state.aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
+        aim(cursor.x, cursor.y, false);
+    }
+    for &(target, _) in &c.bindings {
+        if !c.held.iter().any(|h| h.0 == target) {
+            c.held.push((target, false));
+        }
+    }
+    let mut changes = Vec::new();
+    for (target, was) in &mut c.held {
+        let now = pad::target_held(&state, &c.bindings, *target);
+        if now != *was {
+            *was = now;
+            changes.push((*target, now));
+        }
+    }
+    for (target, down) in changes {
+        match target {
+            PAD_FIRE => {
+                if down {
+                    aim(cursor.x, cursor.y, true);
+                }
+                switch(1, down);
+            }
+            PAD_PUMP => switch(3, down),
+            1 | 5 | 6 | 7 | 8 | 10 | 11 => switch(target as usize, down),
+            _ => {}
+        }
+    }
+}
+
+/// Where the crosshair is drawn, in 640x480 game coordinates.
+pub unsafe fn aim_position() -> (i32, i32) {
+    (AIM_X, AIM_Y)
+}
+
 pub unsafe fn aim(x: i32, y: i32, shoot: bool) {
+    AIM_X = x.clamp(0, 639);
+    AIM_Y = y.clamp(0, 479);
     if CALLBACK == 0 {
         return;
     }

@@ -1,4 +1,4 @@
-package com.arcadefoundry;
+package com.bananapepper;
 
 import android.content.Context;
 import android.content.SharedPreferences;

@@ -123,6 +123,7 @@ name = "arcade-linux-shim"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "png",
 ]
 
 [[package]]
@@ -148,6 +149,15 @@ dependencies = [
 [[package]]
 name = "arcade-wine-hook"
 version = "0.1.0"
+
+[[package]]
+name = "arcade-zar"
+version = "0.1.0"
+dependencies = [
+ "arcade-content",
+ "eframe",
+ "rfd",
+]
 
 [[package]]
 name = "arrayvec"

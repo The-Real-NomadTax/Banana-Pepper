@@ -142,6 +142,10 @@ pub fn key(key: u8, down: bool) {
     let Some(index) = switch_for(key) else {
         return;
     };
+    set_switch(index, down);
+}
+
+fn set_switch(index: usize, down: bool) {
     let mut switches = SWITCHES.lock().unwrap_or_else(|e| e.into_inner());
     switches.set(index, down);
     BITS.store(switches.held >> 1, Ordering::Relaxed);
@@ -183,8 +187,77 @@ pub unsafe fn install() {
     eprintln!("[arcade] virtual JAMMA API installed");
 }
 
+/// Last aimed position (mouse or controller), in 640x480 game coordinates.
+static AIM_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(320);
+static AIM_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(240);
+
+/// controls.cfg's default controller buttons for Big Buck.
+const DEFAULT_PAD: &str = "5:16,7:32,256:131072,256:4096,257:65536,257:8192";
+/// Controller-only targets: aimed shot and pump.
+const PAD_FIRE: u32 = 0x100;
+const PAD_PUMP: u32 = 0x101;
+/// Crosshair speed at full stick deflection, in game pixels per second.
+const CROSSHAIR_SPEED: i32 = 700;
+
+struct Controller {
+    reader: crate::evdev_pad::Reader,
+    bindings: Vec<(u32, u32)>,
+    edges: crate::evdev_pad::Edges,
+    last: std::time::Instant,
+}
+static CONTROLLER: Mutex<Option<Controller>> = Mutex::new(None);
+
+/// One controller frame (GLUT timer): crosshair, shots, pump and switches.
+pub fn controller_frame() {
+    let mut guard = CONTROLLER.lock().unwrap_or_else(|e| e.into_inner());
+    let c = guard.get_or_insert_with(|| Controller {
+        reader: crate::evdev_pad::Reader::new(),
+        bindings: crate::evdev_pad::bindings(DEFAULT_PAD),
+        edges: Default::default(),
+        last: std::time::Instant::now(),
+    });
+    let state = c.reader.read();
+    if state.held(crate::pad::BACK) && state.held(crate::pad::START) {
+        eprintln!("[arcade] Back + Start: exiting");
+        std::process::exit(0);
+    }
+    let elapsed = c.last.elapsed().as_millis() as u32;
+    c.last = std::time::Instant::now();
+    let mut cursor = crate::pad::Cursor::new(
+        AIM_X.load(Ordering::Relaxed),
+        AIM_Y.load(Ordering::Relaxed),
+    );
+    if cursor.step(state.aim(), elapsed, CROSSHAIR_SPEED, 640, 480) {
+        aim(cursor.x, cursor.y, false);
+    }
+    let mut changes = Vec::new();
+    c.edges
+        .update(&state, &c.bindings, |target, down| changes.push((target, down)));
+    drop(guard);
+    for (target, down) in changes {
+        match target {
+            PAD_FIRE => {
+                if down {
+                    aim(cursor.x, cursor.y, true);
+                }
+                set_switch(1, down);
+            }
+            PAD_PUMP => set_switch(3, down),
+            1 | 5 | 6 | 7 | 8 | 10 | 11 => set_switch(target as usize, down),
+            _ => {}
+        }
+    }
+}
+
+/// Where the crosshair is drawn, in 640x480 game coordinates.
+pub fn aim_position() -> (c_int, c_int) {
+    (AIM_X.load(Ordering::Relaxed), AIM_Y.load(Ordering::Relaxed))
+}
+
 /// Deliver the observed gun callback shape on the GLUT/game thread.
 pub fn aim(x: c_int, y: c_int, shoot: bool) {
+    AIM_X.store(x.clamp(0, 639), Ordering::Relaxed);
+    AIM_Y.store(y.clamp(0, 479), Ordering::Relaxed);
     let callback = CALLBACK.load(Ordering::Relaxed);
     if callback == 0 {
         return;

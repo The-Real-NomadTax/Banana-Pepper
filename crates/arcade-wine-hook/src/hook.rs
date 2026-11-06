@@ -10,11 +10,19 @@
 //! Everything is patched in memory only, after checking the exact bytes of the
 //! one supported `sdaemon.exe` build; the original files are not modified.
 //! Bindings come from `ARCADE_SUPERCARS_KEYS` (`target:dik,...`, written by
-//! the Rust launcher from controls.cfg).
+//! the Rust launcher from controls.cfg). Controllers are read through XInput
+//! (`xinput.rs`) with bindings from `ARCADE_PAD` (`target:mask,...`): the left
+//! stick steers, triggers bound to gas/brake are analog, and Back + Start
+//! together exit like Escape.
 #![allow(non_snake_case)]
 
+#[allow(dead_code)]
+#[path = "../../arcade-core/src/pad.rs"]
+mod pad;
 #[path = "rt.rs"]
 mod rt;
+#[path = "xinput.rs"]
+mod xinput;
 
 use core::{mem::transmute, ptr};
 
@@ -108,6 +116,10 @@ const MAX_BUTTONS: usize = 48;
 struct State {
     bindings: [(u32, u8); MAX_BINDINGS],
     binding_count: usize,
+    /// Controller (target, XInput mask) bindings.
+    pad_bindings: [(u32, u32); MAX_BINDINGS],
+    pad_count: usize,
+    pads_seen: u32,
     /// Distinct button targets and whether they are currently reported held.
     buttons: [(u32, bool); MAX_BUTTONS],
     button_count: usize,
@@ -127,6 +139,9 @@ struct State {
 static mut STATE: State = State {
     bindings: [(0, 0); MAX_BINDINGS],
     binding_count: 0,
+    pad_bindings: [(0, 0); MAX_BINDINGS],
+    pad_count: 0,
+    pads_seen: 0,
     buttons: [(0, false); MAX_BUTTONS],
     button_count: 0,
     trampoline: 0,
@@ -232,8 +247,16 @@ fn parse_bindings(text: &[u8]) {
             _ => {}
         }
     }
-    for i in 0..s.binding_count {
-        let target = s.bindings[i].0;
+}
+
+/// Distinct button targets from both keyboard and controller bindings.
+fn collect_buttons() {
+    let s = state();
+    let targets = s.bindings[..s.binding_count]
+        .iter()
+        .map(|b| b.0)
+        .chain(s.pad_bindings[..s.pad_count].iter().map(|b| b.0));
+    for target in targets {
         if target >= 0x10000
             && !s.buttons[..s.button_count].iter().any(|b| b.0 == target)
             && s.button_count < MAX_BUTTONS
@@ -243,6 +266,10 @@ fn parse_bindings(text: &[u8]) {
         }
     }
 }
+
+/// controls.cfg's default controller buttons for Super Cars.
+const DEFAULT_PAD: &[u8] = b"1:4,2:8,3:131072,4:65536,65536:16,65536:4096,65537:16384,65538:32768,\
+65539:8192,65540:128,65541:256,65542:512,65543:1,65544:2,65545:32";
 
 const DEFAULT_BINDINGS: &[u8] =
     // start1 Enter/1, view1-3 C/V/B, tunes M, gears Q/W/E/R, coin1 5, coin2 6,
@@ -283,16 +310,25 @@ fn after_poll(s: &mut State) {
             }
         }
     }
-    if !down(DIK_ESCAPE as u8) {
+    let pad = xinput::read();
+    let pads = xinput::connected();
+    if pads != s.pads_seen {
+        s.pads_seen = pads;
+        log_number(b"XInput controllers connected: ", pads);
+    }
+    let pad_exit = pad.held(pad::BACK) && pad.held(pad::START);
+    if !down(DIK_ESCAPE as u8) && !pad_exit {
         s.escape_armed = true;
     } else if s.escape_armed {
-        log(b"Escape pressed: exiting");
+        log(b"Escape (or Back + Start) pressed: exiting");
         unsafe { ExitProcess(0) }
     }
+    let pad_bindings = &s.pad_bindings[..s.pad_count];
     let held = |target: u32| {
         s.bindings[..s.binding_count]
             .iter()
             .any(|&(t, k)| t == target && down(k))
+            || pad::target_held(&pad, pad_bindings, target)
     };
 
     // Buttons: post press/release edges exactly like the board driver does.
@@ -322,23 +358,31 @@ fn after_poll(s: &mut State) {
         _ => 0,
     };
     let rate = if goal == 0 { CENTER_RATE } else { STEER_RATE } * elapsed;
-    if s.steer < goal {
+    let stick = pad::Pad::axis(pad.lx);
+    if goal == 0 && stick != 0 {
+        // The stick is an absolute wheel position.
+        s.steer = stick;
+    } else if s.steer < goal {
         s.steer = (s.steer + rate).min(goal);
     } else if s.steer > goal {
         s.steer = (s.steer - rate).max(goal);
     }
+    let pedal = |target: u32| {
+        let keys = s.bindings[..s.binding_count]
+            .iter()
+            .any(|&(t, k)| t == target && down(k));
+        if keys {
+            ANALOG_MAX
+        } else {
+            i32::from(pad::target_level(&pad, pad_bindings, target)) * ANALOG_MAX / 255
+        }
+    };
     let steer = (ANALOG_MAX + 1) / 2 + s.steer * (ANALOG_MAX / 2) / 4096;
     let analog = ANALOG as *mut i32;
     unsafe {
         ptr::write_volatile(analog.add(ADC_STEER), steer);
-        ptr::write_volatile(
-            analog.add(ADC_GAS),
-            if held(T_GAS) { ANALOG_MAX } else { 0 },
-        );
-        ptr::write_volatile(
-            analog.add(ADC_BRAKE),
-            if held(T_BRAKE) { ANALOG_MAX } else { 0 },
-        );
+        ptr::write_volatile(analog.add(ADC_GAS), pedal(T_GAS));
+        ptr::write_volatile(analog.add(ADC_BRAKE), pedal(T_BRAKE));
     }
 
     // Hide the keyboard from the game's developer shortcuts (camera/debug keys).
@@ -387,6 +431,15 @@ unsafe fn install() {
         log(b"ARCADE_SUPERCARS_KEYS not set; using default bindings");
         parse_bindings(DEFAULT_BINDINGS);
     }
+    let mut pad_env = [0u8; 1024];
+    let n = unsafe {
+        GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), pad_env.as_mut_ptr(), pad_env.len() as u32)
+    } as usize;
+    // Set but empty means every controller button was unbound.
+    let configured = n > 0 || unsafe { GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), pad_env.as_mut_ptr(), 0) } == 1;
+    let text = if n < pad_env.len() && configured { &pad_env[..n] } else { DEFAULT_PAD };
+    s.pad_count = pad::parse_bindings(text, &mut s.pad_bindings);
+    collect_buttons();
 
     // Trampoline: the two displaced instructions, then back into the poll.
     let t = unsafe { VirtualAlloc(ptr::null_mut(), 16, 0x3000, 0x40) };

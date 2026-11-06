@@ -1,4 +1,4 @@
-package com.arcadefoundry;
+package com.bananapepper;
 
 import android.content.ContentResolver;
 import android.content.Context;

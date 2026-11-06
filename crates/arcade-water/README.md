@@ -2,7 +2,7 @@
 
 **Water Adapts The ELF Runtime.**
 
-Water is Arcade Foundry's Linux-to-Windows compatibility layer. It translates
+Water is Banana pepper's Linux-to-Windows compatibility layer. It translates
 Linux executable interfaces to Windows APIs while x86 guest instructions run
 directly on the host CPU. The name expands recursively, like Wine's.
 

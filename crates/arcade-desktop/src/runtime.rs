@@ -23,6 +23,80 @@ pub fn settings_env(command: &mut std::process::Command, settings: &GameSettings
     }
 }
 
+/// Controller device nodes (`/dev/input/eventN`) to expose to a sandboxed
+/// Linux game: devices reporting gamepad buttons (BTN_SOUTH) that are not
+/// keyboards (no KEY_A), so keystrokes are never readable by the game.
+/// Controllers must be connected before the game starts.
+#[cfg(target_os = "linux")]
+pub fn pad_devices() -> Vec<std::path::PathBuf> {
+    let mut devices = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/sys/class/input") else {
+        return devices;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("event") {
+            continue;
+        }
+        let caps = std::fs::read_to_string(entry.path().join("device/capabilities/key"))
+            .unwrap_or_default();
+        let node = Path::new("/dev/input").join(&name);
+        if is_gamepad(&caps) && node.exists() {
+            devices.push(node);
+        }
+    }
+    devices.sort();
+    devices
+}
+
+/// sysfs key capability bitmap (hex words, most significant first).
+#[cfg(any(target_os = "linux", test))]
+fn is_gamepad(caps: &str) -> bool {
+    let words: Vec<u64> = caps
+        .split_whitespace()
+        .rev()
+        .map(|w| u64::from_str_radix(w, 16).unwrap_or(0))
+        .collect();
+    // 64-bit words on x86_64/aarch64 kernels.
+    let has = |code: usize| words.get(code / 64).is_some_and(|w| w >> (code % 64) & 1 != 0);
+    has(0x130) && !has(30)
+}
+
+/// Controller settings for a game: `ARCADE_PAD` (`target:mask,...`),
+/// `ARCADE_PAD_KEYS` for Aliens and `ARCADE_PAD_DEVICES` (colon-separated
+/// device nodes) for the Linux sandboxes.
+pub fn pad_env(project: &Path, game: &str) -> Result<Vec<(&'static str, String)>, String> {
+    let controls = arcade_core::controls::Bindings::load(&project.join("controls.cfg"))?;
+    let mut env = vec![("ARCADE_PAD", controls.pad_env_value(game)?)];
+    if game == "aliens" {
+        env.push(("ARCADE_PAD_KEYS", controls.pad_key_env_value(game)?));
+    }
+    #[cfg(target_os = "linux")]
+    env.push((
+        "ARCADE_PAD_DEVICES",
+        pad_devices()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(":"),
+    ));
+    Ok(env)
+}
+
+#[cfg(test)]
+#[test]
+fn gamepad_capabilities() {
+    // Xbox Wireless Controller (Bluetooth) and a full keyboard that also
+    // reports BTN_SOUTH (a remote-desktop virtual keyboard).
+    assert!(is_gamepad("7fff000000000000 0 8000000000 0 0"));
+    assert!(!is_gamepad(
+        "ffffffffff 0 7ffffff000301ff 1000f7fffffff 7fe001fffff000f 7ffffffffffffff \
+         ffffffff0003fdff 7fff8fff00ff03ff 1ffffffffffff07 ffffffffffffffff ffffffffffefffff fffffffffffffffe"
+    ));
+    assert!(!is_gamepad("30000 0 0 0 0")); // mouse
+    assert!(!is_gamepad(""));
+}
+
 #[cfg(target_os = "linux")]
 fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<String, String> {
     let materialized = crate::content::resolve(games_root)?;
@@ -254,6 +328,13 @@ fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<Strin
         command
             .args(["--setenv", "ARCADE_BBH_KEYS"])
             .arg(controls.env_value("big_buck")?);
+        // Controllers: bindings, and only the controller device nodes.
+        for (key, value) in pad_env(&project, "big_buck")? {
+            command.args(["--setenv", key]).arg(value);
+        }
+        for device in pad_devices() {
+            command.arg("--dev-bind").arg(&device).arg(&device);
+        }
         // Window size, fullscreen, vsync and renderer from settings.cfg.
         for (key, value) in settings.guest_env() {
             command.args(["--setenv", key]).arg(value);

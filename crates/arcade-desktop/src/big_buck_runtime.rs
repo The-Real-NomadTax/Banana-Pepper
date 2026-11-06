@@ -59,6 +59,15 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
         arcade_core::controls::Bindings::load(&project.join("controls.cfg"))?
             .env_value("big_buck")?,
     );
+    command.envs(crate::runtime::pad_env(&project, "big_buck")?);
+    match settings.crosshair.0 {
+        Some(style) => command
+            .env("ARCADE_CROSSHAIR", style)
+            .env("ARCADE_CROSSHAIR_SIZE", settings.crosshair_size.to_string()),
+        None => command
+            .env_remove("ARCADE_CROSSHAIR")
+            .env_remove("ARCADE_CROSSHAIR_SIZE"),
+    };
     command
         .env_remove("ARCADE_NATIVE_TRACE")
         .env_remove("ARCADE_NATIVE_PROBE")

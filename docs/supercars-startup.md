@@ -68,5 +68,5 @@ Resolution sets the Wine window size and the game's `-res` option (640x480, 800x
 
 - `messages.txt` logs `DONGLE MISSING` periodically. Attract mode and races continue. No dongle emulation is implemented.
 - H2O board, LED display (COM1) and the PortTalk parallel-port wheel/force-feedback driver are absent. The game logs each one once at startup and carries on.
-- Steering is digital. Analog wheels and gamepads (the game's own `-joy`/`-g27` DirectInput paths) are not wired into the adapter yet.
+- XInput controllers (Xbox and compatible) are read by the adapter: the left stick sets the steering position and triggers bound to gas/brake are analog (`ARCADE_PAD`, from controls.cfg). DirectInput-only wheels (the game's own `-joy`/`-g27` paths) are not wired in yet.
 - The keypad (PIN entry, codes 0x10080-0x1008b) is not bound.
