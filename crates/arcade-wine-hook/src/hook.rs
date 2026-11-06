@@ -58,6 +58,15 @@ const RTIO_ACTIVE: usize = 0x0040_1ab0;
 /// Input event sink used by the board driver: `sink(code, state)`, cdecl.
 const SINK: usize = 0x004a_9510;
 const SINK_BYTES: [u8; 9] = [0x8b, 0x44, 0x24, 0x04, 0xa9, 0x00, 0x00, 0x01, 0x00];
+/// The `0x10040` (cabinet controls available) case in the input query at
+/// 0x4a9a40. Menus only read adc1 when this query or a joystick is active;
+/// otherwise they fall back to the developer keyboard that we suppress.
+/// Patch this query case only: RTIO_ACTIVE itself must still report the real
+/// board status so the original poll does not call the absent board driver.
+const CABINET_QUERY: usize = 0x004a_9a6d;
+const CABINET_QUERY_BYTES: [u8; 5] = [0xe9, 0x3e, 0x80, 0xf5, 0xff];
+// xor eax,eax; inc eax; ret; nop (return true in the five-byte tail jump).
+const CABINET_QUERY_PATCH: [u8; 5] = [0x33, 0xc0, 0x40, 0xc3, 0x90];
 /// Raw `GetDeviceState` keyboard buffer, 256 bytes by DIK code; 0x80 = down.
 const RAW_KEYS: usize = 0x0478_0108;
 /// The game's per-key edge state derived from it (bit 0 down, 1 pressed, 2 released).
@@ -304,7 +313,10 @@ fn after_poll(s: &mut State) {
 
 unsafe fn install() {
     let s = state();
-    if !bytes_match(POLL, &POLL_BYTES) || !bytes_match(SINK, &SINK_BYTES) {
+    if !bytes_match(POLL, &POLL_BYTES)
+        || !bytes_match(SINK, &SINK_BYTES)
+        || !bytes_match(CABINET_QUERY, &CABINET_QUERY_BYTES)
+    {
         log(b"arcade-wine-hook: unsupported sdaemon.exe build; controls not installed");
         return;
     }
@@ -345,16 +357,27 @@ unsafe fn install() {
     let jump = (poll_hook as extern "C" fn() as usize as i32).wrapping_sub((POLL + 5) as i32).to_le_bytes();
     let patch = [0xe9, jump[0], jump[1], jump[2], jump[3], 0x90];
     let mut old = 0;
+    let mut query_old = 0;
     unsafe {
+        if VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), 0x40, &mut query_old) == 0 {
+            log(b"arcade-wine-hook: cabinet query VirtualProtect failed");
+            return;
+        }
         if VirtualProtect(POLL as *mut u8, patch.len(), 0x40, &mut old) == 0 {
+            VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), query_old, &mut query_old);
             log(b"arcade-wine-hook: VirtualProtect failed");
             return;
+        }
+        for (i, b) in CABINET_QUERY_PATCH.iter().enumerate() {
+            ptr::write_volatile((CABINET_QUERY + i) as *mut u8, *b);
         }
         for (i, b) in patch.iter().enumerate() {
             ptr::write_volatile((POLL + i) as *mut u8, *b);
         }
         VirtualProtect(POLL as *mut u8, patch.len(), old, &mut old);
+        VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), query_old, &mut query_old);
         FlushInstructionCache(GetCurrentProcess(), POLL as *const u8, patch.len());
+        FlushInstructionCache(GetCurrentProcess(), CABINET_QUERY as *const u8, CABINET_QUERY_PATCH.len());
     }
     log_number(b"arcade-wine-hook: controls installed, bindings=", s.binding_count as u32);
 }
