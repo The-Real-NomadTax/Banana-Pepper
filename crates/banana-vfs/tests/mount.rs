@@ -215,3 +215,170 @@ fn reclaims_a_mount_after_its_owner_crashes() {
     assert!(!root.path().join("view").exists());
     assert!(!root.path().join("view.banana-mount-lock").exists());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Requires the patched PRoot path in BANANA_TEST_PROOT"]
+fn rootless_namespace_executes_and_preserves_mapped_writes() {
+    let executable = std::env::var_os("BANANA_TEST_PROOT").expect("BANANA_TEST_PROOT is required");
+    let temp = tempfile::tempdir().unwrap();
+    let source: Arc<dyn ContentSource> = Arc::new(MemorySource {
+        files: BTreeMap::from([
+            ("seed.txt".into(), Arc::from(&b"seed"[..])),
+            ("data.bin".into(), Arc::from(vec![1; 4096])),
+        ]),
+    });
+    let generated = BTreeMap::from([(
+        "probe".into(),
+        Arc::from(fs::read(std::env::current_exe().unwrap()).unwrap()),
+    )]);
+    let overlay = temp.path().join("overlay");
+    let view = Arc::new(
+        banana_vfs::View::new(
+            source.clone(),
+            &overlay,
+            "rootless",
+            generated,
+            BTreeMap::new(),
+        )
+        .unwrap(),
+    );
+    let empty = temp.path().join("empty");
+    fs::create_dir(&empty).unwrap();
+    let server = banana_vfs::rootless::Server::start(
+        view.clone(),
+        &temp.path().join("vfs.sock"),
+        "/banana-test",
+    )
+    .unwrap();
+    use std::os::unix::process::CommandExt;
+    let mut child = std::process::Command::new(executable)
+        .args([
+            "-r",
+            "/",
+            "-w",
+            "/banana-test",
+            "/banana-test/probe",
+            "--ignored",
+            "--exact",
+            "rootless_child_probe",
+            "--nocapture",
+        ])
+        .env("BANANA_VFS_SOCKET", &server.socket)
+        .env("BANANA_VFS_EMPTY", empty)
+        .env("BANANA_MOUNT_PROBE", "/banana-test")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            };
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.flush().unwrap();
+    drop(server);
+    drop(view);
+    let view = banana_vfs::View::new(
+        source.clone(),
+        &overlay,
+        "rootless",
+        BTreeMap::new(),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let mut bytes = [0; 4096];
+    view.read("data.bin", 0, &mut bytes).unwrap();
+    assert_eq!(bytes[7], 9);
+    assert_eq!(view.metadata("persistent.txt").unwrap().len, 10);
+    assert!(view.metadata("save.txt").is_err());
+    assert!(view.metadata("renamed.txt").is_err());
+    assert_eq!(
+        banana_content::read_all(source.as_ref(), "data.bin", 4096).unwrap(),
+        vec![1; 4096]
+    );
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Child helper for the rootless namespace test"]
+fn rootless_child_probe() {
+    let Some(root) = std::env::var_os("BANANA_MOUNT_PROBE") else {
+        return;
+    };
+    child_probe();
+    let root = Path::new(&root);
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.join("data.bin"))
+        .unwrap();
+    assert_eq!(file.metadata().unwrap().len(), 4096);
+    fs::create_dir(root.join("directory")).unwrap();
+    fs::write(root.join("directory/new"), b"new directory data").unwrap();
+    let names = fs::read_dir(root.join("directory"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["new"]);
+    fs::rename(root.join("directory"), root.join("moved-directory")).unwrap();
+    assert_eq!(
+        fs::read(root.join("moved-directory/new")).unwrap(),
+        b"new directory data"
+    );
+    fs::remove_file(root.join("moved-directory/new")).unwrap();
+    fs::remove_dir(root.join("moved-directory")).unwrap();
+    fs::copy(root.join("data.bin"), root.join("copied.bin")).unwrap();
+    assert_eq!(
+        fs::read(root.join("copied.bin")).unwrap(),
+        fs::read(root.join("data.bin")).unwrap()
+    );
+    use std::os::fd::AsRawFd;
+    let mapping = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE,
+            file.as_raw_fd(),
+            0,
+        )
+    };
+    assert_ne!(mapping, libc::MAP_FAILED);
+    unsafe {
+        *(mapping as *mut u8).add(7) = 77;
+        assert_eq!(libc::msync(mapping, 4096, libc::MS_SYNC), 0);
+        libc::munmap(mapping, 4096);
+    }
+    assert_eq!(fs::read(root.join("data.bin")).unwrap()[7], 9);
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "rootless_grandchild", "--nocapture"])
+        .status()
+        .unwrap();
+    assert!(child.success());
+}
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Child process inheritance test"]
+fn rootless_grandchild() {
+    if let Some(root) = std::env::var_os("BANANA_MOUNT_PROBE") {
+        fs::write(Path::new(&root).join("child-save"), b"child process").unwrap();
+    }
+}

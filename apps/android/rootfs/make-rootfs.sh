@@ -7,7 +7,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="$here/../build"
 mkdir -p "$out"
 AF=/data/local/tmp/af
-adb push "$here/afbridge.c" "$here/run-big-buck.sh" "$here/build-rootfs-guest.sh" "$here/trim-rootfs-guest.sh" $AF/share/ >/dev/null
+adb push "$here/afbridge.c" "$here/afaudio.c" "$here/build-rootfs-guest.sh" "$here/trim-rootfs-guest.sh" $AF/share/ >/dev/null
 # box64 install tree from the dev build (patched, BOX32 enabled).
 adb shell "cd $AF && rm -rf share/box64-install && ./enter.sh /bin/sh -c 'cd /root/box64/build && make install DESTDIR=/af/box64-install >/dev/null && strip --strip-debug /af/box64-install/usr/local/bin/box64'"
 if [[ ${TRIM_ONLY:-0} == 1 ]]; then
@@ -21,6 +21,7 @@ fi
 adb shell "cd $AF && rm -f share/rootfs.tar.gz && ./enter.sh /bin/sh -c 'mkdir -p /mnt/rel' && \
   LD_LIBRARY_PATH=bin PROOT_LOADER=bin/loader PROOT_TMP_DIR=tmp bin/proot -0 -r rootfs/debian-trixie-aarch64 \
   -b release/rootfs/debian-trixie-aarch64:/mnt/rel -b share:/af /usr/bin/env -i PATH=/usr/bin:/bin \
-  tar --numeric-owner --exclude=./dev/* --exclude=./proc/* --exclude=./sys/* -C /mnt/rel -czf /af/rootfs.tar.gz ."
+  tar --numeric-owner --exclude=./dev/* --exclude=./proc/* --exclude=./sys/* --exclude=./tmp/* -C /mnt/rel -czf /af/rootfs.tar.gz ."
 adb pull $AF/share/rootfs.tar.gz "$out/rootfs.tar.gz"
+adb pull $AF/share/box64-install/usr/local/bin/box64 "$out/box64"
 ls -la "$out/rootfs.tar.gz"

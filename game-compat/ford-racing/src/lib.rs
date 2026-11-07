@@ -2,6 +2,7 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
+mod android;
 pub mod controls;
 pub mod packet;
 mod plan;
@@ -14,6 +15,9 @@ pub struct FordRacing;
 pub static GAME: FordRacing = FordRacing;
 
 impl GameCompat for FordRacing {
+    fn android_profile(&self) -> Option<banana_api::AndroidProfile> {
+        Some(android::profile())
+    }
     fn id(&self) -> &'static str {
         "ford"
     }
@@ -27,10 +31,13 @@ impl GameCompat for FordRacing {
         Controls::Driving
     }
     fn default_executable(&self) -> &'static str {
-        "windows based/Ford Racing/FordRacing/fordracing.exe"
+        "Ford Racing/FordRacing/fordracing.exe"
     }
     fn content_executable(&self) -> &'static str {
         "FordRacing/fordracing.exe"
+    }
+    fn source_roots(&self) -> &'static [&'static str] {
+        &["Ford Racing", "windows based/Ford Racing", ""]
     }
     fn known_builds(&self) -> &'static [KnownBuild] {
         &[KnownBuild {
@@ -39,11 +46,18 @@ impl GameCompat for FordRacing {
         }]
     }
     fn legacy_state(&self) -> &'static [banana_api::LegacyImport] {
-        &[banana_api::LegacyImport {
-            from: "runtime/ford-racing/data/GameSettings.ini",
-            to: "data/GameSettings.ini",
-            kind: banana_api::ImportKind::Overlay,
-        }]
+        &[
+            banana_api::LegacyImport {
+                from: "sessions/ford/data/GameSettings.ini",
+                to: "data/GameSettings.ini",
+                kind: banana_api::ImportKind::Overlay,
+            },
+            banana_api::LegacyImport {
+                from: "runtime/ford-racing/data/GameSettings.ini",
+                to: "data/GameSettings.ini",
+                kind: banana_api::ImportKind::Overlay,
+            },
+        ]
     }
     fn status(&self) -> Status {
         Status {
@@ -56,9 +70,6 @@ impl GameCompat for FordRacing {
             "Native Windows or Linux Wine with the same custom cabinet adapter; original files and bundled loaders are not run.",
             "Keyboard driving; physical wheels, force feedback and cabinet networking remain unimplemented.",
         ])
-    }
-    fn play_hint(&self) -> &'static str {
-        "Arrow keys or an XInput controller drive (stick steers, triggers are analog gas/brake). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings."
     }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native, BackendKind::Wine]

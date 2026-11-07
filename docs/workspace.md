@@ -17,3 +17,5 @@ Game plan crates depend on shared contracts and content/input/settings services,
 Each shipped artifact is declared using `[[package.metadata.banana.artifacts]]` in its owning Cargo manifest, with `name`, `kind`, `target`, `hosts` and `destination`. The distribution tool filters by host, rejects unsafe/duplicate destinations, builds the declared targets, and writes a development artifact catalog plus the portable package.
 
 Adding a game means adding its compatibility crate and registering it. Adding a content format means registering a provider. Neither requires title branches in the frontend, filesystem, orchestrator or backend.
+
+Android execution plumbing lives in `backends/android/`: its Rust backend owns processes and transports, while the PRoot extension only translates namespace operations into the shared Rust filesystem service. Kotlin owns the UI. Skylanders uses the same provider/plan contracts and crate-declared adapter artifacts as other titles.

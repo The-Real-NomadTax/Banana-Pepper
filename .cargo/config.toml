@@ -11,3 +11,10 @@ rustflags = [
     "-C", "panic=abort",
     "-C", "target-feature=+crt-static",
 ]
+
+# Android 15+ checks ELF load-segment alignment even on 4 KiB devices.
+[target.aarch64-linux-android]
+rustflags = [
+    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C", "link-arg=-Wl,-z,common-page-size=16384",
+]

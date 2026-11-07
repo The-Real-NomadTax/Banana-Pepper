@@ -7,6 +7,9 @@
 //! writes the steering/gas/brake analog channels. `DirectInput8Create` is
 //! forwarded to Wine's real dinput8.
 //!
+//! It also carries two rendering fixes for Wine's Direct3D 8 (`graphics.rs`):
+//! 16-bit-safe shader handles and a guarded movie texture clear.
+//!
 //! Everything is patched in memory only, after checking the exact bytes of the
 //! one supported `sdaemon.exe` build; the original files are not modified.
 //! Bindings come from `ARCADE_SUPERCARS_KEYS` (`target:dik,...`, written by
@@ -17,6 +20,11 @@
 //! together exit like Escape.
 #![allow(non_snake_case)]
 
+#[path = "../../../../guest/win32/controllers.rs"]
+mod controllers;
+#[path = "../../../../guest/win32/dinput.rs"]
+mod dinput;
+mod graphics;
 #[allow(dead_code)]
 #[path = "../../../../crates/banana-input/src/pad.rs"]
 mod pad;
@@ -24,10 +32,6 @@ mod pad;
 mod rt;
 #[path = "../../../../guest/win32/xinput.rs"]
 mod xinput;
-#[path = "../../../../guest/win32/dinput.rs"]
-mod dinput;
-#[path = "../../../../guest/win32/controllers.rs"]
-mod controllers;
 
 use core::{mem::transmute, ptr};
 
@@ -424,6 +428,7 @@ unsafe fn install() {
         log(b"arcade-wine-hook: unsupported sdaemon.exe build; controls not installed");
         return;
     }
+    graphics::install();
     let mut env = [0u8; 2048];
     let n = unsafe {
         GetEnvironmentVariableA(
@@ -448,17 +453,34 @@ unsafe fn install() {
     }
     let mut pad_env = [0u8; 1024];
     let n = unsafe {
-        GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), pad_env.as_mut_ptr(), pad_env.len() as u32)
+        GetEnvironmentVariableA(
+            b"ARCADE_PAD\0".as_ptr(),
+            pad_env.as_mut_ptr(),
+            pad_env.len() as u32,
+        )
     } as usize;
     // Set but empty means every controller button was unbound.
-    let configured = n > 0 || unsafe { GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), pad_env.as_mut_ptr(), 0) } == 1;
-    let text = if n < pad_env.len() && configured { &pad_env[..n] } else { DEFAULT_PAD };
+    let configured = n > 0
+        || unsafe { GetEnvironmentVariableA(b"ARCADE_PAD\0".as_ptr(), pad_env.as_mut_ptr(), 0) }
+            == 1;
+    let text = if n < pad_env.len() && configured {
+        &pad_env[..n]
+    } else {
+        DEFAULT_PAD
+    };
     s.pad_count = pad::parse_bindings(text, &mut s.pad_bindings);
     let mut move_env = [0u8; 256];
     let n = unsafe {
-        GetEnvironmentVariableA(b"ARCADE_MOVE\0".as_ptr(), move_env.as_mut_ptr(), move_env.len() as u32)
+        GetEnvironmentVariableA(
+            b"ARCADE_MOVE\0".as_ptr(),
+            move_env.as_mut_ptr(),
+            move_env.len() as u32,
+        )
     } as usize;
-    s.moves = pad::Movement::parse((n < move_env.len()).then(|| &move_env[..n]), pad::Movement::STEERING);
+    s.moves = pad::Movement::parse(
+        (n < move_env.len()).then(|| &move_env[..n]),
+        pad::Movement::STEERING,
+    );
     collect_buttons();
 
     // Trampoline: the two displaced instructions, then back into the poll.
@@ -492,12 +514,23 @@ unsafe fn install() {
     let mut old = 0;
     let mut query_old = 0;
     unsafe {
-        if VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), 0x40, &mut query_old) == 0 {
+        if VirtualProtect(
+            CABINET_QUERY as *mut u8,
+            CABINET_QUERY_PATCH.len(),
+            0x40,
+            &mut query_old,
+        ) == 0
+        {
             log(b"arcade-wine-hook: cabinet query VirtualProtect failed");
             return;
         }
         if VirtualProtect(POLL as *mut u8, patch.len(), 0x40, &mut old) == 0 {
-            VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), query_old, &mut query_old);
+            VirtualProtect(
+                CABINET_QUERY as *mut u8,
+                CABINET_QUERY_PATCH.len(),
+                query_old,
+                &mut query_old,
+            );
             log(b"arcade-wine-hook: VirtualProtect failed");
             return;
         }
@@ -508,9 +541,18 @@ unsafe fn install() {
             ptr::write_volatile((POLL + i) as *mut u8, *b);
         }
         VirtualProtect(POLL as *mut u8, patch.len(), old, &mut old);
-        VirtualProtect(CABINET_QUERY as *mut u8, CABINET_QUERY_PATCH.len(), query_old, &mut query_old);
+        VirtualProtect(
+            CABINET_QUERY as *mut u8,
+            CABINET_QUERY_PATCH.len(),
+            query_old,
+            &mut query_old,
+        );
         FlushInstructionCache(GetCurrentProcess(), POLL as *const u8, patch.len());
-        FlushInstructionCache(GetCurrentProcess(), CABINET_QUERY as *const u8, CABINET_QUERY_PATCH.len());
+        FlushInstructionCache(
+            GetCurrentProcess(),
+            CABINET_QUERY as *const u8,
+            CABINET_QUERY_PATCH.len(),
+        );
     }
     log_number(
         b"arcade-wine-hook: controls installed, bindings=",

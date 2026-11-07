@@ -15,5 +15,5 @@ banana-input.workspace=true
 name="arcade_jurassic"
 kind="lib"
 target="i686-unknown-linux-gnu"
-hosts=["linux"]
+hosts=["linux", "android"]
 destination="games/jurassic/linux-x86/libarcade_jurassic.so"

@@ -153,9 +153,6 @@ mod tests {
                 label: "fixture",
             }
         }
-        fn play_hint(&self) -> &'static str {
-            ""
-        }
         fn backends(&self) -> &'static [BackendKind] {
             &[BackendKind::Native]
         }

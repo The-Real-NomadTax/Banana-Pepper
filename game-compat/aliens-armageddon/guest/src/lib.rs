@@ -20,3 +20,11 @@ extern "C" fn initialize() {
 #[used]
 #[unsafe(link_section = ".init_array")]
 static INITIALIZE: extern "C" fn() = initialize;
+
+#[cfg(target_arch = "x86")]
+#[path = "../../../../guest/linux-shim/src/box32_abi.rs"]
+mod box32_abi;
+
+#[cfg(target_arch = "x86")]
+#[path = "../../../../guest/linux-shim/src/android_threads.rs"]
+mod android_threads;

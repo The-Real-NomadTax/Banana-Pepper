@@ -15,5 +15,5 @@ banana-input.workspace=true
 name="arcade_aliens"
 kind="lib"
 target="i686-unknown-linux-gnu"
-hosts=["linux"]
+hosts=["linux", "android"]
 destination="games/aliens/linux-x86/libarcade_aliens.so"

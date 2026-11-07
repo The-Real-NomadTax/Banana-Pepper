@@ -17,3 +17,15 @@ Live FUSE tests passed against all three source types during this refactor, incl
 Synthetic fixtures verify mechanisms. Gameplay, graphics, audio, save behavior and cabinet protocols must be checked separately for each real title/build/backend combination. Current mounted compatibility profiles remain experimental until those checks are completed. ELF64 dynamic linking, PIE and TLS remain explicit Water capability blockers.
 
 `just build` must create a host-specific package containing only declared compiled components, defaults, documentation and dependency notices. Validate it from a relocated, read-only installation with per-user state directories. No game content, extracted caches, local preferences, captured records or development tools belong in that package.
+
+
+Android/rootless validation:
+
+```text
+BANANA_TEST_PROOT=/absolute/path/to/patched/proot cargo test -p banana-vfs --test mount -- --ignored --exact rootless_namespace_executes_and_preserves_mapped_writes --nocapture
+cargo build -p banana-ffi --release --target aarch64-linux-android --locked
+```
+
+Compile Kotlin sources against the Android SDK and compile the PRoot glue with the
+NDK. A full APK needs the rootfs, Box64 and optional Wine inputs described in
+`android.md`; successful host tests do not establish phone gameplay support.

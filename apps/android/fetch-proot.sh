@@ -14,7 +14,8 @@ for pkg in proot libtalloc libandroid-shmem; do
     dpkg-deb -x "$work/$pkg.deb" "$work/x"
 done
 P="$work/x/data/data/com.termux/files/usr"
-mkdir -p "$out"
+mkdir -p "$out/include"
+cp -R "$P/include/." "$out/include/"
 cp "$P/bin/proot" "$P/libexec/proot/loader" "$out/"
 cp "$P/lib/libtalloc.so."[0-9]*.[0-9]* "$out/libtalloc.so.2"
 cp "$P/lib/libandroid-shmem.so" "$out/"

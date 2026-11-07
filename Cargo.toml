@@ -19,6 +19,9 @@ members = [
     "game-compat/ford-racing/hook",
     "game-compat/minecraft-dungeons",
     "game-compat/minecraft-dungeons/io",
+    "game-compat/skylanders-cloud-patrol",
+    "game-compat/skylanders-cloud-patrol/hook",
+    "backends/android",
     "backends/native",
     "backends/wine",
     "backends/water",
@@ -55,7 +58,9 @@ banana-game-jurassic-park = { path = "game-compat/jurassic-park" }
 banana-game-super-cars = { path = "game-compat/super-cars" }
 banana-game-ford-racing = { path = "game-compat/ford-racing" }
 banana-game-minecraft-dungeons = { path = "game-compat/minecraft-dungeons" }
+banana-game-skylanders-cloud-patrol = { path = "game-compat/skylanders-cloud-patrol" }
 # Execution backends
+banana-android = { path = "backends/android" }
 banana-native = { path = "backends/native" }
 banana-wine = { path = "backends/wine" }
 banana-water = { path = "backends/water" }

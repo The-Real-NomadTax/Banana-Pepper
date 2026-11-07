@@ -151,6 +151,18 @@ pub struct TextConfig {
     pub values: BTreeMap<String, String>,
     pub newline: &'static str,
 }
+#[derive(Clone, Debug)]
+pub struct ByteEdit {
+    pub offset: usize,
+    pub accepted: Vec<Vec<u8>>,
+    pub replacement: Vec<u8>,
+}
+#[derive(Clone, Debug)]
+pub struct BinaryConfig {
+    pub path: String,
+    pub checks: Vec<(usize, Vec<u8>)>,
+    pub edits: Vec<ByteEdit>,
+}
 #[derive(Clone)]
 pub struct LaunchPlan {
     pub game: String,
@@ -163,6 +175,7 @@ pub struct LaunchPlan {
     pub aliases: BTreeMap<String, String>,
     pub generated: BTreeMap<String, Arc<[u8]>>,
     pub text_configs: Vec<TextConfig>,
+    pub binary_configs: Vec<BinaryConfig>,
     pub adapters: Vec<Adapter>,
     pub dependencies: Vec<Dependency>,
     pub requirements: Vec<String>,
@@ -206,6 +219,7 @@ impl LaunchPlan {
             aliases: BTreeMap::new(),
             generated: BTreeMap::new(),
             text_configs: vec![],
+            binary_configs: vec![],
             adapters: vec![],
             dependencies: vec![],
             requirements: vec![],
@@ -253,7 +267,7 @@ pub enum SessionEvent {
     TimedOut,
     Exited(i32),
 }
-pub trait SessionHandle {
+pub trait SessionHandle: Send {
     fn next_event(&mut self) -> Result<Option<SessionEvent>, String>;
     fn command(&mut self, action: ActionRequest) -> Result<(), String>;
     fn cancel(&mut self) -> Result<(), String>;

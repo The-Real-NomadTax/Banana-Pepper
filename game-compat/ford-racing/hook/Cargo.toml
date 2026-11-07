@@ -12,5 +12,5 @@ crate-type = ["cdylib"]
 name="inpout32"
 kind="lib"
 target="i686-pc-windows-msvc"
-hosts=["windows", "linux"]
+hosts=["windows", "linux", "android"]
 destination="games/ford/windows-x86/inpout32.dll"

@@ -7,18 +7,27 @@ use std::sync::Once;
 
 /// Every built-in game, in library order.
 pub fn games() -> Vec<&'static dyn GameCompat> {
-    vec![
+    let mut games: Vec<&'static dyn GameCompat> = vec![
         &banana_game_aliens_armageddon::GAME,
         &banana_game_jurassic_park::GAME,
         &banana_game_big_buck_hunter::GAME,
         &banana_game_super_cars::GAME,
-        &banana_game_minecraft_dungeons::GAME,
-        &banana_game_ford_racing::GAME,
-    ]
+    ];
+    // Minecraft remains desktop-only until Android work is explicitly requested.
+    #[cfg(not(target_os = "android"))]
+    games.push(&banana_game_minecraft_dungeons::GAME);
+    games.push(&banana_game_ford_racing::GAME);
+    // Skylanders runs under Wine on the desktop; no Android launch plan yet.
+    #[cfg(not(target_os = "android"))]
+    games.push(&banana_game_skylanders_cloud_patrol::GAME);
+    games
 }
 
 /// Every built-in execution backend.
 pub fn backends() -> Vec<&'static dyn ExecutionBackend> {
+    #[cfg(target_os = "android")]
+    return vec![&banana_android::NATIVE, &banana_android::WINE];
+    #[cfg(not(target_os = "android"))]
     vec![
         &banana_native::BACKEND,
         &banana_wine::BACKEND,

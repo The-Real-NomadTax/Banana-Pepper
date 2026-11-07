@@ -15,5 +15,5 @@ crate-type = ["cdylib"]
 name="arcade_wine_hook"
 kind="lib"
 target="i686-pc-windows-msvc"
-hosts=["linux"]
+hosts=["linux", "android"]
 destination="games/super-cars/windows-x86/arcade_wine_hook.dll"

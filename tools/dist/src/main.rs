@@ -66,8 +66,8 @@ fn command(c: &mut Command) -> Result<(), String> {
         Err(format!("Build command failed with {s}"))
     }
 }
-fn output(root: &Path, a: &Artifact) -> PathBuf {
-    let mut p = root.join("target");
+fn output(target: &Path, a: &Artifact) -> PathBuf {
+    let mut p = target.to_path_buf();
     if !a.target.is_empty() {
         p = p.join(&a.target);
     }
@@ -90,7 +90,14 @@ fn run() -> Result<(), String> {
         .join("../..")
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    let build = std::env::args().nth(1).as_deref() == Some("build");
+    let mode = std::env::args().nth(1);
+    let android = mode.as_deref() == Some("android-resources");
+    let build = mode.as_deref() == Some("build") || android;
+    let host = if android {
+        "android"
+    } else {
+        std::env::consts::OS
+    };
     let metadata = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
         .current_dir(&root)
@@ -100,7 +107,12 @@ fn run() -> Result<(), String> {
         return Err(String::from_utf8_lossy(&metadata.stderr).into());
     }
     let metadata: Value = serde_json::from_slice(&metadata.stdout).map_err(|e| e.to_string())?;
-    let artifacts = declarations(&metadata, std::env::consts::OS)?;
+    let artifacts = declarations(&metadata, host)?;
+    let artifact_target = PathBuf::from(
+        metadata["target_directory"]
+            .as_str()
+            .ok_or("Cargo metadata has no target directory")?,
+    );
     if build {
         let mut targets = std::collections::BTreeSet::new();
         for a in &artifacts {
@@ -126,11 +138,15 @@ fn run() -> Result<(), String> {
             command(&mut c)?;
         }
     }
-    let name = format!(
-        "banana-pepper-{}-{}",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
+    let name = if android {
+        "banana-pepper-android-resources".to_owned()
+    } else {
+        format!(
+            "banana-pepper-{}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    };
     let base = root.join("target/dist");
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let staging = base.join(format!(".{name}-staging"));
@@ -138,9 +154,12 @@ fn run() -> Result<(), String> {
         remove_owned(&root, &staging)?;
     }
     fs::create_dir(&staging).map_err(|e| e.to_string())?;
-    let mut catalog = BTreeMap::new();
+    let mut catalog: BTreeMap<String, String> = fs::read(root.join("target/artifacts.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
     for a in &artifacts {
-        let source = output(&root, a);
+        let source = output(&artifact_target, a);
         let bytes = fs::read(&source).map_err(|e| {
             format!(
                 "Missing artifact {}: {e}. Run just build.",
@@ -158,18 +177,20 @@ fn run() -> Result<(), String> {
         catalog.insert(a.destination.clone(), source.to_string_lossy().into_owned());
     }
     banana_compat::install();
-    write(
-        &staging,
-        "settings.cfg",
-        banana_settings::Settings::default().to_text().as_bytes(),
-    )?;
-    write(
-        &staging,
-        "controls.cfg",
-        banana_input::controls::Bindings::default()
-            .to_text()
-            .as_bytes(),
-    )?;
+    if !android {
+        write(
+            &staging,
+            "settings.cfg",
+            banana_settings::Settings::default().to_text().as_bytes(),
+        )?;
+        write(
+            &staging,
+            "controls.cfg",
+            banana_input::controls::Bindings::default()
+                .to_text()
+                .as_bytes(),
+        )?;
+    }
     write(
         &staging,
         banana_runtime::DIST_MARKER,
@@ -187,9 +208,9 @@ fn run() -> Result<(), String> {
             )?;
         }
     }
-    write(&staging,"THIRD-PARTY-NOTICES.txt",b"WinFsp and winfsp-rs: GPL-3.0; https://github.com/winfsp/winfsp and https://github.com/SnowflakePowered/winfsp-rs\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\nWinFsp must be installed separately on Windows. Linux requires FUSE/fusermount and bubblewrap; Wine for PE games.\n")?;
+    write(&staging,"THIRD-PARTY-NOTICES.txt",b"PRoot: GPL-2.0-or-later; https://github.com/termux/proot (Android tracer built from pinned source).\nBox64: MIT; https://github.com/ptitSeb/box64\nWinFsp and winfsp-rs: GPL-3.0; https://github.com/winfsp/winfsp and https://github.com/SnowflakePowered/winfsp-rs\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\nWinFsp must be installed separately on Windows. Linux requires FUSE/fusermount and bubblewrap; Wine for PE games.\n")?;
     let inventory = inventory(&staging)?;
-    write(&staging,"manifest.json",&serde_json::to_vec_pretty(&json!({"version":2,"files":inventory,"os":std::env::consts::OS,"arch":std::env::consts::ARCH})).map_err(|e|e.to_string())?)?;
+    write(&staging,"manifest.json",&serde_json::to_vec_pretty(&json!({"version":2,"files":inventory,"os":host,"arch":if android {"aarch64"}else{std::env::consts::ARCH}})).map_err(|e|e.to_string())?)?;
     fs::write(
         root.join("target/artifacts.json"),
         serde_json::to_vec_pretty(&catalog).map_err(|e| e.to_string())?,

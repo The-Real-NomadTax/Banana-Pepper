@@ -1,10 +1,8 @@
 //! The shared Banana Pepper application API for native frontends.
 //!
-//! Android's Kotlin/Jetpack Compose app calls these functions through
-//! UniFFI-generated bindings, so game detection, compatibility logic and
-//! settings validation are never reimplemented in Kotlin. Generate the
-//! bindings with `uniffi-bindgen generate --library libbanana_ffi.so
-//! --language kotlin`.
+//! Android's native Kotlin frontend uses the JSON/JNI transport in `android`.
+//! Preparation, providers, overlays and execution use the shared Rust contracts.
+//! Existing UniFFI inspection/settings bindings remain available to other clients.
 use std::path::Path;
 
 uniffi::setup_scaffolding!();
@@ -50,7 +48,6 @@ pub struct LibraryEntry {
     pub title: String,
     pub support: Support,
     pub status: String,
-    pub play_hint: String,
     pub executable: String,
     pub found: bool,
     pub error: Option<String>,
@@ -68,7 +65,10 @@ pub fn initialize() {
 
 /// Inspect every supported game below `root` (a folder or ZArchive).
 #[uniffi::export]
-pub fn scan_library(root: String, settings_path: Option<String>) -> Result<Vec<LibraryEntry>, FfiError> {
+pub fn scan_library(
+    root: String,
+    settings_path: Option<String>,
+) -> Result<Vec<LibraryEntry>, FfiError> {
     initialize();
     let reports = banana_runtime::content::scan(Path::new(&root))?;
     let settings = match settings_path {
@@ -80,8 +80,14 @@ pub fn scan_library(root: String, settings_path: Option<String>) -> Result<Vec<L
         .filter_map(|report| {
             let game = banana_api::game(&report.profile.id)?;
             let status = game.status();
-            let mut actions = vec![GameAction { id: "launch".into(), label: "Play game".into() }];
-            actions.extend(game.extra_actions().iter().map(|a| GameAction { id: a.id.into(), label: a.label.into() }));
+            let mut actions = vec![GameAction {
+                id: "launch".into(),
+                label: "Play game".into(),
+            }];
+            actions.extend(game.extra_actions().iter().map(|a| GameAction {
+                id: a.id.into(),
+                label: a.label.into(),
+            }));
             Some(LibraryEntry {
                 id: report.profile.id.clone(),
                 title: report.profile.title.clone(),
@@ -90,7 +96,6 @@ pub fn scan_library(root: String, settings_path: Option<String>) -> Result<Vec<L
                     banana_api::SupportLevel::Experimental => Support::Experimental,
                 },
                 status: status.label.into(),
-                play_hint: game.play_hint().into(),
                 executable: report.path.display().to_string(),
                 found: report.binary.is_some(),
                 error: report.error.clone(),
@@ -110,3 +115,5 @@ pub fn run_game(id: String, root: String, action: String) -> Result<String, FfiE
     initialize();
     Ok(banana_runtime::run(&id, Path::new(&root), &action)?)
 }
+
+pub mod android;

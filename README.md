@@ -1,6 +1,6 @@
 # Banana Pepper
 
-A Rust framework for running PC arcade cabinet builds on desktop systems. Game executables, assets, cabinet records and third-party game libraries are supplied by the user.
+A Rust framework for running PC arcade cabinet builds on desktop systems and Android. Game executables, assets, cabinet records and third-party game libraries are supplied by the user.
 
 Content flows through one shared pipeline:
 
@@ -20,6 +20,7 @@ Windows requires WinFsp 2.1 or later for mounting game content. Linux requires F
 | Windows x86-64 | Supported Linux ELF builds | Water |
 | Linux x86-64 | Supported Linux ELF builds | Native / Bubblewrap |
 | Linux x86-64 | Supported Windows PE builds | Wine |
+| Android ARM64 (unrooted) | Experimental Linux / Windows plans | Box64 / Wine with the shared virtual filesystem |
 
 Water support is evaluated for the selected build. Its ELF64 loader currently rejects dynamic linking, PIE relocation and TLS requirements. Extending Water is incremental; unsupported combinations remain disabled. The mounted architecture still requires gameplay validation for each title/build/backend combination.
 
@@ -41,6 +42,6 @@ Water workers are generic x86/x64 executables. Title adapters are DLL/SO librari
 
 `arcade-desktop --action GAME ACTION SOURCE [JSON]` starts a registered operation. `--session-action ENTRY ACTION JSON` sends a structured action to an existing session. Session actions are declared and validated by the compatibility module; Minecraft card scans use `scan-card` with `player` and `code` fields.
 
-See [architecture](docs/architecture.md), [workspace boundaries](docs/workspace.md), [verification](docs/verification.md), and [Water](backends/water/README.md). Android frontend and legacy-runner migration are deferred; shared FFI inspection and launch entry points remain available.
+See [architecture](docs/architecture.md), [workspace boundaries](docs/workspace.md), [verification](docs/verification.md), and [Water](backends/water/README.md). Android uses a native Kotlin UI over the same Rust preparation and session API; its unprivileged namespace adapter remains experimental. See [Android](docs/android.md).
 
 Use `arcade-desktop --reset-overlay ENTRY [PATH]` to explicitly reset a file/subtree or, when PATH is omitted, all writes for that entry. Active sessions must close first. Original content and captured records remain intact.

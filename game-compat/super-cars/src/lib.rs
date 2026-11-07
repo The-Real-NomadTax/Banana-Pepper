@@ -2,6 +2,7 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
+mod android;
 pub mod controls;
 mod plan;
 pub mod settings;
@@ -12,6 +13,9 @@ pub struct SuperCars;
 pub static GAME: SuperCars = SuperCars;
 
 impl GameCompat for SuperCars {
+    fn android_profile(&self) -> Option<banana_api::AndroidProfile> {
+        Some(android::profile())
+    }
     fn id(&self) -> &'static str {
         "super-cars"
     }
@@ -25,7 +29,15 @@ impl GameCompat for SuperCars {
         Controls::Driving
     }
     fn default_executable(&self) -> &'static str {
-        "windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars/sdaemon.exe"
+        "The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars/sdaemon.exe"
+    }
+    fn source_roots(&self) -> &'static [&'static str] {
+        &[
+            "The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars",
+            "windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars",
+            "The_Fast_and_the_Furious_SuperCars",
+            "",
+        ]
     }
     fn known_builds(&self) -> &'static [banana_api::KnownBuild] {
         &[banana_api::KnownBuild {
@@ -34,7 +46,11 @@ impl GameCompat for SuperCars {
         }]
     }
     fn legacy_state(&self) -> &'static [banana_api::LegacyImport] {
-        &[]
+        &[banana_api::LegacyImport {
+            from: "sessions/super-cars/game/prefs",
+            to: "prefs",
+            kind: banana_api::ImportKind::Overlay,
+        }]
     }
     fn status(&self) -> Status {
         Status {
@@ -48,9 +64,6 @@ impl GameCompat for SuperCars {
             "Steering is digital (ramped); analog wheels/gamepads, force feedback, LED display and the H2O board are not emulated.",
             "The game logs DONGLE MISSING periodically; races still run, but long sessions and audits are unverified.",
         ])
-    }
-    fn play_hint(&self) -> &'static str {
-        "Arrow keys or a controller steer, accelerate and brake (stick and triggers are analog). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings."
     }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Wine]

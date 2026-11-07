@@ -2,6 +2,7 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
+mod android;
 pub mod controls;
 mod plan;
 pub mod prepare;
@@ -13,6 +14,9 @@ pub struct AliensArmageddon;
 pub static GAME: AliensArmageddon = AliensArmageddon;
 
 impl GameCompat for AliensArmageddon {
+    fn android_profile(&self) -> Option<banana_api::AndroidProfile> {
+        Some(android::profile())
+    }
     fn id(&self) -> &'static str {
         "aliens"
     }
@@ -26,7 +30,10 @@ impl GameCompat for AliensArmageddon {
         Controls::LightGuns
     }
     fn default_executable(&self) -> &'static str {
-        "linux based/Aliens Armageddon/game"
+        "Aliens Armageddon/game"
+    }
+    fn source_roots(&self) -> &'static [&'static str] {
+        &["Aliens Armageddon", "linux based/Aliens Armageddon", ""]
     }
     fn known_builds(&self) -> &'static [KnownBuild] {
         &[KnownBuild {
@@ -35,20 +42,24 @@ impl GameCompat for AliensArmageddon {
         }]
     }
     fn legacy_state(&self) -> &'static [banana_api::LegacyImport] {
-        &[banana_api::LegacyImport {
-            from: "runtime/aliens/pmuser",
-            to: "g6/aa/pmuser",
-            kind: banana_api::ImportKind::Overlay,
-        }]
+        &[
+            banana_api::LegacyImport {
+                from: "sessions/aliens/pmuser",
+                to: "g6/aa/pmuser",
+                kind: banana_api::ImportKind::Overlay,
+            },
+            banana_api::LegacyImport {
+                from: "runtime/aliens/pmuser",
+                to: "g6/aa/pmuser",
+                kind: banana_api::ImportKind::Overlay,
+            },
+        ]
     }
     fn status(&self) -> Status {
         Status {
             level: SupportLevel::Experimental,
             label: "Linux desktop gameplay",
         }
-    }
-    fn play_hint(&self) -> &'static str {
-        "Mouse or controller sticks aim, RT fires. Start, coin and operator controls are under Settings. Esc or Back+Start exits."
     }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native, BackendKind::Water]

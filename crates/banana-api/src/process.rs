@@ -15,7 +15,7 @@ pub struct ProcessSession {
     #[allow(dead_code)]
     endpoint: Option<std::path::PathBuf>,
     #[cfg(windows)]
-    job: windows_sys::Win32::Foundation::HANDLE,
+    job: std::os::windows::io::OwnedHandle,
 }
 impl ProcessSession {
     pub fn spawn(
@@ -35,7 +35,7 @@ impl ProcessSession {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             use std::os::unix::process::CommandExt;
             let parent = std::process::id();
@@ -64,7 +64,7 @@ impl ProcessSession {
             timed_out: false,
             endpoint,
             #[cfg(windows)]
-            job,
+            job: unsafe { std::os::windows::io::FromRawHandle::from_raw_handle(job) },
         }))
     }
     fn poll(&mut self) -> Result<(), String> {
@@ -123,7 +123,10 @@ impl SessionHandle for ProcessSession {
         // Terminate descendants even when their original parent has already exited.
         #[cfg(windows)]
         unsafe {
-            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1);
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(
+                std::os::windows::io::AsRawHandle::as_raw_handle(&self.job),
+                1,
+            );
         }
         #[cfg(unix)]
         unsafe {
@@ -152,10 +155,6 @@ impl Drop for ProcessSession {
     fn drop(&mut self) {
         let _ = self.cancel();
         let _ = self.child.wait();
-        #[cfg(windows)]
-        unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(self.job);
-        }
     }
 }
 #[cfg(windows)]

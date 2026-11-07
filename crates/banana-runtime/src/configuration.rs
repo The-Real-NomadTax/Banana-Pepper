@@ -88,3 +88,53 @@ mod tests {
         );
     }
 }
+
+pub fn apply_binary(
+    view: &banana_vfs::View,
+    config: &banana_api::BinaryConfig,
+) -> Result<(), String> {
+    let length = view.metadata(&config.path).map_err(|e| e.to_string())?.len;
+    if length > 1024 * 1024 {
+        return Err("Configuration exceeds 1 MiB".into());
+    }
+    let mut bytes = vec![0; length as usize];
+    view.read(&config.path, 0, &mut bytes)
+        .map_err(|e| e.to_string())?;
+    for (offset, expected) in &config.checks {
+        if bytes.get(
+            *offset
+                ..offset
+                    .checked_add(expected.len())
+                    .ok_or("Invalid configuration check")?,
+        ) != Some(expected.as_slice())
+        {
+            return Err(format!(
+                "Unsupported saved configuration layout: {}",
+                config.path
+            ));
+        }
+    }
+    let mut changed = false;
+    for edit in &config.edits {
+        let end = edit
+            .offset
+            .checked_add(edit.replacement.len())
+            .ok_or("Invalid configuration edit")?;
+        let old = bytes
+            .get_mut(edit.offset..end)
+            .ok_or("Configuration field is outside the file")?;
+        if !edit.accepted.iter().any(|value| value.as_slice() == old) {
+            return Err(format!(
+                "Unsupported saved configuration field: {}",
+                config.path
+            ));
+        }
+        changed |= old != edit.replacement;
+        old.copy_from_slice(&edit.replacement);
+    }
+    if changed {
+        view.replace_content(&config.path, &bytes)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

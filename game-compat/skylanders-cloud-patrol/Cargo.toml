@@ -1,0 +1,12 @@
+[package]
+name = "banana-game-skylanders-cloud-patrol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Skylanders Cloud Patrol (arcade) compatibility for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true
+banana-input.workspace = true
+banana-settings.workspace = true
+sha2.workspace = true

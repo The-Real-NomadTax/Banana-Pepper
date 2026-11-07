@@ -2,6 +2,7 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
+mod android;
 pub mod controls;
 mod plan;
 pub mod prepare;
@@ -13,6 +14,9 @@ pub struct BigBuckHunter;
 pub static GAME: BigBuckHunter = BigBuckHunter;
 
 impl GameCompat for BigBuckHunter {
+    fn android_profile(&self) -> Option<banana_api::AndroidProfile> {
+        Some(android::profile())
+    }
     fn id(&self) -> &'static str {
         "big-buck"
     }
@@ -26,13 +30,15 @@ impl GameCompat for BigBuckHunter {
         Controls::LightGuns
     }
     fn default_executable(&self) -> &'static str {
-        "linux based/Big Bug Hunter Pro/game"
+        "Big Bug Hunter Pro/game"
     }
     fn source_roots(&self) -> &'static [&'static str] {
         &[
-            "linux based/Big Buck Hunter Pro",
-            "Big Buck Hunter Pro",
             "Big Bug Hunter Pro",
+            "Big Buck Hunter Pro",
+            "linux based/Big Bug Hunter Pro",
+            "linux based/Big Buck Hunter Pro",
+            "",
         ]
     }
     fn known_builds(&self) -> &'static [KnownBuild] {
@@ -43,6 +49,16 @@ impl GameCompat for BigBuckHunter {
     }
     fn legacy_state(&self) -> &'static [banana_api::LegacyImport] {
         &[
+            banana_api::LegacyImport {
+                from: "sessions/big-buck/bbh3user",
+                to: "bbh3user",
+                kind: banana_api::ImportKind::Overlay,
+            },
+            banana_api::LegacyImport {
+                from: "saves/bbh3user",
+                to: "bbh3user",
+                kind: banana_api::ImportKind::Overlay,
+            },
             banana_api::LegacyImport {
                 from: "runtime/big-buck-native/bbh3user",
                 to: "bbh3user",
@@ -68,9 +84,6 @@ impl GameCompat for BigBuckHunter {
             "OSS playback is bridged to PulseAudio/PipeWire.",
             "The historical runner reached scored gameplay; this mounted pipeline needs gameplay and save validation.",
         ])
-    }
-    fn play_hint(&self) -> &'static str {
-        "Mouse or controller aims and fires; right click or LT pumps. Start and coin bindings are under Settings. Esc or Back+Start exits."
     }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native, BackendKind::Water]

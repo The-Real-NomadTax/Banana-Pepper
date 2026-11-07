@@ -17,6 +17,8 @@ pub struct MountLease {
     _host: Option<windows::Host>,
     #[cfg(target_os = "linux")]
     _host: Option<fuser::BackgroundSession>,
+    #[cfg(target_os = "android")]
+    _rootless: rootless::Server,
     _lock: Option<File>,
     _lock_path: Option<PathBuf>,
 }
@@ -66,6 +68,14 @@ pub fn cleanup_stale_mounts(parent: &Path) -> io::Result<()> {
         };
         drop(f);
         if removed {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::FileTypeExt;
+                let socket = point.with_extension("sock");
+                if fs::symlink_metadata(&socket).is_ok_and(|m| m.file_type().is_socket()) {
+                    fs::remove_file(socket)?;
+                }
+            }
             fs::remove_file(e.path())?;
         }
     }
@@ -90,7 +100,19 @@ pub fn mount(view: Arc<View>, point: &Path) -> io::Result<MountLease> {
     let result = windows::mount(view, point);
     #[cfg(target_os = "linux")]
     let result = linux::mount(view, point);
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "android")]
+    let result = (|| {
+        fs::create_dir(point)?;
+        let socket = point.with_extension("sock");
+        let server = rootless::Server::start(view, &socket, &point.to_string_lossy())?;
+        Ok::<_, io::Error>(MountLease {
+            path: point.to_path_buf(),
+            _rootless: server,
+            _lock: None,
+            _lock_path: None,
+        })
+    })();
+    #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
     let result = {
         let _ = view;
         Err(io::Error::new(
@@ -183,4 +205,23 @@ fn unmount_stale(point: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub mod rootless;
+
+impl MountLease {
+    pub fn flush(&self) -> io::Result<()> {
+        #[cfg(target_os = "android")]
+        self._rootless.flush()?;
+        Ok(())
+    }
+    #[cfg(target_os = "android")]
+    pub fn map_namespace(&self, guest: &str, source: &str, readonly: bool) -> io::Result<()> {
+        self._rootless.map(guest, source, readonly)
+    }
+    #[cfg(target_os = "android")]
+    pub fn namespace_endpoint(&self) -> &Path {
+        &self._rootless.socket
+    }
 }

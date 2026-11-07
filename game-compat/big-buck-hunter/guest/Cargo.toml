@@ -15,5 +15,5 @@ banana-input.workspace=true
 name="arcade_big_buck"
 kind="lib"
 target="i686-unknown-linux-gnu"
-hosts=["linux"]
+hosts=["linux", "android"]
 destination="games/big-buck/linux-x86/libarcade_big_buck.so"

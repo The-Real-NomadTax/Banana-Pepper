@@ -6,7 +6,7 @@
 
 `banana-api` defines build identification, compatibility plans, backend capability checks, prepared sessions, structured actions and session events. `banana-core` inspects providers without requiring host file paths or mounted content. Archive report paths are display locations inside a source, rather than extracted files.
 
-`banana-vfs` composes source content, memory-backed generated files, aliases, dependency subtrees and a persistent overlay. WinFsp and FUSE expose this namespace to ordinary filesystem APIs, executable loaders and memory mapping. Water translates guest paths into this same mount.
+`banana-vfs` composes source content, memory-backed generated files, aliases, dependency subtrees and a persistent overlay. WinFsp, FUSE and the unprivileged Android tracer adapter expose this namespace to ordinary filesystem APIs, executable loaders and memory mapping. Water translates guest paths into this same mount.
 
 `banana-runtime` owns session orchestration and per-user storage. It selects a backend through registered capability checks, resolves declared artifacts and dependencies, creates the view, keeps the mount alive, supervises execution, and releases it after the process tree ends. It contains no title branches.
 
@@ -38,4 +38,4 @@ Configuration, durable overlays/dependencies, logs/captured records, and disposa
 
 Legacy imports are declared by each game. Captured state is imported before planning; saves are imported after the overlay opens. An import ledger makes retries idempotent. Conflicts retain both copies. Old staged images, extracted assets and toolchains are not imported or deleted.
 
-Desktop and shared backends are the current scope. Android UI/legacy runner migration and further Water game capabilities are separate work.
+Android uses the same view preparation and sessions behind its native Kotlin UI. A versioned PRoot adapter brokers filesystem operations into Rust and provides transient memfd backing for mapped ranges, without an OS mount or extracted game files. Generic Rust supervision owns Box64/Wine, Xvfb and frame/audio transports. See `android.md` for current limits and validation. Further Water game capabilities remain separate work.

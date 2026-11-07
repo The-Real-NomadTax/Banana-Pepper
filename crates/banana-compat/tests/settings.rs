@@ -170,9 +170,9 @@ fn players_choose_their_input_method() {
     assert!(Settings::parse("[ford]\np1_input = rawinput\n").is_err());
     assert!(Settings::parse("[ford]\np2_input = xinput\n").is_err());
     assert!(Settings::parse("[aliens]\np1_input = gamepad\n").is_err());
-    // Racers write only p1_input; gun games write both.
+    // One-player games (racers, Skylanders) write only p1_input; gun games write both.
     let text = Settings::default().to_text();
-    assert_eq!(text.matches("p1_input =").count(), 5);
+    assert_eq!(text.matches("p1_input =").count(), 6);
     assert_eq!(text.matches("p2_input =").count(), 3);
 }
 

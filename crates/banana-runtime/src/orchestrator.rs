@@ -23,7 +23,11 @@ impl Session {
         self.handle.cancel()
     }
     pub fn wait(&mut self) -> Result<i32, String> {
-        self.handle.wait()
+        let code = self.handle.wait()?;
+        if let Some(mount) = &self.mount {
+            mount.flush().map_err(|e| e.to_string())?;
+        }
+        Ok(code)
     }
     pub fn next_event(&mut self) -> Result<Option<SessionEvent>, String> {
         self.handle.next_event()
@@ -40,10 +44,26 @@ impl Drop for Session {
         let _ = std::fs::remove_dir(&self.point);
     }
 }
-pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Session, String> {
+pub struct PreparedView {
+    _entry_lock: std::fs::File,
+    pub game: &'static dyn GameCompat,
+    pub plan: LaunchPlan,
+    pub view: Arc<banana_vfs::View>,
+    pub state: PathBuf,
+    pub resources: PathBuf,
+    pub paths: Paths,
+    pub dependencies: PathBuf,
+    pub backend: Option<BackendKind>,
+}
+pub fn prepare_view(
+    id: &str,
+    source_path: &Path,
+    action: ActionRequest,
+    paths: Paths,
+    resources: PathBuf,
+    configure: impl FnOnce(&mut banana_settings::GameSettings),
+) -> Result<PreparedView, String> {
     let game = banana_api::game(id).ok_or_else(|| format!("Unknown game {id}"))?;
-    let resources = crate::project_root()?;
-    let paths = Paths::discover()?;
     paths.initialize(&resources)?;
     let source = banana_content::open(source_path).map_err(|e| e.to_string())?;
     let build = game.identify(source.as_ref())?;
@@ -66,9 +86,14 @@ pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Sess
         .try_lock()
         .map_err(|_| "This library entry already has a writable session".to_owned())?;
     crate::migration::import(game, &resources, &state, None)?;
-    let settings = banana_settings::Settings::load(&paths.config.join("settings.cfg"))?
+    #[cfg(target_os = "android")]
+    if let Some(previous) = resources.parent() {
+        crate::migration::import(game, previous, &state, None)?;
+    }
+    let mut settings = banana_settings::Settings::load(&paths.config.join("settings.cfg"))?
         .game(game.config_key())
         .clone();
+    configure(&mut settings);
     let controls = banana_input::controls::Bindings::load(&paths.config.join("controls.cfg"))?;
     let context = PlanContext {
         source: source.clone(),
@@ -76,41 +101,40 @@ pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Sess
         controls,
         config: paths.config.clone(),
         state: state.clone(),
-        dependencies: paths.data.join("dependencies"),
+        dependencies: if cfg!(target_os = "android") {
+            resources.join("dependencies")
+        } else {
+            paths.data.join("dependencies")
+        },
         resources: resources.clone(),
     };
     let mut plan = game.plan(&build, &context, &action)?;
-    if plan.operation == PlanOperation::PrepareDependencies {
-        for dep in &plan.dependencies {
-            crate::dependencies::prepare(
-                dep,
-                &context.dependencies.join(&dep.id),
-                &paths.cache.join("packages").join(&dep.id),
-            )?;
-        }
-        return Ok(Session {
-            _entry_lock: entry_lock,
-            game,
-            state: state.clone(),
-            handle: Box::new(Completed),
-            mount: None,
-            view: None,
-            point: PathBuf::new(),
-        });
-    }
-    let mut failures = Vec::new();
-    let selected = plan
-        .backends
-        .iter()
-        .filter_map(|k| banana_api::backend(*k))
-        .find(|backend| match backend.check(&plan) {
-            Ok(()) => true,
-            Err(e) => {
-                failures.push(e.to_string());
-                false
-            }
-        })
-        .ok_or_else(|| failures.join("\n"))?;
+    // Reject unsupported hosts before resolving adapters for another platform.
+    let backend = if plan.operation == PlanOperation::Launch {
+        let mut failures = Vec::new();
+        Some(
+            plan.backends
+                .iter()
+                .filter_map(|kind| banana_api::backend(*kind))
+                .find(|backend| match backend.check(&plan) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        failures.push(error.to_string());
+                        false
+                    }
+                })
+                .map(|backend| backend.kind())
+                .ok_or_else(|| {
+                    if failures.is_empty() {
+                        "No registered backend supports this plan".into()
+                    } else {
+                        failures.join("\n")
+                    }
+                })?,
+        )
+    } else {
+        None
+    };
     plan.env
         .insert("BANANA_GUEST_ROOT".into(), plan.guest_root.clone());
     plan.generated
@@ -165,7 +189,11 @@ pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Sess
         }
     }
     let mut mounts = BTreeMap::new();
-    for dep in &plan.dependencies {
+    for dep in plan
+        .dependencies
+        .iter()
+        .filter(|_| plan.operation == PlanOperation::Launch)
+    {
         let directory = context.dependencies.join(&dep.id);
         if !directory.is_dir() {
             return Err(format!(
@@ -195,6 +223,10 @@ pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Sess
         .map_err(|e| e.to_string())?,
     );
     crate::migration::import(game, &resources, &state, Some(&view))?;
+    #[cfg(target_os = "android")]
+    if let Some(previous) = resources.parent() {
+        crate::migration::import(game, previous, &state, Some(&view))?;
+    }
     if view.has_content_override(&plan.executable) {
         return Err(format!(
             "Executable was modified in the persistent overlay. Reset {} before applying compatibility patches.",
@@ -202,9 +234,93 @@ pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Sess
                 .map_err(|e| e.to_string())?
         ));
     }
+    for config in &plan.binary_configs {
+        crate::configuration::apply_binary(&view, config)?;
+    }
     for config in &plan.text_configs {
         crate::configuration::apply(&view, config)?;
     }
+    Ok(PreparedView {
+        _entry_lock: entry_lock,
+        game,
+        plan,
+        view,
+        state,
+        resources,
+        dependencies: context.dependencies,
+        backend,
+        paths,
+    })
+}
+pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Session, String> {
+    start_with(
+        id,
+        source_path,
+        action,
+        Paths::discover()?,
+        crate::project_root()?,
+        |_| {},
+    )
+}
+pub fn start_with(
+    id: &str,
+    source_path: &Path,
+    action: ActionRequest,
+    paths: Paths,
+    resources: PathBuf,
+    configure: impl FnOnce(&mut banana_settings::GameSettings),
+) -> Result<Session, String> {
+    start_with_env(
+        id,
+        source_path,
+        action,
+        paths,
+        resources,
+        configure,
+        BTreeMap::new(),
+    )
+}
+pub fn start_with_env(
+    id: &str,
+    source_path: &Path,
+    action: ActionRequest,
+    paths: Paths,
+    resources: PathBuf,
+    configure: impl FnOnce(&mut banana_settings::GameSettings),
+    environment: BTreeMap<String, String>,
+) -> Result<Session, String> {
+    let PreparedView {
+        _entry_lock: entry_lock,
+        game,
+        mut plan,
+        view,
+        state,
+        resources,
+        paths,
+        dependencies,
+        backend,
+    } = prepare_view(id, source_path, action, paths, resources, configure)?;
+    plan.env.extend(environment);
+    if plan.operation == PlanOperation::PrepareDependencies {
+        for dep in &plan.dependencies {
+            crate::dependencies::prepare(
+                dep,
+                &dependencies.join(&dep.id),
+                &paths.cache.join("packages").join(&dep.id),
+            )?;
+        }
+        return Ok(Session {
+            _entry_lock: entry_lock,
+            game,
+            state,
+            handle: Box::new(Completed),
+            mount: None,
+            view: None,
+            point: PathBuf::new(),
+        });
+    }
+    let selected = banana_api::backend(backend.ok_or("Missing prepared backend")?)
+        .ok_or("Execution backend is no longer registered")?;
     let point = paths.cache.join("mounts").join(format!(
         "{}-{}",
         std::process::id(),
@@ -215,7 +331,11 @@ pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Sess
     ));
     std::fs::create_dir_all(point.parent().unwrap()).map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
-    let devices = crate::pad_devices(&settings.input_assignment());
+    let devices = crate::pad_devices(
+        &banana_settings::Settings::load(&paths.config.join("settings.cfg"))?
+            .game(game.config_key())
+            .input_assignment(),
+    );
     #[cfg(not(target_os = "linux"))]
     let devices: Vec<PathBuf> = Vec::new();
     if !devices.is_empty() {
@@ -229,13 +349,52 @@ pub fn start(id: &str, source_path: &Path, action: ActionRequest) -> Result<Sess
         );
     }
     let mount = banana_vfs::mount(view.clone(), &point).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        if plan.guest_root.starts_with('/') {
+            mount
+                .map_namespace(&plan.guest_root, "", false)
+                .map_err(|e| e.to_string())?;
+        }
+        if plan.binary.format == "PE" {
+            if let Some((drive, relative)) = plan.guest_root.split_once(":/") {
+                if drive.len() != 1 || !drive.as_bytes()[0].is_ascii_alphabetic() {
+                    return Err("Invalid planned Windows drive".into());
+                }
+                banana_content::path(relative).map_err(|e| e.to_string())?;
+                let guest = format!(
+                    "/work/prefix/drive_{}/{relative}",
+                    drive.to_ascii_lowercase()
+                );
+                mount
+                    .map_namespace(&guest, "", false)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        mount
+            .map_namespace("/proc/cpuinfo", ".banana/proc/cpuinfo", true)
+            .map_err(|e| e.to_string())?;
+        for mapping in &plan.guest_mounts {
+            mount
+                .map_namespace(&mapping.target, &mapping.source, mapping.readonly)
+                .map_err(|e| e.to_string())?;
+        }
+        plan.env.insert(
+            "BANANA_VFS_SOCKET".into(),
+            mount.namespace_endpoint().to_string_lossy().into_owned(),
+        );
+        plan.env.insert(
+            "BANANA_VFS_EMPTY".into(),
+            mount.path.to_string_lossy().into_owned(),
+        );
+    }
     let handle = selected.launch(PreparedSession {
         devices,
         plan,
         mount: mount.path.clone(),
         state: state.clone(),
         resources,
-        dependencies: context.dependencies,
+        dependencies,
     })?;
     Ok(Session {
         _entry_lock: entry_lock,
@@ -289,6 +448,8 @@ fn resource(root: &Path, artifact: &str) -> Result<PathBuf, String> {
 }
 
 fn cpuinfo() -> String {
+    #[cfg(target_os="android")]
+    return "processor\t: 0\nvendor_id\t: BananaPepper\ncpu MHz\t\t: 1000.000\nflags\t\t: fpu tsc mmx sse sse2\n".into();
     #[cfg(target_os = "linux")]
     if let Ok(text) = std::fs::read_to_string("/proc/cpuinfo") {
         return text;

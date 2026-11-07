@@ -175,3 +175,11 @@ fn game_coordinates(x: c_int, y: c_int) -> (c_int, c_int) {
         (i64::from(y) * 480 / i64::from(height)).clamp(0, 479) as c_int,
     )
 }
+
+#[cfg(target_arch = "x86")]
+#[path = "../../../../guest/linux-shim/src/box32_abi.rs"]
+mod box32_abi;
+
+#[cfg(target_arch = "x86")]
+#[path = "../../../../guest/linux-shim/src/android_threads.rs"]
+mod android_threads;

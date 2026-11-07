@@ -139,8 +139,6 @@ pub trait GameCompat: Sync {
     fn compatibility_notes(&self) -> Option<&'static [&'static str]> {
         None
     }
-    /// One-line controls hint for the game page.
-    fn play_hint(&self) -> &'static str;
     /// Execution backends this game can use.
     fn backends(&self) -> &'static [BackendKind];
     /// Settings the game honours; `None` hides graphics/audio settings.
@@ -157,6 +155,9 @@ pub trait GameCompat: Sync {
     }
     fn cli_commands(&self) -> &'static [CliCommand] {
         &[]
+    }
+    fn android_profile(&self) -> Option<AndroidProfile> {
+        None
     }
     fn content_executable(&self) -> &'static str {
         self.default_executable().rsplit('/').next().unwrap()
@@ -225,3 +226,12 @@ pub fn backend(kind: BackendKind) -> Option<&'static dyn ExecutionBackend> {
 mod launch;
 pub use launch::*;
 pub mod process;
+
+/// Platform components required by the common plan on an Android host.
+#[derive(Debug, Clone, Serialize)]
+pub struct AndroidProfile {
+    pub executable: &'static str,
+    pub requirements: &'static [&'static str],
+    pub status: &'static str,
+    pub verified: bool,
+}

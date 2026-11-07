@@ -96,7 +96,10 @@ mod path_tests {
 pub fn run(id: &str, root: &Path, action: &str) -> Result<String, String> {
     orchestrator::run(id, root, banana_api::ActionRequest::new(action))
 }
-pub use orchestrator::{SessionReport, run_report, start};
+pub use orchestrator::{
+    PreparedView, Session, SessionReport, prepare_view, run_report, start, start_with,
+    start_with_env,
+};
 /// Per-game settings from settings.cfg in the project root.
 pub fn game_settings(_project: &Path, game: &str) -> Result<GameSettings, String> {
     Ok(

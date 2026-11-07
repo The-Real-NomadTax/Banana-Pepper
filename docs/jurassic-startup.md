@@ -136,7 +136,7 @@ The matching reference files currently reside under ignored `runtime/tools/juras
 
 ```sh
 cargo run -p banana-game-jurassic-park --bin recover-jurassic-imports -- \
-  'games/linux based/Jurassic Park 2015/game_legacy_patched' \
+  'games/Jurassic Park 2015/game_legacy_patched' \
   runtime/tools/jurassic/libc-2.19-0ubuntu6.6/lib/i386-linux-gnu/libc-2.19.so \
   guest/linux-shim/src/jurassic_libc_bindings.rs \
   runtime/tools/jurassic/libc-debug-2.19-0ubuntu6.6/usr/lib/debug/lib/i386-linux-gnu/libc-2.19.so

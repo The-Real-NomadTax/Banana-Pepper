@@ -28,10 +28,17 @@ impl GameCompat for MinecraftDungeons {
         Controls::Joysticks
     }
     fn default_executable(&self) -> &'static str {
-        "linux based/Minecraft Dungeons Arcade/gamedump.exec"
+        "Minecraft Dungeons Arcade/gamedump.exec"
     }
     fn executable_names(&self) -> &'static [&'static str] {
         &["gamedump.exec", "game"]
+    }
+    fn source_roots(&self) -> &'static [&'static str] {
+        &[
+            "Minecraft Dungeons Arcade",
+            "linux based/Minecraft Dungeons Arcade",
+            "",
+        ]
     }
     fn known_builds(&self) -> &'static [KnownBuild] {
         &[KnownBuild {
@@ -101,9 +108,6 @@ impl GameCompat for MinecraftDungeons {
             "The seeded runner supplies virtual joysticks, keyboard input and card scanners. HUD issues remain; full gameplay is unverified.",
             "Supplied gamedump.exec is a pre-existing modified build; original game and cabinet boot scripts are never run.",
         ])
-    }
-    fn play_hint(&self) -> &'static str {
-        "5 inserts a P1 coin; 1, Enter or Space starts. P1: arrows + Z/X/C. F1â€“F4 scan cards. Captured seeds and prepared libraries are required; HUD and gameplay issues remain."
     }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native, BackendKind::Water]
