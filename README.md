@@ -69,8 +69,10 @@ outside that folder, then click **Create .zar archive**. The app compresses on a
 worker thread, displays progress, and supports cancellation. It includes the
 folder's contents directly, preserving subfolders, empty directories and filenames.
 Source files are kept, and existing output files are never replaced. Close games
-and other programs that modify the source while converting. Symbolic links,
-special files, non-UTF-8 names and names differing only by ASCII case are rejected.
+and other programs that modify the source while converting. Symbolic links to files and directories are copied as ordinary archive entries,
+including targets outside the selected folder. Broken symbolic links are skipped
+and listed in the completion message. Directory link cycles, special files,
+non-UTF-8 names and names differing only by ASCII case are rejected.
 The converter applies the same path, depth and size limits as the loader and
 verifies archive integrity before publishing the finished output. Cancellation
 during finalization or verification waits for that operation to finish.

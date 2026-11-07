@@ -313,16 +313,16 @@ fn converter_rejects_case_collisions_and_cleans_up_on_changed_input() {
 
 #[cfg(unix)]
 #[test]
-fn converter_rejects_links_without_following_them() {
+fn converter_rejects_links_to_ancestor_directories() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source");
     fs::create_dir(&source).unwrap();
-    std::os::unix::fs::symlink(temp.path(), source.join("loop")).unwrap();
+    std::os::unix::fs::symlink(&source, source.join("loop")).unwrap();
     let output = temp.path().join("game.zar");
     assert!(
         pack::convert(&source, &output, &false.into(), |_| {})
             .unwrap_err()
-            .contains("Links")
+            .contains("cycle")
     );
     assert!(!output.exists());
 }
@@ -344,4 +344,80 @@ fn converter_can_pack_an_empty_folder_and_refuses_a_late_output_collision() {
     });
     assert!(result.is_err());
     assert_eq!(fs::read(&output).unwrap(), b"another writer");
+}
+
+#[cfg(unix)]
+#[test]
+fn converter_materializes_links_and_reports_broken_links() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let external = temp.path().join("external");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir_all(external.join("empty")).unwrap();
+    fs::write(external.join("game"), b"linked bytes").unwrap();
+    symlink(&external, source.join("ElfLdr2")).unwrap();
+    symlink(external.join("game"), source.join("game-link")).unwrap();
+    symlink("game-link", source.join("chained-link")).unwrap();
+    symlink("../../../pmuser", source.join("pmuser")).unwrap();
+    // Separate aliases to one directory are allowed; only ancestor cycles fail.
+    symlink(&external, source.join("alias")).unwrap();
+    let output = temp.path().join("game.zar");
+    let mut progress = pack::Progress::default();
+    pack::convert(&source, &output, &false.into(), |p| progress = p).unwrap();
+    assert_eq!(progress.skipped_links, ["pmuser"]);
+    assert!(progress.skipped_links_message().contains("pmuser"));
+    assert_eq!(progress.files_done, 4);
+    assert_eq!(progress.bytes_done, progress.bytes_total);
+    let tree = prepare(&output, &temp.path().join("cache")).unwrap();
+    for path in ["ElfLdr2/game", "alias/game", "game-link", "chained-link"] {
+        assert_eq!(fs::read(tree.join(path)).unwrap(), b"linked bytes");
+        assert!(
+            !fs::symlink_metadata(tree.join(path))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+    assert!(tree.join("ElfLdr2/empty").is_dir());
+    assert!(!tree.join("pmuser").exists());
+    assert!(
+        fs::symlink_metadata(source.join("pmuser"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(external.join("game")).unwrap(), b"linked bytes");
+}
+
+#[cfg(unix)]
+#[test]
+fn converter_rejects_retargeted_links_and_special_files() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let first = temp.path().join("first");
+    let second = temp.path().join("second");
+    fs::write(&first, b"first").unwrap();
+    fs::write(&second, b"other").unwrap();
+    let link = source.join("link");
+    symlink(&first, &link).unwrap();
+    let output = temp.path().join("game.zar");
+    let result = pack::convert(&source, &output, &false.into(), |p| {
+        if p.phase == "Compressing" && p.bytes_done == 0 {
+            fs::remove_file(&link).unwrap();
+            symlink(&second, &link).unwrap();
+        }
+    });
+    assert!(result.unwrap_err().contains("changed"));
+    assert!(!output.exists());
+    fs::remove_file(&link).unwrap();
+    symlink("/dev/null", source.join("device")).unwrap();
+    assert!(
+        pack::convert(&source, &output, &false.into(), |_| {})
+            .unwrap_err()
+            .contains("Special")
+    );
+    assert!(!output.exists());
 }

@@ -63,8 +63,9 @@ impl ZarCompressor {
         if let Some(result) = finished {
             self.message = Some(result.map(|()| {
                 format!(
-                    "Created {}\nReady to select in Banana pepper.",
-                    self.output.display()
+                    "Created {}\nReady to select in Banana pepper.{}",
+                    self.output.display(),
+                    self.progress.lock().unwrap().skipped_links_message()
                 )
             }));
             self.result = None;
@@ -193,7 +194,8 @@ impl ZarCompressor {
             });
             ui.add_space(12.0);
             ui.label("Source files are kept. Existing archives are never replaced.");
-            ui.label("Close the game before converting. Links and special files are unsupported.");
+            ui.label("Close the game before converting. Linked files and folders are copied, including external targets.");
+            ui.label("Broken links are skipped and reported. Link cycles and special files are unsupported.");
             ui.add_space(12.0);
             if ui
                 .add_enabled(
