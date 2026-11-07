@@ -12,6 +12,12 @@ Rendering uses Wine's built-in D3D8 (WineD3D over OpenGL on the GPU). DXVK
 can be enabled with ARCADE_SUPERCARS_DXVK=1, but it does not stretch the
 game's 1360x768 2D menus to the backbuffer (they appear in a corner).
 
+The game always runs with -res13 (1360x768). With the operator setting
+Stretch Screen it lays out each frame in 1360x768 and Present stretches that
+area to the screen-sized backbuffer; other -res sizes enlarge the intro and
+races but not that area, so they appear zoomed in. The resolution setting
+sizes the Wine virtual desktop in windowed play.
+
 Environment (set by the Rust launcher): ARCADE_SUPERCARS_KEYS (controls.cfg),
 ARCADE_RESOLUTION / ARCADE_GUEST_ENV (settings.cfg), ARCADE_AUDIO /
 ARCADE_AUDIO_SINK. Optional: ARCADE_WINE (wine binary), ARCADE_SUPERCARS_DXVK=1
@@ -34,11 +40,10 @@ GAME_DIRS = ['The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperC
              'windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars',
              'The_Fast_and_the_Furious_SuperCars', '.']
 GAME_SHA256 = '0cddbdbf1d107d27dc668897d7851b6ac96b4349320551d800504b1c50b195ba'
-# The game's own -resN options (decoded from its option parser).
-RES_OPTIONS = {
-    '640x480': '-res6', '800x600': '-res8', '1024x768': '-res10', '1280x1024': '-res12',
-    '1360x768': '-res13', '1600x1200': '-res16', '1920x1080': '-res19',
-}
+# Window sizes offered for windowed play (the Wine virtual desktop).
+RESOLUTIONS = ('640x480', '800x600', '1024x768', '1280x1024', '1360x768', '1600x1200', '1920x1080')
+# The game's own option for 1360x768, the size it lays out and stretches (Stretch Screen).
+RENDER_OPTION = '-res13'
 # Not needed on the desktop: the community loader, its hooks and configs.
 SKIP = {'MohkerzLoaderz.exe', 'MohkerzLoaderz.ini', 'MinHook.x86.dll', 'teknoparrot.ini',
         'dxwnd.dxw', 'errorlog.txt', 'messages.txt', 'dinput8.dll'}
@@ -112,8 +117,8 @@ def main():
         if not dxvk:
             raise SystemExit('DXVK 32-bit d3d8/d3d9 not found (install Proton in Steam, or set ARCADE_DXVK)')
     res = resolution() if 'ARCADE_RESOLUTION' in os.environ else '1920x1080'
-    if res not in RES_OPTIONS:
-        raise SystemExit(f'Super Cars cannot render at {res}; choose one of {", ".join(RES_OPTIONS)}')
+    if res not in RESOLUTIONS:
+        raise SystemExit(f'Super Cars cannot use {res}; choose one of {", ".join(RESOLUTIONS)}')
     fullscreen = settings.get('ARCADE_FULLSCREEN') == '1'
 
     output = root / 'runtime/supercars'
@@ -170,10 +175,10 @@ def main():
             subprocess.run([wine, 'reg', 'add', key + r'\Desktops', '/v', 'SuperCars', '/d', res, '/f'],
                            env=env, stdout=log, stderr=log, check=True)
         (rawart / 'arcade-hook.log').unlink(missing_ok=True)
-        print(f'[supercars] starting at {res} {"fullscreen" if fullscreen else "windowed"}, '
+        print(f'[supercars] starting at 1360x768, {"fullscreen" if fullscreen else "windowed " + res}, '
               f'{"DXVK " + str(dxvk) if dxvk else "WineD3D (software)" if software else "WineD3D (GPU)"}', flush=True)
         log.flush()
-        status = subprocess.run([wine, 'sdaemon.exe', '-noerr', RES_OPTIONS[res]], cwd=rawart, env=env,
+        status = subprocess.run([wine, 'sdaemon.exe', '-noerr', RENDER_OPTION], cwd=rawart, env=env,
                                 stdout=log, stderr=log).returncode
         hook_log = rawart / 'arcade-hook.log'
         if hook_log.exists():

@@ -67,7 +67,9 @@ Bindings come from `ARCADE_SUPERCARS_KEYS` (`target:DIK,...`). Set `ARCADE_SUPER
 - **DXVK (opt-in, `ARCADE_SUPERCARS_DXVK=1`):** found in Steam's Proton installs, or `ARCADE_DXVK`. Races render correctly, but menus appear unscaled in the top-left corner. Not recommended.
 - **Software:** WineD3D on Mesa llvmpipe.
 
-Resolution sets the Wine window size and the game's `-res` option (640x480, 800x600, 1024x768, 1280x1024, 1360x768, 1600x1200, 1920x1080). The supplied `prefs` also store a 1920x1080 operator resolution.
+The game always runs with `-res13` (1360x768). The supplied `prefs` turn on the operator setting **Stretch Screen**. With it the game lays out every frame in a 1360x768 area of a screen-sized backbuffer and passes Present a 1360x768 source rectangle, which stretches that area to the screen. The `-res` option sets the layout size, not the backbuffer. With `-res19` (1920x1080) the viewport and the intro movie quad grew to 1920x1080, but menus stayed 1360x768 and Present still showed only the top-left 1360x768. The intro and races looked zoomed in while menus were fine.
+
+Resolution sets the Wine virtual desktop size for windowed play (640x480, 800x600, 1024x768, 1280x1024, 1360x768, 1600x1200, 1920x1080). The backbuffer follows the desktop size; fullscreen uses the screen's.
 
 ## Known gaps
 
