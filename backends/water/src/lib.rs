@@ -13,14 +13,14 @@ pub mod vfs;
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod windows;
 
-pub fn run_worker(image: &[u8], root: &std::path::Path, argv: &[String]) -> Result<(), String> {
+pub fn run_worker(image: &[u8], argv: &[String]) -> Result<(), String> {
     let plan = elf::Image::parse(image)?;
     plan.require_native_support()?;
     #[cfg(all(windows, target_arch = "x86_64"))]
-    return windows::run(image, &plan, root, argv);
+    return windows::run(image, &plan, argv);
     #[cfg(not(all(windows, target_arch = "x86_64")))]
     {
-        let _ = (root, argv);
+        let _ = argv;
         Err("Native Linux ABI execution requires Windows x86-64".into())
     }
 }
@@ -45,6 +45,10 @@ impl ExecutionBackend for Water {
         } else {
             Availability::Unsupported
         }
+    }
+    /// Water implements the guest's file calls itself and is served the view.
+    fn needs_mount(&self, _plan: &banana_api::LaunchPlan) -> bool {
+        false
     }
     fn check(&self, p: &banana_api::LaunchPlan) -> Result<(), banana_api::CapabilityError> {
         banana_api::check_host(self, p)?;
@@ -107,14 +111,19 @@ impl ExecutionBackend for Water {
         }
         let mut c = std::process::Command::new(worker);
         c.arg("--image")
-            .arg(s.mount.join(&s.plan.executable))
-            .arg("--root")
-            .arg(&s.mount)
+            .arg(&s.plan.executable)
             .arg("--state")
             .arg(&s.state);
         if s.plan.binary.bits == 32 {
-            c.arg("--adapter")
-                .arg(s.mount.join(".banana/water-adapter.dll"));
+            // Windows loads DLLs from files: stage the title adapter (our own
+            // build artifact, not game content) in the session state.
+            let adapter = s.state.join("water-adapter.dll");
+            let bytes = s
+                .view
+                .read(".banana/water-adapter.dll", 64 * 1024 * 1024)
+                .map_err(|e| format!("Missing Water adapter: {e}"))?;
+            std::fs::write(&adapter, bytes).map_err(|e| e.to_string())?;
+            c.arg("--adapter").arg(adapter);
         }
         for name in [
             "ARCADE_NATIVE_PROBE",
@@ -124,15 +133,35 @@ impl ExecutionBackend for Water {
         ] {
             c.env_remove(name);
         }
-        c.arg("--")
-            .args(&s.plan.args)
-            .envs(&s.plan.env)
-            .current_dir(s.mount.join(&s.plan.cwd));
+        c.envs(&s.plan.env).current_dir(&s.state);
         let log = std::fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
         c.stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
-        banana_api::process::ProcessSession::spawn(&mut c, s.plan.timeout_ms)
+        serve_and_spawn(&mut c, &s)
     }
+}
+
+/// Start the worker connected to the session view over private pipes.
+#[cfg(windows)]
+fn serve_and_spawn(
+    c: &mut std::process::Command,
+    s: &banana_api::PreparedSession,
+) -> Result<Box<dyn banana_api::SessionHandle>, String> {
+    let pipes = banana_api::process::ViewPipes::new().map_err(|e| e.to_string())?;
+    c.arg("--view").arg(pipes.child_spec());
+    c.arg("--").args(&s.plan.args);
+    pipes
+        .spawn(s.view.clone(), || {
+            banana_api::process::ProcessSession::spawn(c, s.plan.timeout_ms)
+        })
+        .map_err(|e| e.to_string())?
+}
+#[cfg(not(windows))]
+fn serve_and_spawn(
+    _: &mut std::process::Command,
+    _: &banana_api::PreparedSession,
+) -> Result<Box<dyn banana_api::SessionHandle>, String> {
+    Err("Water runs on Windows hosts".into())
 }
 
 pub mod extension;

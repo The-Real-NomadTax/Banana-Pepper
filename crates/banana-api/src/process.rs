@@ -235,3 +235,74 @@ fn spawn_windows(
 }
 #[path = "process_util.rs"]
 pub mod utilities;
+
+/// Private pipes connecting a child process to a session view. The child
+/// receives the inherited handle values (see [`ViewPipes::child_spec`]) and
+/// speaks the `banana_wire` protocol; the host serves the view on a thread
+/// until the child closes its ends.
+#[cfg(windows)]
+pub struct ViewPipes {
+    child_in: std::io::PipeReader,
+    child_out: std::io::PipeWriter,
+    host_in: std::io::PipeReader,
+    host_out: std::io::PipeWriter,
+}
+#[cfg(windows)]
+impl ViewPipes {
+    pub fn new() -> std::io::Result<Self> {
+        let (child_in, host_out) = std::io::pipe()?;
+        let (host_in, child_out) = std::io::pipe()?;
+        Ok(Self {
+            child_in,
+            child_out,
+            host_in,
+            host_out,
+        })
+    }
+    /// `READ,WRITE` handle values as the child sees them.
+    pub fn child_spec(&self) -> String {
+        use std::os::windows::io::AsRawHandle;
+        format!(
+            "{},{}",
+            self.child_in.as_raw_handle() as usize,
+            self.child_out.as_raw_handle() as usize
+        )
+    }
+    /// Serve `view`, then run `spawn` with the child's ends inheritable.
+    /// The host's copies of those ends close afterwards, so the connection
+    /// ends when the child exits.
+    pub fn spawn<T>(
+        self,
+        view: std::sync::Arc<dyn SessionView>,
+        spawn: impl FnOnce() -> T,
+    ) -> std::io::Result<T> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        let Self {
+            child_in,
+            child_out,
+            host_in,
+            host_out,
+        } = self;
+        std::thread::Builder::new()
+            .name("session-view".into())
+            .spawn(move || {
+                if let Err(e) = view.serve(Box::new(host_in), Box::new(host_out)) {
+                    eprintln!("Session view connection ended: {e}");
+                }
+            })?;
+        let handles = [child_in.as_raw_handle(), child_out.as_raw_handle()];
+        let inherit = |on: bool| {
+            handles.iter().all(|&h| unsafe {
+                SetHandleInformation(h, HANDLE_FLAG_INHERIT, if on { HANDLE_FLAG_INHERIT } else { 0 })
+            } != 0)
+        };
+        if !inherit(true) {
+            return Err(std::io::Error::last_os_error());
+        }
+        let result = spawn();
+        inherit(false);
+        drop((child_in, child_out));
+        Ok(result)
+    }
+}

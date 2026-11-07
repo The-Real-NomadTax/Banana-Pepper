@@ -37,6 +37,7 @@ impl ExecutionBackend for Native {
         s: banana_api::PreparedSession,
     ) -> Result<Box<dyn banana_api::SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
+        let mount = s.mount()?.to_path_buf();
         #[cfg(target_os = "linux")]
         let input = s
             .plan
@@ -46,8 +47,8 @@ impl ExecutionBackend for Native {
             .transpose()?;
         #[cfg(windows)]
         let mut command = {
-            let mut c = std::process::Command::new(s.mount.join(&s.plan.executable));
-            c.current_dir(s.mount.join(&s.plan.cwd))
+            let mut c = std::process::Command::new(mount.join(&s.plan.executable));
+            c.current_dir(mount.join(&s.plan.cwd))
                 .envs(&s.plan.env)
                 .args(&s.plan.args);
             c
@@ -55,12 +56,12 @@ impl ExecutionBackend for Native {
         #[cfg(not(windows))]
         let mut command = {
             let mut box_ = Sandbox::new();
-            box_.bind(&s.mount, &s.plan.guest_root, false)
+            box_.bind(&mount, &s.plan.guest_root, false)
                 .bind(&s.state, "/work", false)
                 .chdir(&format!("{}/{}", s.plan.guest_root, s.plan.cwd));
             for m in &s.plan.guest_mounts {
                 banana_content::path(&m.source).map_err(|e| e.to_string())?;
-                box_.bind(s.mount.join(&m.source), &m.target, m.readonly);
+                box_.bind(mount.join(&m.source), &m.target, m.readonly);
             }
             for device in &s.devices {
                 box_.device(device);

@@ -41,22 +41,8 @@ unsafe extern "C" fn open(name: *const i8, flags: i32, mode: i32) -> i32 {
     if name.starts_with("/dev/") {
         return crt::errno(2);
     }
-    let write = flags & 3 != 0 || flags & (0x40 | 0x200 | 0x400) != 0;
-    let path = match path(name, write) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("[water] open: {e}");
-            return crt::errno(13);
-        }
-    };
-    let native_flags = (flags & 3)
-        | 0x8000
-        | if flags & 0x40 != 0 { 0x100 } else { 0 }
-        | if flags & 0x200 != 0 { 0x200 } else { 0 }
-        | if flags & 0x400 != 0 { 8 } else { 0 }
-        | if flags & 0x80 != 0 { 0x400 } else { 0 };
-    let f: unsafe extern "C" fn(*const i8, i32, i32) -> i32 = std::mem::transmute(host("_open"));
-    let fd = f(cpath(&path).as_ptr(), native_flags, mode);
+    let _ = mode;
+    let fd = files::open_fd(name, flags);
     eprintln!("[water] open {name} -> {fd}");
     fd
 }
@@ -141,6 +127,9 @@ unsafe fn reap(d: &mut Device, wait: bool) {
     }
 }
 unsafe extern "C" fn write(fd: i32, data: *const u8, length: u32) -> i32 {
+    if let Some(n) = files::write_fd(fd, data, length) {
+        return n;
+    }
     if fd != DSP {
         let f: unsafe extern "C" fn(i32, *const u8, u32) -> i32 =
             std::mem::transmute(host("_write"));
@@ -221,6 +210,9 @@ unsafe extern "C" fn write(fd: i32, data: *const u8, length: u32) -> i32 {
     length as i32
 }
 unsafe extern "C" fn close(fd: i32) -> i32 {
+    if let Some(r) = files::close_fd(fd) {
+        return r;
+    }
     if fd == MIXER {
         return 0;
     }
@@ -241,6 +233,9 @@ unsafe extern "C" fn close(fd: i32) -> i32 {
 unsafe extern "C" fn read(fd: i32, data: *mut u8, length: u32) -> i32 {
     if fd == DSP || fd == MIXER {
         return crt::errno(9);
+    }
+    if let Some(n) = files::read_fd(fd, data, length) {
+        return n;
     }
     let f: unsafe extern "C" fn(i32, *mut u8, u32) -> i32 = std::mem::transmute(host("_read"));
     f(fd, data, length)

@@ -56,7 +56,7 @@ unsafe extern "C" fn rand() -> i32 {
         .next() as i32
 }
 
-unsafe fn host(name: &str) -> usize {
+pub unsafe fn host(name: &str) -> usize {
     proc(LoadLibraryA(c"msvcrt.dll".as_ptr().cast()), name)
 }
 pub unsafe fn errno(value: i32) -> i32 {
@@ -92,51 +92,6 @@ unsafe extern "C" fn start_main(
 }
 unsafe extern "C" fn quit(code: i32) -> ! {
     ExitProcess(code as u32)
-}
-unsafe extern "C" fn fopen(name: *const i8, mode: *const i8) -> usize {
-    let mode = text(mode);
-    let write = mode.contains(['w', 'a', '+']);
-    let path = match path(text(name), write) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("[water] fopen: {e}");
-            errno(13);
-            return 0;
-        }
-    };
-    if write {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-    }
-    let mode = CString::new(if mode.contains('b') {
-        mode.to_owned()
-    } else {
-        format!("{mode}b")
-    })
-    .unwrap();
-    let name = cpath(&path);
-    let f: unsafe extern "C" fn(*const i8, *const i8) -> usize = std::mem::transmute(host("fopen"));
-    let file = f(name.as_ptr(), mode.as_ptr());
-    file
-}
-unsafe extern "C" fn rename(from: *const i8, to: *const i8) -> i32 {
-    let (Ok(from), Ok(to)) = (path(text(from), true), path(text(to), true)) else {
-        return errno(13);
-    };
-    // POSIX rename replaces an existing destination; the legacy Windows CRT
-    // rename export does not. Rust's Windows implementation uses replacement.
-    match fs::rename(from, to) {
-        Ok(()) => 0,
-        Err(_) => errno(5),
-    }
-}
-unsafe extern "C" fn remove(name: *const i8) -> i32 {
-    let Ok(path) = path(text(name), true) else {
-        return errno(13);
-    };
-    let f: unsafe extern "C" fn(*const i8) -> i32 = std::mem::transmute(host("remove"));
-    f(cpath(&path).as_ptr())
 }
 unsafe extern "C" fn usleep(microseconds: u32) -> i32 {
     std::thread::sleep(Duration::from_micros(microseconds as u64));
@@ -291,9 +246,6 @@ pub unsafe fn resolve(name: &str) -> Option<usize> {
         "rand" => rand as *const () as usize,
         "srand" => srand as *const () as usize,
         "__errno_location" => errno_location as *const () as usize,
-        "fopen" => fopen as *const () as usize,
-        "rename" => rename as *const () as usize,
-        "remove" => remove as *const () as usize,
         "usleep" => usleep as *const () as usize,
         "clock_gettime" => clock_gettime as *const () as usize,
         "sigemptyset" => sigemptyset as *const () as usize,

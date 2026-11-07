@@ -808,19 +808,20 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        use windows::Win32::Storage::FileSystem::{
+        use windows_sys::Win32::Storage::FileSystem::{
             MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
         };
-        use windows::core::PCWSTR;
         let a: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
         let b: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe {
+        if unsafe {
             MoveFileExW(
-                PCWSTR(a.as_ptr()),
-                PCWSTR(b.as_ptr()),
+                a.as_ptr(),
+                b.as_ptr(),
                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
             )
-            .map_err(io::Error::other)?;
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
         }
     }
     #[cfg(not(windows))]

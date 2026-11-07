@@ -1,10 +1,11 @@
-//! Shared composed filesystems, persistent overlays and session-scoped OS mounts.
+//! Shared composed filesystems, persistent overlays and their exposure to
+//! guests: the [`wire`] protocol for intercepting backends (Water, the
+//! Windows file shim), FUSE on Linux and the PRoot tracer on Android.
 mod view;
+pub mod wire;
 pub use view::*;
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg(windows)]
-mod windows;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
@@ -13,8 +14,6 @@ use std::{
 };
 pub struct MountLease {
     pub path: PathBuf,
-    #[cfg(windows)]
-    _host: Option<windows::Host>,
     #[cfg(target_os = "linux")]
     _host: Option<fuser::BackgroundSession>,
     #[cfg(target_os = "android")]
@@ -24,7 +23,7 @@ pub struct MountLease {
 }
 impl Drop for MountLease {
     fn drop(&mut self) {
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(target_os = "linux")]
         self._host.take();
         let _ = fs::remove_dir(&self.path);
         self._lock.take();
@@ -96,8 +95,6 @@ pub fn mount(view: Arc<View>, point: &Path) -> io::Result<MountLease> {
     lock.try_lock().map_err(io::Error::other)?;
     lock.write_all(b"banana-mount-v1\n")?;
     lock.sync_all()?;
-    #[cfg(windows)]
-    let result = windows::mount(view, point);
     #[cfg(target_os = "linux")]
     let result = linux::mount(view, point);
     #[cfg(target_os = "android")]
@@ -112,12 +109,12 @@ pub fn mount(view: Arc<View>, point: &Path) -> io::Result<MountLease> {
             _lock_path: None,
         })
     })();
-    #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     let result = {
         let _ = view;
-        Err(io::Error::new(
+        Err::<MountLease, _>(io::Error::new(
             io::ErrorKind::Unsupported,
-            "This platform has no virtual filesystem adapter",
+            "This host has no OS mount; its backends are served the view directly",
         ))
     };
     match result {

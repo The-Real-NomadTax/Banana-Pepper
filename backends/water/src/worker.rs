@@ -33,26 +33,34 @@ fn run() -> Result<(), String> {
         let v = args.next().ok_or("Worker option requires a value")?;
         options.insert(k.to_string_lossy().into_owned(), PathBuf::from(v));
     }
-    let image = options.get("--image").ok_or("--image required")?;
-    let root = options.get("--root").ok_or("--root required")?;
+    // The executable is a view path; every guest file comes from the view.
+    let image = options
+        .get("--image")
+        .ok_or("--image required")?
+        .to_string_lossy()
+        .into_owned();
+    banana_water::vfs::connect(
+        &options
+            .get("--view")
+            .ok_or("--view required")?
+            .to_string_lossy(),
+    )?;
+    let bytes = banana_water::vfs::view()
+        .and_then(|v| v.read_all(&image, 1 << 31))
+        .map_err(|e| format!("Cannot read {image}: {e}"))?;
     #[cfg(all(windows, target_arch = "x86"))]
     {
+        let _ = guest;
         let state = options.get("--state").ok_or("--state required")?;
         let adapter = options.get("--adapter").ok_or("--adapter required")?;
-        banana_water::win32::launch(image, root, state, adapter)
+        banana_water::win32::launch(&bytes, state, adapter)
     }
     #[cfg(not(all(windows, target_arch = "x86")))]
     {
-        let bytes = std::fs::read(image).map_err(|e| e.to_string())?;
-        let mut argv = vec![
-            image
-                .file_name()
-                .ok_or("Missing executable name")?
-                .to_string_lossy()
-                .into_owned(),
-        ];
+        let name = image.rsplit('/').next().unwrap_or(&image).to_owned();
+        let mut argv = vec![name];
         argv.extend(guest);
-        banana_water::run_worker(&bytes, root, &argv)
+        banana_water::run_worker(&bytes, &argv)
     }
 }
 fn main() {

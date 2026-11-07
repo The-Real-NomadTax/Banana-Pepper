@@ -116,6 +116,12 @@ pub trait ExecutionBackend: Sync {
     fn formats(&self) -> &'static [&'static str];
     fn availability(&self) -> Availability;
     fn check(&self, plan: &LaunchPlan) -> Result<(), CapabilityError>;
+    /// Whether the guest opens files by host path and needs the view mounted
+    /// as an OS filesystem. Backends that intercept guest file calls serve
+    /// [`PreparedSession::view`] instead.
+    fn needs_mount(&self, _plan: &LaunchPlan) -> bool {
+        true
+    }
     /// Runs after the view is exposed and before [`launch`](Self::launch):
     /// map guest paths and publish adapter endpoints into the plan. Backends
     /// that run the guest directly from the mount path need nothing here.

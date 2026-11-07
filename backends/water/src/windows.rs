@@ -1,12 +1,14 @@
 //! Direct x86-64 execution with Linux syscall sites trapped before entry.
 //! All unsafe host execution is confined to the worker process.
-use crate::{elf::Image, stack, vfs::Vfs};
+use crate::{
+    elf::Image,
+    stack,
+    vfs::{self, File},
+};
 use std::{
     collections::{BTreeSet, HashMap},
     ffi::c_void,
-    fs::{File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    path::Path,
+    io::{self, Read, SeekFrom, Write},
     ptr,
     sync::atomic::{AtomicPtr, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -52,7 +54,6 @@ struct Descriptor {
 struct State {
     plan: Image,
     argv: Vec<String>,
-    vfs: Vfs,
     memory: Vec<Region>,
     files: HashMap<u64, Descriptor>,
     next_fd: u64,
@@ -67,15 +68,9 @@ struct State {
 
 fn error(error: io::Error) -> i32 {
     match error.kind() {
-        io::ErrorKind::NotFound => 2,
-        io::ErrorKind::PermissionDenied => 13,
-        io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => 22,
-        io::ErrorKind::AlreadyExists => 17,
         io::ErrorKind::Interrupted => 4,
         io::ErrorKind::WouldBlock => 11,
-        io::ErrorKind::NotADirectory => 20,
-        io::ErrorKind::IsADirectory => 21,
-        _ => EIO,
+        _ => vfs::errno(&error),
     }
 }
 fn protection(bits: u64) -> Result<u32, i32> {
@@ -172,17 +167,10 @@ impl State {
         if flags & !(3 | 0x40 | 0x80 | 0x200 | 0x400 | 0x80000 | 0x8000) != 0 || flags & 3 == 3 {
             return Err(EINVAL);
         }
-        let write = flags & 3 != 0 || flags & (0x40 | 0x200 | 0x400) != 0;
-        let path = self.vfs.resolve(&name, write).map_err(error)?;
-        let mut options = OpenOptions::new();
-        options
-            .read(flags & 3 != 1)
-            .write(flags & 3 != 0)
-            .append(flags & 0x400 != 0)
-            .truncate(flags & 0x200 != 0)
-            .create(flags & 0x40 != 0)
-            .create_new(flags & 0xc0 == 0xc0);
-        let file = options.open(path).map_err(error)?;
+        if self.files.len() >= 4096 {
+            return Err(24);
+        }
+        let file = File::open(&name, vfs::Options::linux(flags)).map_err(error)?;
         if self.files.len() >= 4096 {
             return Err(24);
         }
@@ -191,14 +179,14 @@ impl State {
         self.files.insert(fd, Descriptor { file, flags });
         Ok(fd)
     }
-    fn stat(&self, metadata: std::fs::Metadata, address: u64) -> Result<u64, i32> {
+    fn stat(&self, metadata: banana_wire::Meta, address: u64) -> Result<u64, i32> {
         let mut bytes = [0u8; 144];
         let put64 = |bytes: &mut [u8], offset, value: u64| {
             bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes())
         };
         put64(&mut bytes, 16, 1);
         bytes[24..28].copy_from_slice(
-            &(if metadata.is_dir() {
+            &(if metadata.directory {
                 0o040555u32
             } else {
                 0o100644u32
@@ -207,21 +195,16 @@ impl State {
         );
         bytes[28..32].copy_from_slice(&1000u32.to_le_bytes());
         bytes[32..36].copy_from_slice(&1000u32.to_le_bytes());
-        put64(&mut bytes, 48, metadata.len());
+        put64(&mut bytes, 48, metadata.len);
         put64(&mut bytes, 56, 4096);
-        put64(&mut bytes, 64, metadata.len().div_ceil(512));
-        for (offset, time) in [
-            (72, metadata.accessed()),
-            (88, metadata.modified()),
-            (104, metadata.created()),
-        ] {
-            if let Ok(elapsed) = time
-                .map_err(|_| ())
-                .and_then(|t| t.duration_since(UNIX_EPOCH).map_err(|_| ()))
-            {
-                put64(&mut bytes, offset, elapsed.as_secs());
-                put64(&mut bytes, offset + 8, elapsed.subsec_nanos() as u64);
-            }
+        put64(&mut bytes, 64, metadata.len.div_ceil(512));
+        // The view keeps no timestamps; report the session start.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        for offset in [72, 88, 104] {
+            put64(&mut bytes, offset, now.as_secs());
+            put64(&mut bytes, offset + 8, now.subsec_nanos() as u64);
         }
         self.store(address, &bytes)?;
         Ok(0)
@@ -237,12 +220,8 @@ impl State {
                 let count = if a[0] == 0 && self.standard_open[0] {
                     io::stdin().read(&mut bytes).map_err(error)?
                 } else {
-                    self.files
-                        .get_mut(&a[0])
-                        .ok_or(9)?
-                        .file
-                        .read(&mut bytes)
-                        .map_err(error)?
+                    let file = &mut self.files.get_mut(&a[0]).ok_or(9)?.file;
+                    file.read(&mut bytes).map_err(error)?
                 };
                 self.store(a[1], &bytes[..count])?;
                 Ok(count as u64)
@@ -275,13 +254,7 @@ impl State {
                 self.files.remove(&a[0]).map(|_| 0).ok_or(9)
             }
             5 => {
-                let metadata = self
-                    .files
-                    .get(&a[0])
-                    .ok_or(9)?
-                    .file
-                    .metadata()
-                    .map_err(error)?;
+                let metadata = self.files.get(&a[0]).ok_or(9)?.file.metadata().map_err(error)?;
                 self.stat(metadata, a[1])
             }
             8 => {
@@ -470,11 +443,8 @@ impl State {
                 if a[0] as i64 != -100 || a[3] != 0 {
                     return Err(95);
                 }
-                let path = self
-                    .vfs
-                    .resolve(&self.string(a[1])?, false)
-                    .map_err(error)?;
-                self.stat(std::fs::metadata(path).map_err(error)?, a[2])
+                let metadata = vfs::stat(&self.string(a[1])?).map_err(error)?;
+                self.stat(metadata, a[2])
             }
             318 => {
                 let length = usize::try_from(a[1]).map_err(|_| EINVAL)?;
@@ -621,11 +591,10 @@ unsafe extern "system" fn enter(parameter: *mut c_void) {
     }
 }
 
-pub fn run(bytes: &[u8], plan: &Image, root: &Path, argv: &[String]) -> Result<(), String> {
+pub fn run(bytes: &[u8], plan: &Image, argv: &[String]) -> Result<(), String> {
     if !STATE.load(Ordering::Acquire).is_null() {
         return Err("Only one guest may execute in a worker".into());
     }
-    let vfs = Vfs::new(root).map_err(|e| e.to_string())?;
     let size = (plan.image_end - plan.image_start) as usize;
     let allocation = unsafe {
         VirtualAlloc(
@@ -652,7 +621,6 @@ pub fn run(bytes: &[u8], plan: &Image, root: &Path, argv: &[String]) -> Result<(
     let mut state = Box::new(State {
         plan: plan.clone(),
         argv: argv.to_vec(),
-        vfs,
         memory: Vec::new(),
         files: HashMap::new(),
         next_fd: 3,

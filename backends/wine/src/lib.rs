@@ -202,6 +202,7 @@ impl ExecutionBackend for Wine {
         s: banana_api::PreparedSession,
     ) -> Result<Box<dyn banana_api::SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
+        let mount = s.mount()?.to_path_buf();
         let mut prefix = Prefix::new(
             &s.state.join("prefix"),
             &s.state.join("game.log"),
@@ -223,7 +224,7 @@ impl ExecutionBackend for Wine {
             if let Some(p) = target.parent() {
                 fs::create_dir_all(p).map_err(|e| e.to_string())?;
             }
-            std::os::unix::fs::symlink(&s.mount, &target).map_err(|e| e.to_string())?;
+            std::os::unix::fs::symlink(&mount, &target).map_err(|e| e.to_string())?;
         }
         if let Some(resolution) = s.plan.env.get("ARCADE_RESOLUTION") {
             prefix.desktop(
@@ -237,9 +238,9 @@ impl ExecutionBackend for Wine {
         }
         let mut command = prefix.command();
         command
-            .arg(s.mount.join(&s.plan.executable))
+            .arg(mount.join(&s.plan.executable))
             .args(&s.plan.args)
-            .current_dir(s.mount.join(&s.plan.cwd))
+            .current_dir(mount.join(&s.plan.cwd))
             .envs(&s.plan.env);
         let log = fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
         command

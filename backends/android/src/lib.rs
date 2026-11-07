@@ -85,6 +85,7 @@ impl ExecutionBackend for Android {
     }
     fn launch(&self, s: PreparedSession) -> Result<Box<dyn SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
+        let mount = s.mount()?.to_path_buf();
         let files = s
             .resources
             .parent()
@@ -221,10 +222,9 @@ impl ExecutionBackend for Android {
         );
         transport.environment.insert(
             "BANANA_ANDROID_CWD".into(),
-            s.mount.join(&s.plan.cwd).to_string_lossy().into_owned(),
+            mount.join(&s.plan.cwd).to_string_lossy().into_owned(),
         );
-        let exe = s
-            .mount
+        let exe = mount
             .join(&s.plan.executable)
             .to_string_lossy()
             .into_owned();
@@ -243,7 +243,7 @@ impl ExecutionBackend for Android {
         argv.extend(s.plan.args.clone());
         environment.insert(
             "BANANA_ANDROID_CWD".into(),
-            s.mount.join(&s.plan.cwd).to_string_lossy().into_owned(),
+            mount.join(&s.plan.cwd).to_string_lossy().into_owned(),
         );
         transport.environment = environment;
         owned.game = Some(transport.spawn("game", &argv, s.plan.timeout_ms)?);

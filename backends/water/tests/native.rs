@@ -105,23 +105,65 @@ fn temp() -> PathBuf {
     fs::create_dir_all(&path).unwrap();
     path
 }
+/// The session view as the host serves it: the test folder plus an overlay.
 #[cfg(all(windows, target_arch = "x86_64"))]
-fn run(bytes: &[u8], timeout: u32) -> (std::process::Output, PathBuf) {
+struct Served(std::sync::Arc<banana_vfs::View>);
+#[cfg(all(windows, target_arch = "x86_64"))]
+impl banana_api::SessionView for Served {
+    fn serve(
+        &self,
+        r: Box<dyn std::io::Read + Send>,
+        w: Box<dyn std::io::Write + Send>,
+    ) -> std::io::Result<()> {
+        banana_vfs::wire::serve(self.0.clone(), r, w)
+    }
+    fn read(&self, path: &str, limit: u64) -> std::io::Result<Vec<u8>> {
+        let mut b = vec![0; limit as usize];
+        let n = self.0.read(path, 0, &mut b)?;
+        b.truncate(n);
+        Ok(b)
+    }
+    fn read_dir(&self, path: &str) -> std::io::Result<Vec<banana_content::Entry>> {
+        self.0.read_dir(path)
+    }
+}
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn run(bytes: &[u8], timeout: u32) -> (std::process::Output, PathBuf, std::sync::Arc<banana_vfs::View>) {
     let path = temp();
-    fs::write(path.join("guest.elf"), bytes).unwrap();
-    fs::create_dir_all(path.join("work")).unwrap();
-    let result = std::process::Command::new(env!("CARGO_BIN_EXE_water-x64"))
+    let game = path.join("game");
+    fs::create_dir_all(game.join("work")).unwrap();
+    fs::write(game.join("guest.elf"), bytes).unwrap();
+    let view = std::sync::Arc::new(
+        banana_vfs::View::new(
+            std::sync::Arc::new(banana_content::Folder::new(&game).unwrap()),
+            &path.join("overlay"),
+            "test",
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let pipes = banana_api::process::ViewPipes::new().unwrap();
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_water-x64"));
+    command
         .arg("--image")
-        .arg(path.join("guest.elf"))
-        .arg("--root")
-        .arg(&path)
+        .arg("guest.elf")
         .arg("--state")
-        .arg(path.join("work"))
+        .arg(&path)
+        .arg("--view")
+        .arg(pipes.child_spec())
         .arg("--timeout")
-        .arg(timeout.to_string())
-        .output()
+        .arg(timeout.to_string());
+    let result = pipes
+        .spawn(std::sync::Arc::new(Served(view.clone())), || command.output())
+        .unwrap()
         .unwrap();
-    (result, path)
+    // The host's serving thread lets go of the view once the worker's pipe closes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::sync::Arc::strong_count(&view) > 1 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    (result, path, view)
 }
 
 #[test]
@@ -173,7 +215,7 @@ fn executes_linux_write_and_preserves_guest_exit_status() {
     code.imm(&[0xba], message.len() as u32);
     code.syscall(1);
     code.exit(7);
-    let (result, path) = run(&elf(&code.bytes, message), 3);
+    let (result, path, view) = run(&elf(&code.bytes, message), 3);
     assert_eq!(
         result.status.code(),
         Some(7),
@@ -181,6 +223,7 @@ fn executes_linux_write_and_preserves_guest_exit_status() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(result.stdout, message);
+    drop(view);
     fs::remove_dir_all(path).unwrap();
 }
 
@@ -199,12 +242,13 @@ fn translates_errno_validates_guest_buffers_and_zeroes_bss() {
     code.assert_rax(0);
     code.emit(&[0x48, 0x8b, 0x04, 0x24]);
     code.assert_rax(1); // initial argc
-    let (result, path) = run(&elf(&code.finish(), b""), 3);
+    let (result, path, view) = run(&elf(&code.finish(), b""), 3);
     assert!(
         result.status.success(),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
+    drop(view);
     fs::remove_dir_all(path).unwrap();
 }
 
@@ -237,13 +281,14 @@ fn supports_private_mmap_protection_and_unmap() {
     code.imm(&[0xbe], 4096);
     code.syscall(11);
     code.assert_rax(0);
-    let (result, path) = run(&elf(&code.finish(), b""), 3);
+    let (result, path, view) = run(&elf(&code.finish(), b""), 3);
     assert!(
         result.status.success(),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(result.stdout, b"mmap-ok\n");
+    drop(view);
     fs::remove_dir_all(path).unwrap();
 }
 
@@ -282,22 +327,28 @@ fn guest_file_round_trip_is_confined_to_work_mount() {
     code.imm(&[0xba], message.len() as u32);
     code.syscall(1);
     code.assert_rax(message.len() as i32);
-    let (result, path) = run(&elf(&code.finish(), &data), 3);
+    let (result, path, view) = run(&elf(&code.finish(), &data), 3);
     assert!(
         result.status.success(),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(result.stdout, message);
-    assert_eq!(fs::read(path.join("work/test.txt")).unwrap(), message);
+    // The write lands in the view's overlay; the source folder is untouched.
+    let mut written = vec![0; message.len()];
+    assert_eq!(view.read("work/test.txt", 0, &mut written).unwrap(), message.len());
+    assert_eq!(written, message);
+    assert!(!path.join("game/work/test.txt").exists());
+    drop(view);
     fs::remove_dir_all(path).unwrap();
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 #[test]
 fn terminates_a_non_returning_guest() {
-    let (result, path) = run(&elf(&[0xeb, 0xfe], b""), 1);
+    let (result, path, view) = run(&elf(&[0xeb, 0xfe], b""), 1);
     assert_eq!(result.status.code(), Some(125));
     assert!(String::from_utf8_lossy(&result.stderr).contains("worker terminated"));
+    drop(view);
     fs::remove_dir_all(path).unwrap();
 }

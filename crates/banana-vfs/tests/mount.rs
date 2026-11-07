@@ -1,4 +1,6 @@
-//! Real kernel mount and executable-loading checks. Run with --ignored on a configured host.
+//! Real FUSE mount and executable-loading checks. Run with --ignored on a
+//! configured Linux host. Windows has no OS mount: its backends use `wire`.
+#![cfg(target_os = "linux")]
 use banana_content::{ContentSource, Folder, MemorySource, Zar};
 use std::{
     collections::BTreeMap,
@@ -37,29 +39,6 @@ fn child_probe() {
         assert_eq!(libc::msync(p, 4096, libc::MS_SYNC), 0);
         assert_eq!(libc::munmap(p, 4096), 0);
     }
-    #[cfg(windows)]
-    unsafe {
-        use std::os::windows::io::AsRawHandle;
-        use windows::Win32::System::Memory::*;
-        use windows::core::PCWSTR;
-        let mapping = CreateFileMappingW(
-            windows::Win32::Foundation::HANDLE(file.as_raw_handle()),
-            None,
-            PAGE_READWRITE,
-            0,
-            4096,
-            PCWSTR::null(),
-        )
-        .unwrap();
-        let address = MapViewOfFile(mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 4096);
-        assert!(!address.Value.is_null());
-        let p = address.Value.cast::<u8>();
-        assert_eq!(*p.add(7), 1);
-        *p.add(7) = 9;
-        FlushViewOfFile(address.Value, 4096).unwrap();
-        UnmapViewOfFile(address).unwrap();
-        windows::Win32::Foundation::CloseHandle(mapping).unwrap();
-    }
     file.sync_all().unwrap();
     drop(file);
     assert_eq!(fs::read(root.join("data.bin")).unwrap()[7], 9);
@@ -81,7 +60,7 @@ fn child_probe() {
     println!("mounted probe complete");
 }
 #[test]
-#[ignore = "Requires WinFsp/FUSE and permission to mount"]
+#[ignore = "Requires FUSE and permission to mount"]
 fn mounted_sources_execute_and_preserve_dirty_pages() {
     #[cfg(target_os = "linux")]
     let temp = tempfile::tempdir().unwrap();

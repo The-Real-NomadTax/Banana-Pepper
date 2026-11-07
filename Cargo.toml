@@ -33,6 +33,7 @@ banana-settings = { path = "crates/banana-settings" }
 banana-input = { path = "crates/banana-input" }
 banana-content = { path = "crates/banana-content" }
 banana-vfs = { path = "crates/banana-vfs" }
+banana-wire = { path = "crates/banana-wire" }
 # Execution backends
 banana-android = { path = "backends/android" }
 banana-native = { path = "backends/native" }

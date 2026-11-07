@@ -215,3 +215,58 @@ fn reset_preserves_the_source_and_cannot_race_an_active_session() {
     assert!(!t.path().join("index.json").exists());
     assert_eq!(fs::read_dir(t.path().join("blocks")).unwrap().count(), 0);
 }
+
+#[test]
+fn wire_protocol_serves_the_view_across_a_pipe() {
+    use crate::wire::{Client, errno, errno_of, open};
+    let t =
+        tempfile::tempdir_in(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")).unwrap();
+    let v = Arc::new(view(t.path()));
+    let (server_in, client_out) = std::io::pipe().unwrap();
+    let (client_in, server_out) = std::io::pipe().unwrap();
+    let host = {
+        let v = v.clone();
+        std::thread::spawn(move || wire::serve(v, server_in, server_out))
+    };
+    let c = Client::new(client_in, client_out).unwrap();
+
+    // Reads of untouched content, across the protocol's chunk size.
+    let (h, m) = c.open("large", open::READ).unwrap();
+    assert_eq!(m.len, 1_000_000);
+    let mut b = vec![0; 1_000_010];
+    assert_eq!(c.read(h, 0, &mut b).unwrap(), 1_000_000);
+    assert!(b[..1_000_000].iter().all(|&x| x == b'x'));
+    assert_eq!(errno_of(&c.write(h, 0, b"no").unwrap_err()), errno::EBADF);
+    c.close(h).unwrap();
+    assert_eq!(errno_of(&c.close(h).unwrap_err()), errno::EBADF);
+
+    // Create, write, truncate and list, persisted in the overlay.
+    assert_eq!(errno_of(&c.open("missing", open::READ).unwrap_err()), errno::ENOENT);
+    c.mkdir("saves").unwrap();
+    let (h, _) = c
+        .open("saves/slot1", open::READ | open::WRITE | open::CREATE)
+        .unwrap();
+    assert_eq!(c.write(h, 0, b"hello world").unwrap(), 11);
+    c.truncate(h, 5).unwrap();
+    assert_eq!(c.fstat(h).unwrap().len, 5);
+    c.close(h).unwrap();
+    assert_eq!(
+        errno_of(
+            &c.open("saves/slot1", open::WRITE | open::CREATE | open::EXCLUSIVE)
+                .unwrap_err()
+        ),
+        errno::EEXIST
+    );
+    assert_eq!(c.read_all("saves/slot1", 100).unwrap(), b"hello");
+    let names: Vec<_> = c.read_dir("").unwrap().into_iter().map(|e| e.0).collect();
+    assert!(names.contains(&"saves".to_owned()) && names.contains(&"large".to_owned()));
+    assert!(c.stat("saves").unwrap().directory);
+
+    c.rename("saves/slot1", "saves/slot2").unwrap();
+    assert_eq!(v.read_dir("saves").unwrap()[0].name, "slot2");
+    c.remove("saves/slot2").unwrap();
+    assert!(v.read_dir("saves").unwrap().is_empty());
+    c.flush().unwrap();
+    drop(c);
+    host.join().unwrap().unwrap();
+}

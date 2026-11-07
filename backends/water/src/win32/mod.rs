@@ -3,12 +3,12 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 mod crt;
 mod display;
+mod files;
 mod hooks;
 mod sound;
 use goblin::elf::{Elf, program_header::PT_LOAD};
 use std::{
     ffi::{CStr, CString, c_void},
-    fs,
     path::{Path, PathBuf},
     ptr,
     sync::OnceLock,
@@ -17,7 +17,6 @@ use windows_sys::Win32::System::{
     Diagnostics::Debug::*, LibraryLoader::*, Memory::*, Threading::*,
 };
 
-pub static GAME: OnceLock<PathBuf> = OnceLock::new();
 pub static WORK: OnceLock<PathBuf> = OnceLock::new();
 static TRACES: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
 
@@ -55,9 +54,7 @@ fn display_config() -> &'static crate::extension::DisplayV1 {
         .expect("Validated display extension")
 }
 static EXTENSION: OnceLock<&'static crate::extension::AdapterV1> = OnceLock::new();
-pub fn launch(image: &Path, root: &Path, state: &Path, adapter: &Path) -> Result<(), String> {
-    GAME.set(root.to_path_buf())
-        .map_err(|_| "Guest root already set")?;
+pub fn launch(image: &[u8], state: &Path, adapter: &Path) -> Result<(), String> {
     WORK.set(state.to_path_buf())
         .map_err(|_| "State already set")?;
     unsafe {
@@ -89,7 +86,11 @@ pub fn launch(image: &Path, root: &Path, state: &Path, adapter: &Path) -> Result
         DISPLAY_EXTENSION
             .set(display)
             .map_err(|_| "Display already installed")?;
-        let root = cpath(root);
+        // Adapters see the guest's root path, not a host directory.
+        let root = CString::new(
+            std::env::var("BANANA_GUEST_ROOT").unwrap_or_else(|_| "/game".into()),
+        )
+        .map_err(|e| e.to_string())?;
         let state = cpath(state);
         static SERVICES: crate::extension::HostServicesV1 = crate::extension::HostServicesV1 {
             size: std::mem::size_of::<crate::extension::HostServicesV1>() as u32,
@@ -101,8 +102,7 @@ pub fn launch(image: &Path, root: &Path, state: &Path, adapter: &Path) -> Result
         EXTENSION
             .set(extension)
             .map_err(|_| "Adapter already installed")?;
-        let bytes = fs::read(image).map_err(|e| e.to_string())?;
-        load(&bytes)
+        load(image)
     }
 }
 
@@ -333,6 +333,9 @@ unsafe extern "C" fn enter(_entry: u32, _stack: u32) -> ! {
 }
 
 unsafe fn resolve(name: &str) -> Result<usize, String> {
+    if let Some(address) = files::resolve(name) {
+        return Ok(address);
+    }
     if let Some(address) = crt::resolve(name) {
         return Ok(address);
     }
@@ -356,12 +359,6 @@ unsafe fn resolve(name: &str) -> Result<usize, String> {
 
 pub unsafe fn text<'a>(p: *const i8) -> &'a str {
     CStr::from_ptr(p).to_str().unwrap_or("")
-}
-pub fn path(name: &str, write: bool) -> Result<PathBuf, String> {
-    crate::vfs::Vfs::new(GAME.get().ok_or("Missing mount")?)
-        .map_err(|e| e.to_string())?
-        .resolve(name, write)
-        .map_err(|e| e.to_string())
 }
 
 pub fn cpath(path: &Path) -> CString {

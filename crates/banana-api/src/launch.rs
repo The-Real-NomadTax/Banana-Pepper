@@ -257,10 +257,39 @@ impl std::error::Error for CapabilityError {}
 pub struct PreparedSession {
     pub devices: Vec<PathBuf>,
     pub plan: LaunchPlan,
-    pub mount: PathBuf,
+    /// Host directory exposing the view, for backends whose guest opens
+    /// files by host path ([`ExecutionBackend::needs_mount`]).
+    pub mount: Option<PathBuf>,
+    /// The session's composed filesystem, reachable without a mount.
+    pub view: Arc<dyn SessionView>,
     pub state: PathBuf,
     pub resources: PathBuf,
     pub dependencies: PathBuf,
+}
+impl PreparedSession {
+    /// The mount directory; an error for backends that run without one.
+    pub fn mount(&self) -> Result<&std::path::Path, String> {
+        self.mount
+            .as_deref()
+            .ok_or_else(|| "This session's view is not mounted".into())
+    }
+}
+
+/// A session's composed filesystem (source, generated files and overlay),
+/// owned by the session host. Backends that intercept guest file calls serve
+/// it to the guest instead of mounting it.
+pub trait SessionView: Send + Sync {
+    /// Serve the `banana_vfs::wire` protocol on one connection until the
+    /// client closes it.
+    fn serve(
+        &self,
+        reader: Box<dyn std::io::Read + Send>,
+        writer: Box<dyn std::io::Write + Send>,
+    ) -> std::io::Result<()>;
+    /// Read a whole view file, bounded by `limit` bytes.
+    fn read(&self, path: &str, limit: u64) -> std::io::Result<Vec<u8>>;
+    /// List a view directory.
+    fn read_dir(&self, path: &str) -> std::io::Result<Vec<banana_content::Entry>>;
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SessionEvent {
