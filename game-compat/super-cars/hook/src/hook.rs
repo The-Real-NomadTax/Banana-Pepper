@@ -7,6 +7,9 @@
 //! writes the steering/gas/brake analog channels. `DirectInput8Create` is
 //! forwarded to Wine's real dinput8.
 //!
+//! It also carries two rendering fixes for Wine's Direct3D 8 (`graphics.rs`):
+//! 16-bit-safe shader handles and a guarded movie texture clear.
+//!
 //! Everything is patched in memory only, after checking the exact bytes of the
 //! one supported `sdaemon.exe` build; the original files are not modified.
 //! Bindings come from `ARCADE_SUPERCARS_KEYS` (`target:dik,...`, written by
@@ -28,6 +31,7 @@ mod xinput;
 mod dinput;
 #[path = "../../../../guest/win32/controllers.rs"]
 mod controllers;
+mod graphics;
 
 use core::{mem::transmute, ptr};
 
@@ -424,6 +428,7 @@ unsafe fn install() {
         log(b"arcade-wine-hook: unsupported sdaemon.exe build; controls not installed");
         return;
     }
+    graphics::install();
     let mut env = [0u8; 2048];
     let n = unsafe {
         GetEnvironmentVariableA(

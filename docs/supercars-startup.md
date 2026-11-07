@@ -54,6 +54,11 @@ The game reads cabinet controls through a Raw Thrills I/O library ("RTIO") that 
 - after each poll, reads the game's raw DirectInput keyboard buffer (`0x4780108`). It posts press/release edges for button bindings and writes steering, gas and brake into the analog table at `0x477f808` (0..0xfff; the game maps `adc1` to -1..1);
 - then clears the game's keyboard state so the developer shortcuts compiled into the game (Space, R, arrows, F-keys and others) never fire.
 
+It also applies two rendering fixes for Wine's Direct3D 8 (`hook/src/hook/graphics.rs`):
+
+- **Shader handles.** The renderer stores vertex and pixel shader handles in 16-bit fields. Microsoft's runtime returns small handles. Wine returns `0xF0000001 + n`, which gets cut to `n + 1`. Wine then rejects the pixel shaders (`SetPixelShader Invalid handle`) and reads the vertex shaders as FVF codes, so cars on the select screens and in races draw without their materials. The adapter hooks `Direct3DCreate8` through the game's import slot (`0x6253dc`), then wraps the device's shader methods. The game gets `2n + 1` for vertex shaders (an FVF code never has bit 0 set) and `n + 1` for pixel shaders. Handles that already fit in 16 bits pass through unchanged.
+- **Movie texture clear.** When a crowd movie (`shared\movies\avi\*.rta`) opens, the routine at `0x4af3a0` locks a default-pool render-target texture, ignores the result and fills `pitch * height` bytes at `pBits`. Wine refuses the lock (`Resource does not have MAP_R access`), so pitch and pBits are left-over stack values. In practice these are pitch 1 and a pointer into the movie object itself, which wipes the object's second texture and crashes at `0x4af3b1`. The adapter changes the routine's `sub esp,8` to `push ecx; push 0`, so pitch starts at 0 and a failed lock clears nothing.
+
 Bindings come from `ARCADE_SUPERCARS_KEYS` (`target:DIK,...`). Set `ARCADE_SUPERCARS_DEBUG=1` to log key transitions.
 
 ## Graphics
