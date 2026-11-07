@@ -7,3 +7,6 @@ description = "Native host execution backend for Banana Pepper"
 
 [dependencies]
 banana-api.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

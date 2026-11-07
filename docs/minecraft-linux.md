@@ -1,23 +1,23 @@
 # Minecraft Dungeons Arcade on Linux
 
-**Current seeded-runner status (2026-11-05):** coin, Start, loadout, level select and the chosen level all run. The game runs in a 60 Hz gamescope window by default; at 60 Hz the player panels, Ready box, score row and gear HUD draw. Still open: the HUD and short banners are intermittent between runs (sometimes missing, or a banner such as "NIGHT IS COMING" stays up), and automated runs have not yet shown a controllable player character after pressing a button in the level. Use the seeded launch below. The later investigation sections are historical records.
+**Current seeded-runner status (2026-11-05):** coin, Start, loadout, level select and the chosen level all run. The game runs in a 60 Hz gamescope window by default; at 60 Hz the player panels, Ready box, score row and gear HUD draw. Still open: the HUD and short banners are intermittent between runs (sometimes missing, or a banner such as "NIGHT IS COMING" stays up), and automated runs have not yet shown a controllable player character after pressing a button in the level. Use the seeded launch below. The later investigation sections are historical records. Runtime orchestration, image preparation and input forwarding now live entirely in the Rust game crate; old script-only diagnostic flags in historical notes are not current application options.
 
 ## Launch from the main UI
 
-Add Minecraft Dungeons Arcade from the global library, set its game folder or ZArchive in Settings, then click **Play game**. Play and `--launch-minecraft` use the seeded runner with the same seeds, libraries, virtual controls and save directory as the command-line script. **Prepare libraries** and `--probe-minecraft` retain their setup and diagnostic behavior.
+Add Minecraft Dungeons Arcade from the global library, set its game folder or ZArchive in Settings, then click **Play game**. Play and `--launch-minecraft` use the seeded runner with the same seeds, libraries, virtual controls and save directory as the compiled registry host. **Prepare libraries** and `--probe-minecraft` retain their setup and diagnostic behavior.
 
-Before the first launch, capture `runtime/minecraft/seeds.json` as described in [seed capture](minecraft-seed-capture.md), click **Prepare libraries**, and build the Linux adapter with `cargo build -p banana-minecraft-io --offline`. The runner requires Python evdev, access to uinput and host input devices, Bubblewrap and gamescope as described below. On Windows these guest dependencies and the Linux adapter must be available inside WSL2. Missing prerequisites appear in the session error output.
+Before the first launch, capture `runtime/minecraft/seeds.json` as described in [seed capture](minecraft-seed-capture.md), click **Prepare libraries**, and build the Linux adapter with `cargo build -p banana-minecraft-io --offline`. The runner accesses evdev/uinput directly in Rust and requires access to uinput and host input devices, Bubblewrap and gamescope as described below. On Windows these guest dependencies and the Linux adapter must be available inside WSL2. Missing prerequisites appear in the session error output.
 
 ## Cabinet type, 60 Hz and level start (2026-11-05)
 
-- **60 Hz:** the cabinet presented vsync'd at 60 Hz and the game's UI timing depends on it. On a 165 Hz monitor the game ran at about 165 FPS (it swaps twice per frame, so `glXSwapBuffers` counted ~330/s) and panels, the Ready box and the HUD were missing. The launcher now runs the sandbox inside `gamescope -r 60` (1920×1080 window). `--no-gamescope` draws straight to the desktop. Keyboard focus accepts the `gamescope` window.
-- **Cabinet type:** `SysInfoGameCabinetType` (cached at `0x182a4ac`) is read from dongle offset `0x29` by the skipped HASP block, so it stayed 0. UI scripts branch on it with `BR_ON_PROC`: 1 = four players (`LOOP_4P`, `FADE_4P`, `MINE_4P`), 12 = two, 13 = one. The runner presets 1, matching TeknoParrot's `CabinetType=4 PLAYERS` (`--cabinet-type` overrides).
+- **60 Hz:** the cabinet presented vsync'd at 60 Hz and the game's UI timing depends on it. On a 165 Hz monitor the game ran at about 165 FPS (it swaps twice per frame, so `glXSwapBuffers` counted ~330/s) and panels, the Ready box and the HUD were missing. The launcher now runs the sandbox inside `gamescope -r 60` (1920×1080 window). `ARCADE_MINECRAFT_NO_GAMESCOPE=1` draws straight to the desktop. Keyboard focus accepts the `gamescope` window.
+- **Cabinet type:** `SysInfoGameCabinetType` (cached at `0x182a4ac`) is read from dongle offset `0x29` by the skipped HASP block, so it stayed 0. UI scripts branch on it with `BR_ON_PROC`: 1 = four players (`LOOP_4P`, `FADE_4P`, `MINE_4P`), 12 = two, 13 = one. The runner presets 1, matching TeknoParrot's `CabinetType=4 PLAYERS`.
 - **RIO2 boards:** cabinet type 1 also asks the I/O layer for two RIO2 boards (`0x424650`), which stopped boot at "Press TEST to continue". The runner skips only that board-count request (`0x42466c`).
 - **Card stock:** `0x441340` reads the cards this cabinet may still dispense from dongle offset `0x32` (cap 7000) into `0x179dee4`. At 0 the game sets its lock flag (`0x179de94`) and every slot shows "GAME LOCKED / ALL DISPENSERS REPORT ERROR". The runner presets 7000 (the save can supply a different count at startup).
 - **Dispenser status bits** (`0x41a100`, per player): 0x01 ready (input `0x208`), 0x02 empty (`0x20a`, sets `P%u_CARDEMPTY`), 0x04/0x0C card at exit / held over 500 ms (`0x209`), 0x20 card low (`0x20b`). The adapter keeps reporting 0x01.
 - **Transitions:** the load-with-swipe routines (`0x50e440`/`0x50e650`) now keep their native scene unload/load and only replace the final blocking wait for `TRANSITION_OUT_DONE` (which the "transition" scene's scripts never send here) with `SetTrigger("TRANSITION_OUT_DONE")`. The previous whole-routine cut skipped scene loads. A bounded pause there (1 s wait or 60 frames) was tried and rejected: one variant exhausted the 64-byte memory pool, the other crashed at `0x442852` and started level scripts out of order.
 - **Level-select freeze:** after a level is chosen and all players are Ready, the native game-select loop (`0x433110`) waits for `GAMESEL_DONE`, which only the transition scene's logo swipe sets. The loop now waits for `LOGO_TRANSITION`, which the level-select script sets at that point. The trigger name is stored in the unreachable HASP block.
-- **Testing on a private display:** `ARCADE_GAMESCOPE_BACKEND=headless` plus `--no-host-keyboard` runs unattended; inputs go to `runtime/minecraft-seeded/key-events` (`SDL-scancode 1|0` lines) and screenshots come from the gamescope Xwayland display.
+- **Testing on a private display:** `ARCADE_GAMESCOPE_BACKEND=headless` plus `ARCADE_MINECRAFT_HOST_KEYBOARD=0` runs unattended; inputs go to `runtime/minecraft-seeded/key-events` (`SDL-scancode 1|0` lines) and screenshots come from the gamescope Xwayland display.
 
 **Measured result:** the full coin → loadout → level select → level flow runs at 60 Hz with player panels, Ready, score row and gear HUD drawn (reference: cabinet photos supplied by the user). Remaining: the intermittent HUD/banners above, and the player character not yet seen after pressing a button in automated runs.
 
@@ -25,10 +25,10 @@ Before the first launch, capture `runtime/minecraft/seeds.json` as described in 
 
 ```sh
 cargo build -p banana-minecraft-io --offline
-python3 scripts/minecraft-seeded.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
+cargo run -p banana-desktop -- --launch-minecraft 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
 ```
 
-F1–F4 scan the selected card for P1–P4 while the Minecraft window has focus. The default card is Sun's Grace (`a0000000`); choose another with `--card CODE`. Scanning is useful at the game's card-selection prompt. The game retains its own enabled-card, player-state, duplicate-card and loadout validation.
+F1–F4 scan the selected card for P1–P4 while the Minecraft window has focus. The default card is Sun's Grace (`a0000000`); choose another with `ARCADE_MINECRAFT_CARD=CODE`. Scanning is useful at the game's card-selection prompt. The game retains its own enabled-card, player-state, duplicate-card and loadout validation.
 
 Click Minecraft to focus it. `5` inserts a P1 credit and `1` sends the P1 primary action/Start; Enter and Space are additional P1 action keys. P1 uses arrows and `Z`/`X`/`C`; P2 uses `IJKL` and `U`/`O`/`P`. `2`–`4` send the other players' primary actions and `6`–`8` their coin switches. Numpad 1–8 are also supported. Focused host evdev events feed a bounded `key-events` protocol because the old SDL/XWayland path can miss keyboard delivery. Once a host key is seen, that source has one input authority, preventing duplicate SDL edges; focus loss releases held keys. The adapter marks the native input packet ready so CoreInputLoop applies the events. Keys are not also forwarded through uinput. Four virtual joysticks still provide device presence. `--no-keyboard` disables keyboard controls and scan hotkeys.
 
@@ -41,7 +41,7 @@ The Mojang stall was reproduced inside the visual swipe-transition routine: nati
 Send any other eight-character, case-sensitive QR code while the game runs:
 
 ```sh
-python3 scripts/minecraft-cards.py a10g0000 --player 1
+cargo run -p banana-game-minecraft-dungeons --bin banana-minecraft-card -- a10g0000 1
 ```
 
 That example scans Red Snake. The sender requires a running seeded session and does not carry events into the next launch. `--no-cards` keeps the original physical-camera implementation.
@@ -78,9 +78,7 @@ The branch's earlier isolated bypass experiments already reached archive/localiz
 ## Validation
 
 ```sh
-python3 scripts/test-minecraft-run.py
-python3 scripts/test-minecraft-seeded.py
-python3 scripts/test-minecraft-prepare.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]/gamedump.exec'
+cargo test -p banana-game-minecraft-dungeons -p banana-runtime
 cargo test --workspace
 ```
 
@@ -89,7 +87,7 @@ The runner tests verify that corrupt downloads preserve an existing library and 
 ## Explicit decoder experiment
 
 ```sh
-python3 scripts/minecraft-asset-probe.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
+# Historical asset-decoder experiment; the standalone Python harness was retired.
 ```
 
 This separate, 35-second-bounded debugger probe skips the cabinet login/ID block in memory while retaining all five file-reader configuration pointers. It uses a separate runtime/save directory, the desktop display, read-only originals and inert cabinet NVIDIA/XRandR/reboot/shutdown helpers. It verifies the original snapshot hash before using any native addresses. The normal launcher/runtime image is not patched by this experiment.
@@ -121,7 +119,7 @@ The only routes past the asset blocker are a physical HASP key or response data 
 The two plaintext seed tables were captured from TeknoParrot on Windows with `scripts/minecraft-capture-seeds.ps1` and stored locally as `runtime/minecraft/seeds.json` (not in Git). With them, `fileMap000` decrypts to a valid file map and the PROGRAM/SCENE archives open.
 
 ```sh
-python3 scripts/minecraft-seeded.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
+cargo run -p banana-desktop -- --launch-minecraft 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
 ```
 
 The runner builds `runtime/minecraft-seeded/game.seeded` from the import-repaired dump, changing only that runtime copy:
@@ -139,7 +137,7 @@ The original `game` and `Patch` are bound read-only at their cabinet paths so th
 
 ### Joysticks, region and factory setup (2026-11-05)
 
-- **Joysticks:** the game lists joysticks through its built-in SDL, then runs `udevadm info` on each one. A normal Bubblewrap `--ro-bind` of `/dev/input` is `nodev`, so SDL found 0 devices. The launcher now creates four uinput pads (`scripts/minecraft-joysticks.py`) and `--dev-bind`s only those four nodes. The P1–P4 joystick warnings are gone. `--no-joysticks` and `--no-keyboard` turn this off.
+- **Joysticks:** the game lists joysticks through its built-in SDL, then runs `udevadm info` on each one. A normal Bubblewrap `--ro-bind` of `/dev/input` is `nodev`, so SDL found 0 devices. The launcher now creates four uinput pads (the crate’s Rust `input` module) and `--dev-bind`s only those four nodes. The P1–P4 joystick warnings are gone. `--no-joysticks` and `--no-keyboard` turn this off.
 - **Region:** the country byte at `0x17bad20` is normally loaded from dongle memory by the skipped init block, so it stayed 0. The launcher presets it (`--country`, default 48, the value in the supplied cabinet's own gamelog), and the setter at `0x4a5440` now stores the byte in memory only.
 - **Factory setup:** `ATTRACT_FACTORY_SETUP_INCOMP` is shown while the flag at `0x179d100` is 0. That flag normally comes from dongle memory (`0x438bc0`). The launcher presets it to 1 and makes the loader return success. The warning is gone.
 

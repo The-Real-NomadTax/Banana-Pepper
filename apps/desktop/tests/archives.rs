@@ -2,6 +2,34 @@
 use serde_json::Value;
 use std::{fs, path::Path, process::Command};
 
+#[test]
+fn relocated_distribution_scans_archives_without_using_checkout_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let bundle = temp.path().join("Moved Banana Pepper [portable]");
+    fs::create_dir(&bundle).unwrap();
+    fs::write(bundle.join("banana-pepper.dist"), "v1").unwrap();
+    let executable = bundle.join(format!("arcade-desktop{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(env!("CARGO_BIN_EXE_arcade-desktop"), &executable).unwrap();
+    let info = Command::new(&executable).arg("--runtime-info").current_dir(temp.path()).output().unwrap();
+    assert!(info.status.success(), "{}", String::from_utf8_lossy(&info.stderr));
+    let info: Value = serde_json::from_slice(&info.stdout).unwrap();
+    assert_eq!(info["distribution"], true);
+    assert_eq!(Path::new(info["root"].as_str().unwrap()), bundle.canonicalize().unwrap());
+    let source = temp.path().join("game");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(source.join("data")).unwrap();
+    fs::write(source.join("game"), elf(64)).unwrap();
+    let archive = temp.path().join("game.zar");
+    zarchive_rs::pack_dir(&source, &archive).unwrap();
+    let scan = Command::new(&executable).arg("--scan").arg(&archive)
+        .env_remove("ARCADE_ARCHIVE_CACHE").current_dir(temp.path()).output().unwrap();
+    assert!(scan.status.success(), "{}", String::from_utf8_lossy(&scan.stderr));
+    let reports: Value = serde_json::from_slice(&scan.stdout).unwrap();
+    let extracted = Path::new(profile(&reports, "minecraft")["path"].as_str().unwrap()).canonicalize().unwrap();
+    assert!(extracted.starts_with(bundle.canonicalize().unwrap().join("runtime/archive-cache")));
+    assert!(!temp.path().join("runtime").exists());
+}
+
 fn elf(bits: u8) -> Vec<u8> {
     let mut b = vec![0; if bits == 64 { 64 } else { 52 }];
     b[..7].copy_from_slice(if bits == 64 {

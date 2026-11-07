@@ -3,10 +3,7 @@ use std::{fs, path::Path, process::Command};
 pub fn launch(root: &Path) -> Result<String, String> {
     let materialized = banana_runtime::content::resolve(root)?;
     let root = materialized.as_path();
-    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
+    let project = banana_runtime::project_root()?;
     let source = crate::prepare::directory(root)
         .canonicalize()
         .map_err(|e| e.to_string())?;
@@ -23,7 +20,11 @@ pub fn launch(root: &Path) -> Result<String, String> {
     crate::prepare::prepare(
         &source,
         &output,
-        &project.join("target/i686-pc-windows-msvc/release/inpout32.dll"),
+        &banana_runtime::resource_path(
+            &project,
+            "adapters/windows-x86/inpout32.dll",
+            "target/i686-pc-windows-msvc/release/inpout32.dll",
+        ),
     )?;
     let settings = banana_runtime::game_settings(&project, "ford")?;
     if ![

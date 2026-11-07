@@ -1,191 +1,99 @@
-//! Native Windows frontend -> WSL2 guest, or a Linux guest launched directly.
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
-
-#[cfg(windows)]
-fn guest_command() -> Command {
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new("wsl.exe");
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW: game windows come from WSLg.
-    if let Some(distro) = std::env::var_os("ARCADE_WSL_DISTRO") {
-        command.arg("--distribution").arg(distro);
-    }
-    command.arg("--exec");
-    command
-}
-
-#[cfg(windows)]
-fn guest_path(path: &Path) -> Result<String, String> {
-    let path = path
-        .to_str()
-        .ok_or("The selected path must be valid Unicode")?;
-    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
-    let output = guest_command()
-        .args(["wslpath", "-a", "-u", path])
-        .output()
-        .map_err(|e| format!("Cannot start WSL2: {e}. Install Ubuntu with WSLg first."))?;
-    if !output.status.success() {
-        return Err(format!(
-            "WSL path conversion failed: {}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
-}
-
+//! Minecraft's Rust runtime, shared by native Linux and the compiled WSL host.
 #[cfg(not(windows))]
-fn guest_path(path: &Path) -> Result<String, String> {
-    path.to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "Path must be valid Unicode".into())
-}
+use std::fs;
+use std::path::Path;
+#[path = "image.rs"]
+pub mod image;
+#[cfg(any(target_os = "linux", test))]
+#[path = "minecraft_native.rs"]
+mod native;
 
 pub fn run(root: &Path, mode: &str) -> Result<String, String> {
-    let materialized = banana_runtime::content::resolve(root)?;
-    let root = materialized.as_path();
-    if !matches!(mode, "probe" | "launch" | "setup") {
+    if !matches!(mode, "launch" | "probe" | "setup") {
         return Err("Unknown Minecraft operation".into());
     }
-    let game = crate::prepare::directory(root)
+    let project = banana_runtime::project_root()?;
+    let root = banana_runtime::content::resolve(root)?;
+    let game = crate::prepare::directory(&root)
         .canonicalize()
-        .map_err(|e| format!("Minecraft game folder was not found: {e}"))?;
-    let executable = game.join("gamedump.exec");
-    if mode != "setup" {
-        crate::prepare::verify_dump(&executable)?;
-    }
-    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = project.join("runtime/minecraft");
-    std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-    let output = output.canonicalize().map_err(|e| e.to_string())?;
-    std::fs::write(
-        output.join("minecraft_prepare.py"),
-        include_bytes!("../../../scripts/minecraft-prepare.py"),
-    )
-    .map_err(|e| e.to_string())?;
-    let game_arg = guest_path(&game)?;
-    let output_arg = guest_path(&output)?;
+        .map_err(|e| e.to_string())?;
     #[cfg(windows)]
-    let mut command = {
-        let mut c = guest_command();
-        c.arg("python3");
-        c
-    };
-    #[cfg(not(windows))]
-    let mut command = Command::new("python3");
-    if mode == "launch" {
-        // Keep the seeded runner's helpers together, while sharing the existing
-        // libraries, captured seeds and save directory with command-line runs.
-        let scripts = output.join("scripts");
-        std::fs::create_dir_all(&scripts).map_err(|e| e.to_string())?;
-        for (name, bytes) in LAUNCH_SCRIPTS {
-            std::fs::write(scripts.join(name), bytes).map_err(|e| e.to_string())?;
-        }
-        command.args(launch_args(
-            &guest_path(&scripts)?,
-            &game_arg,
-            &guest_path(&project)?,
-        ));
-    } else {
-        command.args(["-", &game_arg, &output_arg, mode]);
-    }
-    let mut child = command
-        .stdin(if mode == "launch" {
-            Stdio::null()
+    {
+        let status = banana_wsl::run_game(
+            &project,
+            &banana_runtime::linux_host(&project),
+            "minecraft",
+            mode,
+            &game,
+        )?;
+        return if status.success() {
+            Ok("Minecraft WSL session completed".into())
         } else {
-            Stdio::piped()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Cannot start Minecraft runner: {e}"))?;
-    if mode != "launch" {
-        child
-            .stdin
-            .take()
-            .ok_or("Guest stdin unavailable")?
-            .write_all(include_bytes!("../../../scripts/minecraft-run.py"))
-            .map_err(|e| e.to_string())?;
+            Err(format!(
+                "Minecraft WSL session failed ({status}); inspect runtime/minecraft"
+            ))
+        };
     }
-    let result = child.wait_with_output().map_err(|e| e.to_string())?;
-    let message = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    if result.status.success() {
-        Ok(message)
-    } else {
-        Err(message)
-    }
-}
-
-const LAUNCH_SCRIPTS: &[(&str, &[u8])] = &[
-    (
-        "minecraft-seeded.py",
-        include_bytes!("../../../scripts/minecraft-seeded.py"),
-    ),
-    (
-        "minecraft-run.py",
-        include_bytes!("../../../scripts/minecraft-run.py"),
-    ),
-    (
-        "minecraft-prepare.py",
-        include_bytes!("../../../scripts/minecraft-prepare.py"),
-    ),
-    (
-        "minecraft-joysticks.py",
-        include_bytes!("../../../scripts/minecraft-joysticks.py"),
-    ),
-    (
-        "minecraft-cards.py",
-        include_bytes!("../../../scripts/minecraft-cards.py"),
-    ),
-];
-
-fn launch_args(scripts: &str, game: &str, project: &str) -> Vec<String> {
-    vec![
-        format!("{scripts}/minecraft-seeded.py"),
-        game.into(),
-        "--project-root".into(),
-        project.into(),
-    ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn launch_uses_seeded_runner_and_preserves_paths_with_spaces() {
-        assert_eq!(
-            launch_args(
-                "/project/runtime/minecraft/scripts",
-                "/games/Minecraft Dungeons",
-                "/my project"
-            ),
-            [
-                "/project/runtime/minecraft/scripts/minecraft-seeded.py",
-                "/games/Minecraft Dungeons",
-                "--project-root",
-                "/my project"
-            ]
-        );
-        for name in [
-            "minecraft-seeded.py",
-            "minecraft-run.py",
-            "minecraft-prepare.py",
-            "minecraft-joysticks.py",
-            "minecraft-cards.py",
-        ] {
-            assert!(
-                LAUNCH_SCRIPTS
-                    .iter()
-                    .any(|(script, bytes)| *script == name && !bytes.is_empty())
-            );
+    #[cfg(not(windows))]
+    {
+        if !cfg!(target_os = "linux") {
+            return Err("Minecraft currently requires Linux or WSL".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            native::run(&project, &game, mode)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err("Minecraft requires Linux or WSL".into())
         }
     }
+}
+
+pub fn scan_card(player: u8, code: &str) -> Result<String, String> {
+    validate_card(player, code)?;
+    let project = banana_runtime::project_root()?;
+    #[cfg(windows)]
+    {
+        let status = banana_wsl::run_game(
+            &project,
+            &banana_runtime::linux_host(&project),
+            "minecraft",
+            &format!("scan:{player}:{code}"),
+            &project,
+        )?;
+        if !status.success() {
+            return Err("Minecraft card scan failed".into());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use std::io::Write;
+        let output = project.join("runtime/minecraft-seeded");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .open(output.join("session.lock"))
+            .map_err(|e| e.to_string())?;
+        match lock.try_lock() {
+            Ok(()) => return Err("Minecraft is not running".into()),
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        let mut events = fs::OpenOptions::new()
+            .append(true)
+            .open(output.join("card-events"))
+            .map_err(|e| e.to_string())?;
+        writeln!(events, "{player} {code}").map_err(|e| e.to_string())?;
+    }
+    Ok(format!("Queued card {code} for player {player}"))
+}
+
+pub(super) fn validate_card(player: u8, code: &str) -> Result<(), String> {
+    if !(1..=4).contains(&player)
+        || code.len() != 8
+        || !code.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return Err("Card requires player 1–4 and exactly eight ASCII letters/digits".into());
+    }
+    Ok(())
 }

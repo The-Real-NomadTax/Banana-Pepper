@@ -1,353 +1,164 @@
-//! Linux desktop session and private-display probe in a bubblewrap sandbox.
-use banana_settings::GameSettings;
-use std::path::Path;
+//! Native Linux sessions and typed startup probe events for Big Buck.
+use banana_runtime::{
+    Sandbox, process,
+    session::{self, Action, Event, Plan, Program},
+};
+use std::{fs, path::Path};
 
-#[cfg(target_os = "linux")]
-fn run_big_buck(games_root: &Path, output: &Path, desktop: bool) -> Result<String, String> {
-    let materialized = banana_runtime::content::resolve(games_root)?;
-    let games_root = materialized.as_path();
-    use std::{
-        fs,
-        process::{Command, Stdio},
-    };
-    let game = crate::prepare::directory(games_root)
+fn run(games_root: &Path, output: &Path, desktop: bool) -> Result<String, String> {
+    if !cfg!(target_os = "linux") {
+        return Err("Big Buck native execution requires Linux".into());
+    }
+    let root = banana_runtime::content::resolve(games_root)?;
+    let game = crate::prepare::directory(&root)
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    fs::create_dir_all(output).map_err(|e| e.to_string())?;
+    let _lock = process::lock(output)?;
     let output = output.canonicalize().map_err(|e| e.to_string())?;
-    let _session_lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(output.join("session.lock"))
-        .map_err(|e| e.to_string())?;
-    _session_lock.try_lock().map_err(|e| {
-        format!(
-            "Another Big Buck Hunter session is already using {}: {e}",
-            output.display()
-        )
-    })?;
-    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    // Settings apply to the desktop session; the private-display probe keeps
-    // its fixed software-rendered, muted configuration.
+    let project = banana_runtime::project_root()?;
     let settings = if desktop {
         banana_runtime::game_settings(&project, "big_buck")?
     } else {
-        GameSettings { audio: false, ..GameSettings::defaults(&crate::settings::SETTINGS) }
+        banana_settings::GameSettings {
+            audio: false,
+            ..banana_settings::GameSettings::defaults(&crate::settings::SETTINGS)
+        }
     };
-    let shim = project.join("target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so");
-    if !shim.is_file() {
-        return Err("Build the guest shim first: cargo build -p arcade-linux-shim --target i686-unknown-linux-gnu".into());
-    }
-    let xvfb = if Path::new("/usr/bin/Xvfb").is_file() {
-        "/usr/bin/Xvfb".into()
-    } else {
-        project.join("runtime/tools/xvfb/usr/bin/Xvfb")
-    };
-    if !desktop && !xvfb.is_file() {
-        return Err("Xvfb required. Install your distribution's Xvfb package or extract it under runtime/tools/xvfb.".into());
-    }
-    let source_hash = crate::prepare::SOURCE_SHA256;
-    let prepared_hash = crate::prepare::prepare(&game.join("game"), &output.join("game"))?;
+    let hash = crate::prepare::prepare(&game.join("game"), &output.join("game"))?;
     crate::prepare::seed_saves(&game.join("bbh3user"), &output.join("bbh3user"))
         .map_err(|e| e.to_string())?;
+    let shim = banana_runtime::resource_path(
+        &project,
+        "adapters/linux-x86/libarcade_linux_shim.so",
+        "target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so",
+    );
     fs::copy(shim, output.join("libarcade_linux_shim.so")).map_err(|e| e.to_string())?;
-    fs::write(
-        output.join("probe.sh"),
-        include_str!("../../../scripts/big-buck-probe.sh"),
-    )
-    .map_err(|e| e.to_string())?;
-    for file in [
-        "screen.png",
-        "windows.txt",
-        "game-exit-code.txt",
-        "tracking.png",
-        "after-start.png",
-        "after-start2.png",
-        "game-select.png",
-        "after-shot.png",
-        "mode-select.png",
-        "adventure-select.png",
-        "adventure-intro.png",
-        "records.png",
-        "instructions.png",
-        "later-screen.png",
-        "site-select.png",
-        "hunt.png",
-    ] {
-        match fs::remove_file(output.join(file)) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.to_string()),
-        }
+    for name in ["screen.png", "windows.txt", "game-exit-code.txt"] {
+        let _ = fs::remove_file(output.join(name));
     }
-    let log = fs::File::create(output.join("runner.log")).map_err(|e| e.to_string())?;
-    let mut command = if desktop {
-        Command::new("bwrap")
-    } else {
-        let mut command = Command::new("timeout");
-        command.args(["-k", "2s", "53s", "bwrap"]);
-        command
-    };
-    command.args([
-        "--unshare-all",
-        "--die-with-parent",
-        "--clearenv",
-        "--setenv",
-        "PATH",
-        "/usr/bin",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-    ]);
-    // Preserve the host's actual library layout (merged /usr and Debian layouts).
-    for name in ["lib", "lib32", "lib64", "bin"] {
-        let path = format!("/{name}");
-        if let Ok(link) = fs::read_link(&path) {
-            command.arg("--symlink").arg(link).arg(&path);
-        } else if Path::new(&path).exists() {
-            command.args(["--ro-bind", &path, &path]);
-        }
-    }
-    command.args([
-        "--dev",
-        "/dev",
-        "--proc",
-        "/proc",
-        "--tmpfs",
-        "/tmp",
-        "--ro-bind-try",
-        "/etc/fonts",
-        "/etc/fonts",
-        "--ro-bind-try",
-        "/etc/ld.so.cache",
-        "/etc/ld.so.cache",
-    ]);
-    // Expose only the desktop playback socket; no microphone device or home tree.
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(format!(
-                    "/run/user/{}",
-                    fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(1000)
-                ))
-            });
-        let server = std::env::var("PULSE_SERVER").ok();
-        let socket = server
-            .as_deref()
-            .and_then(|s| {
-                s.strip_prefix("unix:")
-                    .or_else(|| s.starts_with('/').then_some(s))
-            })
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| runtime.join("pulse/native"));
-        if settings.audio && socket.exists() {
-            command.arg("--ro-bind").arg(socket).args([
-                "/tmp/arcade-pulse/native",
-                "--setenv",
-                "PULSE_SERVER",
-                "unix:/tmp/arcade-pulse/native",
-                "--setenv",
-                "ARCADE_BBH_AUDIO",
-                "1",
-            ]);
-            let sink = (!settings.audio_sink.is_empty())
-                .then(|| settings.audio_sink.clone().into())
-                .or_else(|| std::env::var_os("ARCADE_AUDIO_SINK"));
-            if let Some(sink) = sink {
-                command.args(["--setenv", "PULSE_SINK"]).arg(sink);
-            }
-            let cookie = std::env::var_os("PULSE_COOKIE")
-                .map(std::path::PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(|h| std::path::PathBuf::from(h).join(".config/pulse/cookie"))
-                });
-            if let Some(cookie) = cookie.filter(|p| p.is_file()) {
-                command.arg("--ro-bind").arg(cookie).args([
-                    "/tmp/arcade-pulse/cookie",
-                    "--setenv",
-                    "PULSE_COOKIE",
-                    "/tmp/arcade-pulse/cookie",
-                ]);
-            }
-        }
-    }
-    command
-        .arg("--ro-bind")
-        .arg(&game)
-        .arg("/game")
-        .arg("--bind")
-        .arg(&output)
-        .arg("/work")
-        .arg("--ro-bind")
-        .arg(output.join("game"))
-        .arg("/game/game")
-        .arg("--ro-bind")
-        .arg(game.join("bbh3data"))
-        .arg("/bbh3data")
-        .arg("--bind")
-        .arg(output.join("bbh3user"))
-        .arg("/bbh3user")
-        .args(["--chdir", "/game"]);
+    let mut s = Sandbox::new();
+    s.bind(&game, "/game", true)
+        .bind(&output, "/work", false)
+        .bind(output.join("game"), "/game/game", true)
+        .bind(game.join("bbh3data"), "/bbh3data", true)
+        .bind(output.join("bbh3user"), "/bbh3user", false)
+        .chdir("/game");
+    let audio = s.audio(desktop && settings.audio, &settings.audio_sink, "pulse");
+    s.env("ARCADE_BBH_AUDIO", if audio == "dummy" { "0" } else { "1" });
+    let mut program = Program::new("/game/game", &[]);
+    program
+        .env
+        .insert("LD_PRELOAD".into(), "/work/libarcade_linux_shim.so".into());
+    program.env.insert("ARCADE_BBH_ADAPTER".into(), "1".into());
+    let mut plan = Plan::new(program, "Banana pepper - Big Buck Hunter Pro");
     if desktop {
-        let display = std::env::var("DISPLAY")
-            .map_err(|_| "No X11 DISPLAY found. An X11 or XWayland desktop is required.")?;
-        let number = display
-            .strip_prefix(':')
-            .and_then(|s| s.split('.').next())
-            .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-            .ok_or("Desktop mode currently requires a local DISPLAY such as :0 or :1")?;
-        let socket = format!("/tmp/.X11-unix/X{number}");
-        if !Path::new(&socket).exists() {
-            return Err(format!("X11 socket missing: {socket}"));
-        }
-        command.args([
-            "--ro-bind",
-            &socket,
-            &socket,
-            "--setenv",
-            "DISPLAY",
-            &display,
-        ]);
-        let auth = std::env::var_os("XAUTHORITY")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|p| std::path::PathBuf::from(p).join(".Xauthority"))
-            });
-        if let Some(auth) = auth.filter(|p| p.is_file()) {
-            command.arg("--ro-bind").arg(auth).args([
-                "/tmp/arcade.Xauthority",
-                "--setenv",
-                "XAUTHORITY",
-                "/tmp/arcade.Xauthority",
-            ]);
-        }
-        let controls = banana_input::controls::Bindings::load(&project.join("controls.cfg"))?;
-        command
-            .args(["--setenv", "ARCADE_BBH_KEYS"])
-            .arg(controls.env_value("big_buck")?);
-        // Controllers: bindings, and only the controller device nodes.
-        for (key, value) in banana_runtime::pad_env(&project, "big_buck")? {
-            command.args(["--setenv", key]).arg(value);
-        }
-        for device in banana_runtime::pad_devices(&settings.input_assignment()) {
-            command.arg("--dev-bind").arg(&device).arg(&device);
-        }
-        // Window size, fullscreen, vsync and renderer from settings.cfg.
-        for (key, value) in settings.guest_env() {
-            command.args(["--setenv", key]).arg(value);
-        }
+        s.desktop()?;
         if settings.renderer == banana_settings::Renderer::Gpu {
-            for device in [
-                "/dev/dri",
-                "/dev/nvidia0",
-                "/dev/nvidiactl",
-                "/dev/nvidia-modeset",
-                "/dev/nvidia-uvm",
-            ] {
-                if Path::new(device).exists() {
-                    command.args(["--dev-bind", device, device]);
-                }
-            }
-            for path in ["/sys", "/proc/driver/nvidia"] {
-                if Path::new(path).exists() {
-                    command.args(["--ro-bind", path, path]);
-                }
-            }
+            s.gpu();
         }
-        command.args([
-            "--setenv",
-            "HOME",
-            "/tmp",
-            "--setenv",
-            "ARCADE_BBH_ADAPTER",
-            "1",
-            "--setenv",
-            "LD_PRELOAD",
-            "/work/libarcade_linux_shim.so",
-            "/game/game",
-        ]);
+        banana_runtime::sandbox_settings(&mut s, &project, "big_buck", &settings)?;
+        s.env(
+            "ARCADE_BBH_KEYS",
+            banana_input::controls::Bindings::load(&project.join("controls.cfg"))?
+                .env_value("big_buck")?,
+        );
     } else {
-        command
-            .arg("--ro-bind")
-            .arg(xvfb)
-            .arg("/work/Xvfb")
-            .args(["/bin/bash", "/work/probe.sh"]);
+        let xvfb = Path::new("/usr/bin/Xvfb");
+        if !xvfb.is_file() {
+            return Err("Xvfb is required for private startup diagnostics".into());
+        }
+        s.bind(xvfb, "/Xvfb", true)
+            .env("DISPLAY", ":0")
+            .env("LIBGL_ALWAYS_SOFTWARE", "1")
+            .env("__GLX_VENDOR_LIBRARY_NAME", "mesa")
+            .env(
+                "__EGL_VENDOR_LIBRARY_FILENAMES",
+                "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+            );
+        plan.private_display = Some(("/Xvfb".into(), 1024, 768));
+        plan.timeout_ms = Some(45000);
+        plan.capture_every_ms = None;
+        plan.game = Program::new(
+            "strace",
+            &[
+                "-f",
+                "-s",
+                "160",
+                "-o",
+                "/work/startup.strace",
+                "-e",
+                "trace=open,openat,connect,ioctl,write,execve",
+                "-E",
+                "ARCADE_BBH_ADAPTER=1",
+                "-E",
+                "LD_PRELOAD=/work/libarcade_linux_shim.so",
+                "/game/game",
+            ],
+        );
+        plan.events = probe_events();
     }
-    command
-        .stdin(Stdio::null())
-        .stdout(log.try_clone().map_err(|e| e.to_string())?)
-        .stderr(log);
-    let status = command
-        .status()
-        .map_err(|e| format!("Cannot start probe (requires timeout and bwrap): {e}"))?;
-    if desktop {
-        return if status.success() {
-            Ok("Big Buck Hunter closed. Desktop logs: runtime/big-buck-desktop/runner.log".into())
-        } else {
-            Err(format!(
-                "Big Buck Hunter exited with {status}; see {}",
-                output.join("runner.log").display()
-            ))
-        };
-    }
-    if !status.success() {
+    let code = session::launch(&mut s, &project, &output, &plan)?;
+    let opened = fs::read_to_string(output.join("windows.txt")).is_ok_and(|s| !s.trim().is_empty())
+        && output.join("screen.png").is_file();
+    fs::write(output.join("result.json"),serde_json::to_vec_pretty(&serde_json::json!({"source_sha256":crate::prepare::SOURCE_SHA256,"prepared_sha256":hash,"exit_code":code,"window_created":opened,"gameplay_verified":false,"display":if desktop{"desktop"}else{"private Xvfb"}})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    if code != 0 && !(code == 124 && !desktop) {
         return Err(format!(
-            "Private startup failed ({status}); see {}",
-            output.join("runner.log").display()
+            "Big Buck exited with {code}; inspect {}",
+            output.join("game.log").display()
         ));
     }
-    let windows = fs::read_to_string(output.join("windows.txt")).unwrap_or_default();
-    let opened = !windows.trim().is_empty() && output.join("screen.png").is_file();
-    let message = if opened {
-        "Game window opened on the private display. Inspect screen.png; cabinet I/O and gameplay are not validated."
-    } else {
-        "Game did not create the expected window. Inspect stderr.log and xvfb.log."
+    if !desktop && !opened {
+        return Err(format!(
+            "No game window captured; inspect {}",
+            output.display()
+        ));
+    }
+    Ok(format!(
+        "Big Buck session closed; logs and captures: {}",
+        output.display()
+    ))
+}
+fn probe_events() -> Vec<Event> {
+    let mut out = Vec::new();
+    let mut event = |second: u64, action| {
+        out.push(Event {
+            at_ms: second * 1000,
+            action,
+        })
     };
-    let manifest = serde_json::json!({
-        "source_sha256": source_hash, "prepared_sha256": prepared_hash,
-        "window_created": opened, "message": message,
-        "game_exit_code": fs::read_to_string(output.join("game-exit-code.txt")).unwrap_or_default().trim(),
-        "display": "private Xvfb; software Mesa; no host display or network",
-    });
-    fs::write(
-        output.join("result.json"),
-        serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
+    event(2, Action::Key("t".into()));
+    event(3, Action::Capture("tracking.png".into()));
+    event(3, Action::Key("1".into()));
+    event(4, Action::Capture("after-start.png".into()));
+    event(4, Action::Key("1".into()));
+    event(6, Action::Capture("after-start2.png".into()));
+    event(6, Action::Key("5".into()));
+    event(7, Action::Key("1".into()));
+    for (time, name, x, y) in [
+        (10, "game-select.png", 160, 220),
+        (12, "after-shot.png", 160, 220),
+        (15, "mode-select.png", 160, 140),
+        (18, "adventure-select.png", 160, 180),
+        (21, "adventure-intro.png", 160, 180),
+        (24, "records.png", 160, 180),
+    ] {
+        event(time, Action::Capture(name.into()));
+        event(time, Action::Click(x, y, 1));
+    }
+    event(27, Action::Capture("instructions.png".into()));
+    event(32, Action::Click(320, 240, 1));
+    event(34, Action::Capture("site-select.png".into()));
+    event(34, Action::Click(120, 150, 1));
+    event(38, Action::Capture("hunt.png".into()));
+    out
+}
+pub fn probe_big_buck(root: &Path, output: &Path) -> Result<String, String> {
+    run(root, output, false)
+}
+pub fn launch_big_buck(root: &Path) -> Result<String, String> {
+    run(
+        root,
+        &banana_runtime::project_root()?.join("runtime/big-buck-desktop"),
+        true,
     )
-    .map_err(|e| e.to_string())?;
-    if opened {
-        Ok(format!("{message} Reports: {}", output.display()))
-    } else {
-        Err(format!("{message} Reports: {}", output.display()))
-    }
-}
-
-pub fn probe_big_buck(games_root: &Path, output: &Path) -> Result<String, String> {
-    #[cfg(target_os = "linux")]
-    {
-        run_big_buck(games_root, output, false)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (games_root, output);
-        Err("Big Buck Hunter requires Linux".into())
-    }
-}
-pub fn launch_big_buck(games_root: &Path) -> Result<String, String> {
-    #[cfg(target_os = "linux")]
-    {
-        run_big_buck(games_root, Path::new("runtime/big-buck-desktop"), true)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = games_root;
-        Err("Big Buck Hunter requires Linux".into())
-    }
 }

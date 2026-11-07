@@ -68,6 +68,10 @@ impl GameCompat for MinecraftDungeons {
         ]
     }
     fn run(&self, root: &Path, action: &str) -> Result<String, String> {
+        if let Some(scan) = action.strip_prefix("scan:") {
+            let (player, code) = scan.split_once(':').ok_or("Invalid card scan action")?;
+            return runtime::scan_card(player.parse().map_err(|_| "Invalid card scan player")?, code);
+        }
         match action {
             "launch" | "probe" | "setup" => runtime::run(root, action),
             _ => Err(unsupported(action)),

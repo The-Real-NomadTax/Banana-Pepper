@@ -1,39 +1,13 @@
 //! Reproducible native startup diagnosis. No existing arcade loaders are invoked.
 use crate::prepare::Build;
 use std::path::Path;
+#[path = "desktop.rs"]
+#[cfg(any(target_os = "linux", test))]
+mod desktop;
 
 #[cfg(target_os = "linux")]
 pub fn launch(root: &Path) -> Result<String, String> {
-    let materialized = banana_runtime::content::resolve(root)?;
-    let root = materialized.as_path();
-    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let root = root.canonicalize().map_err(|e| e.to_string())?;
-    let output = project.join("runtime/jurassic");
-    std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-    crate::prepare::prepare_desktop(
-        &crate::prepare::directory(&root).join("game_legacy_patched"),
-        &output.join("game-desktop"),
-    )?;
-    let controls = banana_input::controls::Bindings::load(&project.join("controls.cfg"))?;
-    let settings = banana_runtime::game_settings(&project, "jurassic")?;
-    let mut command = std::process::Command::new("python3");
-    command
-        .arg(project.join("scripts/jurassic-explore.py"))
-        .args(["--launch", "--desktop", "--games-root"])
-        .arg(root)
-        .env("ARCADE_JURASSIC_KEYS", controls.env_value("jurassic")?)
-        .envs(banana_runtime::pad_env(&project, "jurassic")?);
-    banana_runtime::settings_env(&mut command, &settings);
-    let status = command
-        .status()
-        .map_err(|e| format!("Cannot launch Jurassic desktop runtime: {e}"))?;
-    if !status.success() {
-        return Err(format!("Jurassic desktop runtime exited with {status}"));
-    }
-    Ok("Jurassic Park desktop session closed.".into())
+    desktop::launch(root)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -41,6 +15,7 @@ pub fn launch(_root: &Path) -> Result<String, String> {
     Err("Jurassic Park native desktop launch currently requires Linux".into())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn conclusion(trace: &str, log: &str) -> &'static str {
     if trace.contains("SIGSEGV") {
         "Jurassic Park crashed during initialization; inspect the startup trace."
@@ -64,8 +39,9 @@ pub fn probe(root: &Path, build: Build) -> Result<String, String> {
     let game = crate::prepare::directory(root)
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    let output = Path::new("runtime/jurassic");
-    fs::create_dir_all(output).map_err(|e| e.to_string())?;
+    let project = banana_runtime::project_root()?;
+    let output = project.join("runtime/jurassic");
+    fs::create_dir_all(&output).map_err(|e| e.to_string())?;
     let output = output.canonicalize().map_err(|e| e.to_string())?;
     let lock = fs::OpenOptions::new()
         .create(true)
@@ -81,10 +57,10 @@ pub fn probe(root: &Path, build: Build) -> Result<String, String> {
         "libPhysXCore.so.1",
         "libNxCooking.so.1",
     ] {
-        let library = output.join("libs").join(name);
+        let library = banana_runtime::dependencies::legacy_directory(&project).join(name);
         let info = banana_core::inspect_file(&library).map_err(|e| {
             format!(
-                "Missing/invalid legacy library {}: {e}. Run scripts/setup-jurassic-libs.sh.",
+                "Missing/invalid legacy library {}: {e}. Run just setup-runtime.",
                 library.display()
             )
         })?;
@@ -130,10 +106,13 @@ pub fn probe(root: &Path, build: Build) -> Result<String, String> {
         }
     }
     if matches!(build, Build::Native) {
-        let shim = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so")
-            .canonicalize()
-            .map_err(|e| e.to_string())?;
+        let shim = banana_runtime::resource_path(
+            &project,
+            "adapters/linux-x86/libarcade_linux_shim.so",
+            "target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so",
+        )
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
         command.arg("--ro-bind").arg(shim).args([
             "/shim.so",
             "--setenv",
@@ -156,7 +135,7 @@ pub fn probe(root: &Path, build: Build) -> Result<String, String> {
         .arg(&snapshot)
         .arg("/pm/game")
         .arg("--ro-bind")
-        .arg(output.join("libs"))
+        .arg(banana_runtime::dependencies::legacy_directory(&project))
         .arg("/runtime-libs")
         .args([
             "--setenv",

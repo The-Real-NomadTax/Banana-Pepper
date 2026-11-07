@@ -26,6 +26,7 @@ members = [
     "backends/wsl",
     "guest/linux-shim",
     "tools/zar",
+    "tools/dist",
 ]
 default-members = ["apps/desktop"]
 resolver = "3"

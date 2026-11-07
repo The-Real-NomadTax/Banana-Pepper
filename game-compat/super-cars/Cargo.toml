@@ -6,6 +6,7 @@ license.workspace = true
 description = "The Fast and the Furious Super Cars compatibility for Banana Pepper"
 
 [dependencies]
+banana-wine.workspace = true
 banana-api.workspace = true
 banana-core.workspace = true
 banana-input.workspace = true

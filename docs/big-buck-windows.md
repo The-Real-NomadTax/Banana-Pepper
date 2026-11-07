@@ -9,7 +9,7 @@ Minecraft continues to use its existing WSL runner.
 
 ```powershell
 rustup target add i686-pc-windows-msvc
-cargo build -p banana-water --bin water-buck --target i686-pc-windows-msvc
+cargo build -p banana-water --bin water-buck --target i686-pc-windows-msvc --release --locked
 cargo run -p banana-desktop -- --launch-big-buck "C:\path\to\Big Bug Hunter Pro"
 # Build and run through the helper:
 .\scripts\run-windows.ps1 -Game big-buck -Backend water -Mode launch -GamesRoot "C:\path\to\Big Bug Hunter Pro"
@@ -81,14 +81,14 @@ compatible multilib compiler), `libglut-dev:i386`, `libglu1-mesa-dev:i386`,
 `libsdl1.2-dev:i386` and `libpulse0:i386`. Build the Linux launcher separately:
 
 ```sh
-bash scripts/build-big-buck-wsl.sh
+just build-wsl
 ```
 
-The script uses an installed Linux Rust toolchain, or the local toolchain under
-`runtime/wsl-toolchain/` if present. The launcher goes into `target/wsl/debug/`
-and the i686 guest shim into `target/i686-unknown-linux-gnu/debug/`. The standard
-Linux desktop runner still uses read-only asset mounts and separate saves.
-Private Xvfb probes additionally require Xvfb, strace, xdotool and ImageMagick.
+The build helper uses an installed WSL Rust toolchain, or the isolated toolchain
+under `runtime/wsl-toolchain/` when present. It builds the compiled
+`banana-game-host`, `banana-session` and guest adapters under `target/wsl/`,
+then includes them in the distribution. No shell or Python launcher is used.
+Private-display probes require Xvfb, strace, xdotool and ImageMagick.
 Set `ARCADE_WSL_DISTRO` to choose a non-default distro.
 
 On this Windows host, Ubuntu 26.04 built both artifacts and opened Big Buck's

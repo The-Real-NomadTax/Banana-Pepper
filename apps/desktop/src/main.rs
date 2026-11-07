@@ -24,6 +24,17 @@ fn main() {
 fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     banana_compat::install();
+    let runtime_root = banana_runtime::project_root()?;
+    if args.first().is_some_and(|a| a == "--runtime-info") && args.len() == 1 {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "root": runtime_root,
+            "distribution": banana_runtime::is_distribution(&runtime_root),
+            "settings": runtime_root.join("settings.cfg"),
+            "controls": runtime_root.join("controls.cfg"),
+            "default_archive_cache": runtime_root.join("runtime/archive-cache"),
+        }))?);
+        return Ok(());
+    }
     // Per-game command-line entry points, declared by each game crate.
     if let Some(flag) = args.first().and_then(|a| a.to_str()) {
         for game in banana_api::games() {
@@ -66,7 +77,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             .map(|c| format!(" | {} [PATH]", c.flag))
             .collect();
         return Err(format!(
-            "Usage: arcade-desktop [--games-root PATH | --scan [PATH]{}]",
+            "Usage: arcade-desktop [--runtime-info | --games-root PATH | --scan [PATH]{}]",
             flags.concat()
         )
         .into());
@@ -137,7 +148,7 @@ struct ControlsUi {
 }
 impl ControlsUi {
     fn load() -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../controls.cfg");
+        let path = banana_runtime::project_root().expect("Runtime root validated at startup").join("controls.cfg");
         let (bindings, message) = match Bindings::load(&path) {
             Ok(bindings) => (bindings, String::new()),
             Err(e) => (
@@ -181,7 +192,7 @@ struct SettingsUi {
 }
 impl SettingsUi {
     fn load() -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../settings.cfg");
+        let path = banana_runtime::project_root().expect("Runtime root validated at startup").join("settings.cfg");
         let (settings, message) = match Settings::load(&path) {
             Ok(settings) => (settings, String::new()),
             Err(e) => (

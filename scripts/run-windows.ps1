@@ -17,7 +17,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Ford adapter build failed. Install rustup target i686-pc-windows-msvc and LLVM lld-link.' }
     }
     if ($Mode -ne 'workbench' -and $Game -eq 'big-buck' -and $Backend -ne 'wsl') {
-        & cargo build -p banana-water --bin water-buck --target i686-pc-windows-msvc
+        & cargo build -p banana-water --bin water-buck --target i686-pc-windows-msvc --release --locked
         if ($LASTEXITCODE -ne 0) { throw 'Water Big Buck worker build failed.' }
     }
     & cargo build -p banana-desktop

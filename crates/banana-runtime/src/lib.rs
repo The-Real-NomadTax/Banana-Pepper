@@ -2,17 +2,101 @@
 //! controller hand-off, content resolution and launch dispatch. Individual
 //! games supply their own launchers through `banana-api`.
 pub mod content;
+pub mod dependencies;
+pub mod process;
+pub mod session;
+pub use banana_native::Sandbox;
 
 use banana_settings::{GameSettings, Settings};
 use std::path::{Path, PathBuf};
 
-/// The repository root, which holds `settings.cfg`, `controls.cfg`,
-/// `scripts/`, `runtime/` and the guest build outputs in `target/`.
+/// Distribution root beside the executable, or the checkout for development.
+/// Resolve from the executable rather than the working directory so shortcuts
+/// and relocated bundles use their own settings, adapters, saves and caches.
 pub fn project_root() -> Result<PathBuf, String> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| e.to_string())
+    root_for(
+        &std::env::current_exe().map_err(|e| e.to_string())?,
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
+    )
+}
+
+pub const DIST_MARKER: &str = "banana-pepper.dist";
+
+fn root_for(executable: &Path, development: &Path) -> Result<PathBuf, String> {
+    let directory = executable
+        .parent()
+        .ok_or("Executable has no parent directory")?;
+    for root in directory.ancestors().take(3) {
+        if is_distribution(root) {
+            return root.canonicalize().map_err(|e| e.to_string());
+        }
+    }
+    development.canonicalize().map_err(|e| e.to_string())
+}
+
+pub fn is_distribution(root: &Path) -> bool {
+    root.join(DIST_MARKER).is_file()
+}
+
+/// Bundles use their organized resources exclusively; never fall back to a
+/// developer's checkout when an adapter is missing from a shipped package.
+pub fn resource_path(root: &Path, bundled: &str, development: &str) -> PathBuf {
+    root.join(if is_distribution(root) {
+        bundled
+    } else {
+        development
+    })
+}
+
+/// Compiled registry host for Linux/WSL, separate from the desktop frontend.
+pub fn linux_host(project: &Path) -> PathBuf {
+    resource_path(
+        project,
+        "helpers/linux/banana-game-host",
+        "target/wsl/release/banana-game-host",
+    )
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn relocated_bundle_and_nested_helpers_ignore_a_missing_checkout() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("Moved Banana Pepper [portable]");
+        std::fs::create_dir_all(bundle.join("helpers/linux")).unwrap();
+        std::fs::write(bundle.join(DIST_MARKER), "v1").unwrap();
+        let missing = temp.path().join("deleted checkout");
+        let expected = bundle.canonicalize().unwrap();
+        assert_eq!(
+            root_for(&bundle.join("arcade-desktop.exe"), &missing).unwrap(),
+            expected
+        );
+        assert_eq!(
+            root_for(&bundle.join("helpers/linux/arcade-desktop"), &missing).unwrap(),
+            expected
+        );
+        // A missing shipped adapter must not resolve to a development artifact.
+        assert_eq!(
+            resource_path(&bundle, "adapters/shim.so", "target/debug/shim.so"),
+            bundle.join("adapters/shim.so")
+        );
+    }
+
+    #[test]
+    fn development_executables_keep_the_checkout_layout() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        assert_eq!(
+            root_for(&root.join("target/debug/arcade-desktop"), &root).unwrap(),
+            root
+        );
+        assert_eq!(
+            resource_path(&root, "adapters/shim.so", "target/debug/shim.so"),
+            root.join("target/debug/shim.so")
+        );
+    }
 }
 
 /// Run `action` for the registered game `id` against content below `root`.
@@ -28,18 +112,25 @@ pub fn game_settings(project: &Path, game: &str) -> Result<GameSettings, String>
         .clone())
 }
 
-/// Hand settings to a Python launch harness: audio choices for arcade_audio.py
-/// and guest environment variables for arcade_settings.py.
-pub fn settings_env(command: &mut std::process::Command, settings: &GameSettings) {
-    command
-        .env("ARCADE_AUDIO", if settings.audio { "1" } else { "0" })
-        .env("ARCADE_RESOLUTION", settings.resolution_text())
-        .env("ARCADE_GUEST_ENV", settings.guest_env_value());
-    if settings.audio_sink.is_empty() {
-        command.env_remove("ARCADE_AUDIO_SINK");
-    } else {
-        command.env("ARCADE_AUDIO_SINK", &settings.audio_sink);
+/// Apply declared settings and device hand-off directly to a native sandbox.
+pub fn sandbox_settings(
+    sandbox: &mut Sandbox,
+    project: &Path,
+    game: &str,
+    settings: &GameSettings,
+) -> Result<(), String> {
+    sandbox.env("ARCADE_RESOLUTION", settings.resolution_text());
+    for (key, value) in settings.guest_env() {
+        sandbox.env(key, value);
     }
+    for (key, value) in pad_env(project, game)? {
+        sandbox.env(key, value);
+    }
+    #[cfg(target_os = "linux")]
+    for device in pad_devices(&settings.input_assignment()) {
+        sandbox.device(device);
+    }
+    Ok(())
 }
 
 /// Input device nodes (`/dev/input/eventN`) to expose to a sandboxed Linux
@@ -87,10 +178,14 @@ pub fn device_names(kind: banana_input::pad::Device) -> Vec<String> {
         };
         for entry in entries.flatten() {
             let node = entry.file_name().to_string_lossy().into_owned();
-            let Some(number) = node.strip_prefix("event").and_then(|n| n.parse::<u32>().ok()) else {
+            let Some(number) = node
+                .strip_prefix("event")
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
                 continue;
             };
-            let read = |path: &str| std::fs::read_to_string(entry.path().join(path)).unwrap_or_default();
+            let read =
+                |path: &str| std::fs::read_to_string(entry.path().join(path)).unwrap_or_default();
             let caps = |kind: &str| read(&format!("device/capabilities/{kind}"));
             if device_kind(&caps("key"), &caps("rel"), &caps("abs")) == Some(kind) {
                 found.push((number, read("device/name").trim().to_owned()));
@@ -117,7 +212,11 @@ fn device_kind(key: &str, rel: &str, abs: &str) -> Option<banana_input::pad::Dev
             .map(|w| u64::from_str_radix(w, 16).unwrap_or(0))
             .collect()
     }
-    let has = |words: &[u64], code: usize| words.get(code / 64).is_some_and(|w| w >> (code % 64) & 1 != 0);
+    let has = |words: &[u64], code: usize| {
+        words
+            .get(code / 64)
+            .is_some_and(|w| w >> (code % 64) & 1 != 0)
+    };
     let (key, rel, abs) = (bits(key), bits(rel), bits(abs));
     banana_input::pad::classify(
         |code| has(&key, usize::from(code)),
@@ -172,7 +271,10 @@ pub fn pad_key_env(project: &Path, game: &str) -> Result<Vec<(&'static str, Stri
 fn device_capabilities() {
     use banana_input::pad::Device;
     // Xbox Wireless Controller (Bluetooth): a gamepad.
-    assert_eq!(device_kind("7fff000000000000 0 8000000000 0 0", "0", "3003f"), Some(Device::XInput));
+    assert_eq!(
+        device_kind("7fff000000000000 0 8000000000 0 0", "0", "3003f"),
+        Some(Device::XInput)
+    );
     // A full keyboard that also reports BTN_SOUTH (remote-desktop virtual keyboard).
     assert_eq!(
         device_kind(
@@ -184,12 +286,17 @@ fn device_capabilities() {
         None
     );
     // A USB mouse (BTN_LEFT..BTN_EXTRA, REL_X/Y/WHEEL) and an absolute light gun.
-    assert_eq!(device_kind("1f0000 0 0 0 0", "143", "0"), Some(Device::Mouse));
+    assert_eq!(
+        device_kind("1f0000 0 0 0 0", "143", "0"),
+        Some(Device::Mouse)
+    );
     assert_eq!(device_kind("70000 0 0 0 0", "0", "3"), Some(Device::Mouse));
     // A generic USB gamepad (BTN_TRIGGER..BTN_BASE4, X/Y/Z/RZ, hat).
-    assert_eq!(device_kind("fff00000000 0 0 0 0", "0", "30027"), Some(Device::DirectInput));
+    assert_eq!(
+        device_kind("fff00000000 0 0 0 0", "0", "30027"),
+        Some(Device::DirectInput)
+    );
     assert_eq!(device_kind("", "", ""), None);
 }
-
 
 pub mod android;

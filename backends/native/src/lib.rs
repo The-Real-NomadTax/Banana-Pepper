@@ -1,6 +1,8 @@
 //! Native execution: the host runs the guest executable directly. On Linux,
 //! ELF guests run inside a bubblewrap sandbox with a 32-bit userspace.
 use banana_api::{Availability, BackendKind, ExecutionBackend};
+pub mod sandbox;
+pub use sandbox::Sandbox;
 
 pub struct Native;
 pub static BACKEND: Native = Native;
