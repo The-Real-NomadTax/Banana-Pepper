@@ -1,3 +1,4 @@
+#![allow(unsafe_op_in_unsafe_fn)]
 //! Raw Input mice and light guns for Water's Big Buck window: each device is
 //! read on its own, so two mice or guns can aim two guns (settings.cfg
 //! `p1_input` / `p2_input = rawinput`). Devices are numbered in the order
@@ -6,7 +7,8 @@
 //! Relative mice move an aim point across the window; absolute devices
 //! (most light guns) point directly. Buttons follow `pad::MOUSE_BUTTONS`
 //! (left = RT, right = LT, middle = A, side = Start, extra = Back).
-use super::*;
+use crate::pad;
+use std::ptr;
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::UI::Input::{
     GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
@@ -27,7 +29,7 @@ static mut MICE: Vec<Mouse> = Vec::new();
 
 /// Starts Raw Input for `window` when a player uses it.
 pub unsafe fn register(window: HWND) {
-    if !jamma::inputs().uses(pad::Method::RawInput) {
+    if !crate::jamma::inputs().uses(pad::Method::RawInput) {
         return;
     }
     let device = RAWINPUTDEVICE {
@@ -38,11 +40,11 @@ pub unsafe fn register(window: HWND) {
     };
     if RegisterRawInputDevices(&device, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32) == 0 {
         eprintln!(
-            "[water] Raw Input unavailable: {}",
+            "[arcade] Raw Input unavailable: {}",
             std::io::Error::last_os_error()
         );
     } else {
-        eprintln!("[water] Raw Input: each mouse or light gun is read on its own");
+        eprintln!("[arcade] Raw Input: each mouse or light gun is read on its own");
     }
 }
 
@@ -70,7 +72,7 @@ pub unsafe fn input(l: LPARAM) {
                 buttons: 0,
                 pointer: None,
             });
-            eprintln!("[water] Raw Input mouse {} found", mice.len());
+            eprintln!("[arcade] Raw Input mouse {} found", mice.len());
             mice.len() - 1
         }
     };

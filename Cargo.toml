@@ -13,7 +13,6 @@ members = [
     "game-compat/*/guest",
     "game-compat/*/hook",
     "game-compat/*/io",
-    "game-compat/*/water",
     "tools/dist",
 ]
 default-members = ["apps/desktop"]

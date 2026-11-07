@@ -1,4 +1,7 @@
-use super::*;
+#![allow(unsafe_op_in_unsafe_fn)]
+use super::HOST;
+use crate::jamma;
+use std::ffi::CString;
 static mut STEP: usize = 0;
 static mut HUNT_TICK: u128 = u128::MAX;
 static mut MOUSE_RELEASE: Option<(u128, i32, i32, i32)> = None;
@@ -77,7 +80,7 @@ pub unsafe extern "C" fn probe(elapsed: u64) {
     }
     if !name.is_empty() {
         capture(name);
-        eprintln!("[water] probe checkpoint {name}");
+        eprintln!("[arcade] probe checkpoint {name}");
     }
     if std::env::var_os("ARCADE_NATIVE_FIRE_PROBE").is_some() && (50000..60000).contains(&elapsed) {
         // Observe the first hunt's outcome without later shots hitting a doe.

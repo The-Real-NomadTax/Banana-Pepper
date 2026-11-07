@@ -1,10 +1,15 @@
-//! Build-specific game-side JAMMA API adapter, not a wire-level serial emulator.
+//! Build-specific game-side JAMMA API adapter, not a wire-level serial
+//! emulator. One implementation for every platform: the Linux preload and
+//! the Water adapter differ only in where input events and controller states
+//! come from (`crate::platform`).
 use crate::inputs::Switches;
+use crate::pad;
+use banana_input::session;
 use std::{
     ffi::c_int,
     sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
+        Mutex, OnceLock,
+        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     },
 };
 static SWITCHES: Mutex<Switches> = Mutex::new(Switches {
@@ -15,33 +20,29 @@ static SWITCHES: Mutex<Switches> = Mutex::new(Switches {
 static CALLBACK: AtomicU32 = AtomicU32::new(0);
 static BITS: AtomicU32 = AtomicU32::new(0);
 static SEEN: AtomicU64 = AtomicU64::new(0);
-static INSTALLED: AtomicBool = AtomicBool::new(false);
+static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
 
-core::arch::global_asm!(
-    r#"
-.hidden arcade_jamma_dispatch
-.global arcade_jamma_op
-.hidden arcade_jamma_op
-.type arcade_jamma_op,@function
-arcade_jamma_op:
-    push ebp
-    mov ebp, esp
-    and esp, -16
-    sub esp, 12
-    lea eax, [ebp + 8]
-    push eax
-    call arcade_jamma_dispatch
-    mov esp, ebp
-    pop ebp
-    ret
-"#
-);
-unsafe extern "C" {
-    fn arcade_jamma_op(op: u32, ...) -> c_int;
+/// The game's variadic `JammaOp(op, ...)`: hand the address of the first
+/// argument to [`dispatch`] on a 16-byte aligned stack.
+#[cfg(target_arch = "x86")]
+#[unsafe(naked)]
+unsafe extern "C" fn op() -> c_int {
+    core::arch::naked_asm!(
+        "push ebp",
+        "mov ebp, esp",
+        "and esp, -16",
+        "sub esp, 12",
+        "lea eax, [ebp + 8]",
+        "push eax",
+        "call {dispatch}",
+        "mov esp, ebp",
+        "pop ebp",
+        "ret",
+        dispatch = sym dispatch,
+    );
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn arcade_jamma_dispatch(args: *const u32) -> c_int {
+unsafe extern "C" fn dispatch(args: *const u32) -> c_int {
     let op = unsafe { *args };
     let code = op & 255;
     if code < 64 && SEEN.fetch_or(1u64 << code, Ordering::Relaxed) & (1u64 << code) == 0 {
@@ -85,8 +86,42 @@ unsafe extern "C" fn arcade_jamma_dispatch(args: *const u32) -> c_int {
         _ => -9000,
     }
 }
+#[cfg(target_arch = "x86")]
 extern "C" fn success() -> c_int {
     0
+}
+
+/// Replace the build's JAMMA Init, Close, Loop and Op functions in memory,
+/// after checking every expected prologue. Runs once, on the game's main
+/// thread, inside the hash-verified ELF32 image.
+#[cfg(target_arch = "x86")]
+pub unsafe fn install() -> Result<(), String> {
+    INSTALLED
+        .get_or_init(|| {
+            let hooks = [
+                (0x80d9ce5usize, success as *const () as usize),
+                (0x80d9e81, success as *const () as usize),
+                (0x80dbf32, success as *const () as usize),
+                (0x80da943, op as *const () as usize),
+            ];
+            for &(address, _) in &hooks {
+                if unsafe { std::slice::from_raw_parts(address as *const u8, 3) }
+                    != [0x55, 0x89, 0xe5]
+                {
+                    return Err(format!("incompatible JAMMA prologue at {address:#x}"));
+                }
+            }
+            for (address, target) in hooks {
+                let mut patch = [0xb8, 0, 0, 0, 0, 0xff, 0xe0];
+                patch[1..5].copy_from_slice(&(target as u32).to_le_bytes());
+                unsafe {
+                    std::ptr::copy_nonoverlapping(patch.as_ptr(), address as *mut u8, patch.len());
+                }
+            }
+            eprintln!("[arcade] virtual JAMMA API installed");
+            Ok(())
+        })
+        .clone()
 }
 
 /// (ASCII key, switch index); matches banana-input's default controls.cfg.
@@ -100,7 +135,7 @@ const DEFAULT_KEYS: &[(u8, usize)] = &[
     (b'9', 10),
     (b' ', 1),
 ];
-static KEYS: std::sync::OnceLock<Vec<(u8, usize)>> = std::sync::OnceLock::new();
+static KEYS: OnceLock<Vec<(u8, usize)>> = OnceLock::new();
 
 /// Parses ARCADE_BBH_KEYS ("switch:ascii,..."), written from controls.cfg.
 fn parse_keys(value: &str) -> Result<Vec<(u8, usize)>, String> {
@@ -138,11 +173,19 @@ fn switch_for(key: u8) -> Option<usize> {
         .map(|(_, index)| *index)
 }
 
+/// A keyboard key (ASCII, either case) went down or up.
 pub fn key(key: u8, down: bool) {
     let Some(index) = switch_for(key) else {
         return;
     };
     set_switch(follow_mouse(index, inputs().mouse()), down);
+}
+
+/// Release every held switch (focus lost, window closed, exiting).
+pub fn release() {
+    for index in 0..20 {
+        set_switch(index, false);
+    }
 }
 
 /// Gun one's trigger and pump switches belong to whoever has the system
@@ -157,49 +200,22 @@ fn follow_mouse(index: usize, mouse: Option<usize>) -> usize {
 
 fn set_switch(index: usize, down: bool) {
     let mut switches = SWITCHES.lock().unwrap_or_else(|e| e.into_inner());
+    let before = switches.held;
     switches.set(index, down);
     BITS.store(switches.held >> 1, Ordering::Relaxed);
+    let changed = switches.held != before;
     drop(switches);
-    eprintln!(
-        "[arcade] switch {index} {}",
-        if down { "down" } else { "up" }
-    );
-}
-
-/// Only called in the hash-verified ELF32 guest on its main thread.
-pub unsafe fn install() {
-    if !std::env::var_os("ARCADE_BBH_ADAPTER").is_some_and(|v| v == "1") {
-        return;
+    if changed {
+        eprintln!(
+            "[arcade] switch {index} {}",
+            if down { "down" } else { "up" }
+        );
     }
-    if INSTALLED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    // Check every expected prologue before changing any code.
-    let hooks = [
-        (0x80d9ce5usize, success as *const () as usize),
-        (0x80d9e81, success as *const () as usize),
-        (0x80dbf32, success as *const () as usize),
-        (0x80da943, arcade_jamma_op as *const () as usize),
-    ];
-    for &(address, _) in &hooks {
-        if unsafe { std::slice::from_raw_parts(address as *const u8, 3) } != [0x55, 0x89, 0xe5] {
-            eprintln!("[arcade] incompatible JAMMA prologue at {address:#x}; adapter disabled");
-            return;
-        }
-    }
-    for (address, target) in hooks {
-        let mut patch = [0xb8, 0, 0, 0, 0, 0xff, 0xe0];
-        patch[1..5].copy_from_slice(&(target as u32).to_le_bytes());
-        unsafe {
-            std::ptr::copy_nonoverlapping(patch.as_ptr(), address as *mut u8, patch.len());
-        }
-    }
-    eprintln!("[arcade] virtual JAMMA API installed");
 }
 
 /// Last aimed position per gun (mouse or controller), in 640x480 game
 /// coordinates. The mouse always aims gun one.
-static AIM: [[AtomicI32; 2]; crate::pad::MAX_PLAYERS] = [
+static AIM: [[AtomicI32; 2]; pad::MAX_PLAYERS] = [
     [AtomicI32::new(320), AtomicI32::new(240)],
     [AtomicI32::new(320), AtomicI32::new(240)],
 ];
@@ -221,20 +237,20 @@ const GUN2_PUMP: usize = 4;
 const CROSSHAIR_SPEED: i32 = 700;
 
 struct Controller {
-    reader: crate::evdev_pad::Reader,
-    inputs: crate::pad::Inputs,
+    devices: crate::platform::Devices,
+    inputs: pad::Inputs,
     /// Each player's controller buttons (controls.cfg; `[big_buck.p2]`).
-    bindings: [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS],
+    bindings: [Vec<(u32, u32)>; pad::MAX_PLAYERS],
     /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
-    moves: [crate::pad::Movement; crate::pad::MAX_PLAYERS],
-    edges: crate::evdev_pad::Edges,
+    moves: [pad::Movement; pad::MAX_PLAYERS],
+    edges: session::Edges,
     last: std::time::Instant,
 }
 static CONTROLLER: Mutex<Option<Controller>> = Mutex::new(None);
 
 /// Who plays with which device (settings.cfg `players`, `p1_input`, `p2_input`).
-pub fn inputs() -> crate::pad::Inputs {
-    crate::evdev_pad::inputs()
+pub fn inputs() -> pad::Inputs {
+    session::inputs()
 }
 
 /// Players in this session.
@@ -242,8 +258,10 @@ pub fn players() -> usize {
     inputs().players
 }
 
-/// One controller frame (GLUT timer): crosshairs, shots, pumps and switches.
-pub fn controller_frame() {
+/// One controller frame (a GLUT timer on Linux, a message-loop pass in
+/// Water): crosshairs, shots, pumps and switches. `focused` is false while
+/// another window has the keyboard; controllers then read as idle.
+pub fn controller_frame(focused: bool) {
     let mut guard = CONTROLLER.lock().unwrap_or_else(|e| e.into_inner());
     let c = guard.get_or_insert_with(|| {
         let inputs = inputs();
@@ -258,57 +276,68 @@ pub fn controller_frame() {
             );
         }
         Controller {
-            reader: crate::evdev_pad::Reader::new(),
+            devices: crate::platform::Devices::new(&inputs),
             inputs,
             bindings: [
-                crate::evdev_pad::bindings(DEFAULT_PAD),
-                crate::evdev_pad::bindings_p2(DEFAULT_PAD_P2),
+                session::bindings(DEFAULT_PAD),
+                session::bindings_p2(DEFAULT_PAD_P2),
             ],
-            moves: [0, 1].map(|p| crate::evdev_pad::movement(p, crate::pad::Movement::STICKS)),
+            moves: [0, 1].map(|p| session::movement(p, pad::Movement::STICKS)),
             edges: Default::default(),
             last: std::time::Instant::now(),
         }
     });
-    let states = c.reader.read_players(&c.inputs);
+    let states = if focused {
+        c.devices.read_players(&c.inputs)
+    } else {
+        [pad::Pad::default(); pad::MAX_PLAYERS]
+    };
     if states
         .iter()
-        .any(|s| s.held(crate::pad::BACK) && s.held(crate::pad::START))
+        .any(|s| s.held(pad::BACK) && s.held(pad::START))
     {
+        drop(guard);
+        release();
         eprintln!("[arcade] Back + Start: exiting");
         std::process::exit(0);
     }
     let elapsed = c.last.elapsed().as_millis() as u32;
     c.last = std::time::Instant::now();
-    let mut cursors = [(0, 0); crate::pad::MAX_PLAYERS];
+    let mut cursors = [(0, 0); pad::MAX_PLAYERS];
+    let mut aims = Vec::new();
     for gun in 0..c.inputs.players {
         let (x, y) = aim_position(gun);
-        let mut cursor = crate::pad::Cursor::new(x, y);
+        let mut cursor = pad::Cursor::new(x, y);
         // A mouse or light gun of the player's own points directly.
         if let Some((px, py)) = states[gun].pointer_moved(&c.moves[gun], 640, 480) {
             if (px, py) != (x, y) {
-                cursor = crate::pad::Cursor::new(px, py);
-                aim_gun(gun, px, py, false);
+                cursor = pad::Cursor::new(px, py);
+                aims.push((gun, px, py));
             }
         } else if cursor.step_mode(
-            crate::evdev_pad::aim_mode(gun),
+            session::aim_mode(gun),
             states[gun].movement(&c.moves[gun]),
             elapsed,
             CROSSHAIR_SPEED,
             640,
             480,
         ) {
-            aim_gun(gun, cursor.x, cursor.y, false);
+            aims.push((gun, cursor.x, cursor.y));
         }
         cursors[gun] = (cursor.x, cursor.y);
     }
-    let players: Vec<(crate::pad::Pad, &[(u32, u32)])> = (0..c.inputs.players)
+    let players: Vec<(pad::Pad, &[(u32, u32)])> = (0..c.inputs.players)
         .map(|p| (states[p], c.bindings[p].as_slice()))
         .collect();
     let mut changes = Vec::new();
     c.edges
         .update_players(&players, |target, down| changes.push((target, down)));
     drop(players);
+    // The game's callback runs without the controller lock held.
     drop(guard);
+    for (gun, x, y) in aims {
+        aim_gun(gun, x, y, false);
+    }
     for (target, down) in changes {
         match target {
             PAD_FIRE | PAD_FIRE_P2 => {
@@ -328,7 +357,7 @@ pub fn controller_frame() {
 
 /// Where a gun's crosshair is drawn, in 640x480 game coordinates.
 pub fn aim_position(gun: usize) -> (c_int, c_int) {
-    let [x, y] = &AIM[gun.min(crate::pad::MAX_PLAYERS - 1)];
+    let [x, y] = &AIM[gun.min(pad::MAX_PLAYERS - 1)];
     (x.load(Ordering::Relaxed), y.load(Ordering::Relaxed))
 }
 
@@ -346,9 +375,9 @@ fn gun_event(gun: usize, shoot: bool) -> u32 {
     (if shoot { 1 } else { 9 }) | ((gun as u32 & 0xf) << 8)
 }
 
-/// Deliver the observed gun callback shape on the GLUT/game thread.
+/// Deliver the observed gun callback shape on the game's thread.
 fn aim_gun(gun: usize, x: c_int, y: c_int, shoot: bool) {
-    let gun = gun.min(crate::pad::MAX_PLAYERS - 1);
+    let gun = gun.min(pad::MAX_PLAYERS - 1);
     let (x, y) = (x.clamp(0, 639), y.clamp(0, 479));
     AIM[gun][0].store(x, Ordering::Relaxed);
     AIM[gun][1].store(y, Ordering::Relaxed);
@@ -376,6 +405,7 @@ fn aim_gun(gun: usize, x: c_int, y: c_int, shoot: bool) {
     }
 }
 
+/// A system-mouse button (0 left = trigger, 2 right = pump) at a game position.
 pub fn mouse(button: c_int, down: bool, x: c_int, y: c_int) {
     let mouse = inputs().mouse();
     if mouse.is_none() {
@@ -387,24 +417,24 @@ pub fn mouse(button: c_int, down: bool, x: c_int, y: c_int) {
         2 => 3,
         _ => return,
     };
-    let index = follow_mouse(index, mouse);
-    let mut switches = SWITCHES.lock().unwrap_or_else(|e| e.into_inner());
-    switches.set(index, down);
-    BITS.store(switches.held >> 1, Ordering::Relaxed);
-    drop(switches);
+    set_switch(follow_mouse(index, mouse), down);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_arch = "x86")]
     #[test]
     fn variadic_bridge_returns_edges_and_acknowledges_dirty_state() {
+        let op: unsafe extern "C" fn(u32, ...) -> c_int =
+            unsafe { std::mem::transmute(op as *const ()) };
         let mut dirty = 0u32;
         let mut counters = 0u32;
         key(b't', true);
         key(b't', true);
         let result = unsafe {
-            arcade_jamma_op(
+            op(
                 0x112,
                 &mut dirty as *mut u32 as u32,
                 &mut counters as *mut u32 as u32,
@@ -414,12 +444,18 @@ mod tests {
         assert_eq!(dirty, 1);
         assert_eq!(unsafe { *(counters as *const u32).add(11) }, 1);
         unsafe {
-            arcade_jamma_op(0x112, &mut dirty as *mut u32 as u32, 0u32);
+            op(0x112, &mut dirty as *mut u32 as u32, 0u32);
         }
         assert_eq!(dirty, 0);
         key(b't', false);
         assert_eq!(unsafe { *(counters as *const u32).add(11) }, 2);
-        assert_eq!(unsafe { arcade_jamma_op(0xff) }, -9000);
+        assert_eq!(unsafe { op(0xff) }, -9000);
+    }
+
+    #[test]
+    fn unknown_operations_are_refused() {
+        assert_eq!(unsafe { dispatch([0xffu32].as_ptr()) }, -9000);
+        assert_eq!(unsafe { dispatch([0x1u32].as_ptr()) }, 0x30001);
     }
 
     #[test]

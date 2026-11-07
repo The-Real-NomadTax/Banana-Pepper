@@ -3,17 +3,30 @@ name="banana-big-buck-guest"
 version.workspace=true
 edition.workspace=true
 license.workspace=true
+description="Big Buck Hunter Pro's in-process patch, for Linux preload and Water"
 [lib]
 name="arcade_big_buck"
 crate-type=["cdylib"]
 [dependencies]
+banana-input.workspace=true
+[target.'cfg(target_os = "linux")'.dependencies]
 libc="0.2"
 png="0.18.1"
-banana-input.workspace=true
+[target.'cfg(windows)'.dependencies]
+banana-water.workspace=true
+windows-sys={version="0.61.2",features=["Win32_Foundation","Win32_UI_Input"]}
 
+# One patch, built for each way the game runs.
 [[package.metadata.banana.artifacts]]
 name="arcade_big_buck"
 kind="lib"
 target="i686-unknown-linux-gnu"
 hosts=["linux", "android"]
 destination="games/big-buck/linux-x86/libarcade_big_buck.so"
+
+[[package.metadata.banana.artifacts]]
+name="arcade_big_buck"
+kind="lib"
+target="i686-pc-windows-msvc"
+hosts=["windows"]
+destination="games/big-buck/windows-x86/arcade_big_buck.dll"

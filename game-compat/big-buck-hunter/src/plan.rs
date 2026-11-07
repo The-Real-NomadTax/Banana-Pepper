@@ -31,9 +31,11 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
             ("ARCADE_FULLSCREEN".into(), "0".into()),
         ]);
     }
+    // The same patch on every host: Water loads it beside the game on
+    // Windows; elsewhere it is preloaded into the game.
     if cfg!(windows) {
         p.adapters.push(Adapter {
-            artifact: "banana_buck_water".into(),
+            artifact: "arcade_big_buck".into(),
             destination: ".banana/water-adapter.dll".into(),
             preload: false,
         });

@@ -201,18 +201,9 @@ name = "banana-big-buck-guest"
 version = "0.1.0"
 dependencies = [
  "banana-input",
+ "banana-water",
  "libc",
  "png",
-]
-
-[[package]]
-name = "banana-buck-water-adapter"
-version = "0.1.0"
-dependencies = [
- "banana-input",
- "banana-settings",
- "banana-water",
- "image",
  "windows-sys 0.61.2",
 ]
 
