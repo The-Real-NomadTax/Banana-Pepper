@@ -167,6 +167,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("game_directory", type=Path)
     parser.add_argument("--seeds", type=Path)
+    parser.add_argument("--project-root", type=Path, help="project containing runtime data and the built card adapter")
     parser.add_argument("--timeout", type=int, help="stop after N seconds (testing)")
     parser.add_argument("--no-gamescope", action="store_true",
                         help="draw straight to the desktop instead of a 60 Hz gamescope window "
@@ -187,14 +188,17 @@ def main():
     parser.add_argument("--card", default="a0000000", help="eight-character QR code scanned with F1-F4 (default: Sun's Grace)")
     parser.add_argument("--gdb", type=Path, help="run under gdb with this batch script (diagnostics)")
     args = parser.parse_args()
-    project = Path(__file__).resolve().parents[1]
+    scripts = Path(__file__).resolve().parent
+    project = (args.project_root or scripts.parent).resolve()
     game = args.game_directory.resolve()
-    runner = module("minecraft_runner", project / "scripts/minecraft-run.py")
-    prepare = module("minecraft_prepare", project / "scripts/minecraft-prepare.py")
+    runner = module("minecraft_runner", scripts / "minecraft-run.py")
+    prepare = module("minecraft_prepare", scripts / "minecraft-prepare.py")
     source = (game / "gamedump.exec").read_bytes()
     if hashlib.sha256(source).hexdigest() != SOURCE_SHA256:
         raise RuntimeError("Unsupported gamedump.exec build")
     seeds_path = args.seeds or project / "runtime/minecraft/seeds.json"
+    if not seeds_path.is_file():
+        raise RuntimeError(f"Captured Minecraft seeds are missing: {seeds_path}. See docs/minecraft-seed-capture.md.")
     seeds = json.loads(seeds_path.read_text())
     if seeds.get("game_sha256") != SOURCE_SHA256:
         raise RuntimeError("Seed file was captured from a different build")
@@ -205,7 +209,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     with (output / "session.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        cards = module("minecraft_cards", project / "scripts/minecraft-cards.py")
+        cards = module("minecraft_cards", scripts / "minecraft-cards.py")
         cards.validate(1, args.card)
         if not args.no_cards:
             library = project / "target/debug/libarcade_minecraft_io.so"
@@ -239,7 +243,7 @@ def main():
                 command += ["--ro-bind", path, path]
         pads, stop = [], threading.Event()
         if not args.no_joysticks:
-            joysticks = module("minecraft_joysticks", project / "scripts/minecraft-joysticks.py")
+            joysticks = module("minecraft_joysticks", scripts / "minecraft-joysticks.py")
             pads = joysticks.make_pads(4)
             time.sleep(0.5)  # let udev create the nodes and tag them
             command += ["--dir", "/dev/input"]

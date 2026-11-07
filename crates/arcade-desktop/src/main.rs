@@ -1304,7 +1304,7 @@ impl eframe::App for ArcadeApp {
                     let game_root = self.game_roots.get(id).cloned().unwrap_or_else(|| Ok(PathBuf::from(&self.root)));
                     ui.heading(&report.profile.title);
                     ui.label(RichText::new(match id.as_str() {
-                        "minecraft" => "Experimental · Linux startup and licensing",
+                        "minecraft" => "Experimental · Seeded desktop gameplay",
                         "big-buck" => "Experimental · Desktop gameplay",
                         "super-cars" => "Experimental · Wine desktop gameplay",
                         "ford" => "Experimental · Desktop cabinet adapter",
@@ -1363,7 +1363,7 @@ impl eframe::App for ArcadeApp {
                         "super-cars" => "Arrow keys or a controller steer, accelerate and brake (stick and triggers are analog). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings.",
                         "ford" => "Arrow keys or an XInput controller drive (stick steers, triggers are analog gas/brake). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings.",
                         "big-buck" => "Mouse or controller aims and fires; right click or LT pumps. Start and coin bindings are under Settings. Esc or Back+Start exits.",
-                        "minecraft" => "Cabinet controls and services are still in development. Gameplay is not yet verified.",
+                        "minecraft" => "5 inserts a P1 coin; 1, Enter or Space starts. P1: arrows + Z/X/C. F1–F4 scan cards. Captured seeds and prepared libraries are required; HUD and gameplay issues remain.",
                         _ => "Mouse or controller sticks aim, RT fires. Start, coin and operator controls are under Settings. Esc or Back+Start exits.",
                     });
                     ui.add_space(10.0);

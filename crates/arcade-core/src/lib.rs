@@ -156,8 +156,8 @@ pub fn scan(root: &Path) -> Vec<GameReport> {
             blockers = vec![
                 "Windows uses WSL2 with WSLg; Linux uses the same isolated runner directly.".into(),
                 "Run startup diagnostics to check GLU, LAPACK, wireless/PCSC and FMOD 1.10 libraries.".into(),
-                "The measured startup failure is HASP status 7 (protection key not found). Startup diagnostics recheck the actual API status.".into(),
-                "Cabinet joystick, card-reader and security interfaces are not implemented; gameplay is unverified.".into(),
+                "Play uses locally captured runtime/minecraft/seeds.json and prepared libraries; diagnostics retain the original HASP startup check.".into(),
+                "The seeded runner supplies virtual joysticks, keyboard input and card scanners. HUD issues remain; full gameplay is unverified.".into(),
                 "Supplied gamedump.exec is a pre-existing modified build; original game and cabinet boot scripts are never run.".into(),
             ];
         }
