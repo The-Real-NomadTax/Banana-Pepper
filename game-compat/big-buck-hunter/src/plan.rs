@@ -33,13 +33,13 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
     }
     if cfg!(windows) {
         p.adapters.push(Adapter {
-            artifact: "games/big-buck/windows-x86/banana_buck_water.dll".into(),
+            artifact: "banana_buck_water".into(),
             destination: ".banana/water-adapter.dll".into(),
             preload: false,
         });
     } else {
         p.adapters.push(Adapter {
-            artifact: "games/big-buck/linux-x86/libarcade_big_buck.so".into(),
+            artifact: "arcade_big_buck".into(),
             destination: ".banana/guest.so".into(),
             preload: true,
         });

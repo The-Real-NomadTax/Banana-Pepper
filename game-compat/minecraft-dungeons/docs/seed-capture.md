@@ -6,7 +6,7 @@ Goal: record the two decrypted asset seed tables that TeknoParrot's dongle emula
 
 ## Why
 
-- The supplied folder matches the official TeknoParrot 3.07 dump file-for-file, and that dump has no `hasp/` response cache (see `docs/minecraft-linux.md`).
+- The supplied folder matches the official TeknoParrot 3.07 dump file-for-file, and that dump has no `hasp/` response cache (see `docs/linux.md`).
 - `TeknoParrot64.dll` is packed, so the answers can't be read from the file.
 - On Linux the TeknoParrot loader spins without loading the game, so the capture has to happen on Windows.
 
@@ -24,7 +24,7 @@ After a successful startup these addresses hold the plaintext seeds. `0x16d41e0`
 
 ## Steps on Windows
 
-1. Get `scripts/minecraft-capture-seeds.ps1` onto the Windows machine.
+1. Get `game-compat/minecraft-dungeons/tools/capture-seeds.ps1` onto the Windows machine.
 2. Open PowerShell as the same user that runs TeknoParrot:
    ```powershell
    powershell -ExecutionPolicy Bypass -File minecraft-capture-seeds.ps1

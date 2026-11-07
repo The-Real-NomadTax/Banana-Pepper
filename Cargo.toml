@@ -1,36 +1,18 @@
 [workspace]
+# Each game owns game-compat/<game>/ and its adapter crates beside it.
 members = [
-    "crates/banana-api",
-    "crates/banana-core",
-    "crates/banana-compat",
-    "crates/banana-runtime",
-    "crates/banana-settings",
-    "crates/banana-input",
-    "crates/banana-content",
-    "crates/banana-vfs",
-    "crates/banana-ffi",
+    "crates/*",
     "apps/desktop",
-    "game-compat/aliens-armageddon",
-    "game-compat/big-buck-hunter",
-    "game-compat/jurassic-park",
-    "game-compat/super-cars",
-    "game-compat/super-cars/hook",
-    "game-compat/ford-racing",
-    "game-compat/ford-racing/hook",
-    "game-compat/minecraft-dungeons",
-    "game-compat/minecraft-dungeons/io",
-    "game-compat/skylanders-cloud-patrol",
-    "game-compat/skylanders-cloud-patrol/hook",
     "backends/android",
     "backends/native",
     "backends/wine",
     "backends/water",
-    "game-compat/big-buck-hunter/water",
     "guest/linux-shim",
-    "game-compat/aliens-armageddon/guest",
-    "game-compat/big-buck-hunter/guest",
-    "game-compat/jurassic-park/guest",
-    "tools/zar",
+    "game-compat/*",
+    "game-compat/*/guest",
+    "game-compat/*/hook",
+    "game-compat/*/io",
+    "game-compat/*/water",
     "tools/dist",
 ]
 default-members = ["apps/desktop"]
@@ -51,14 +33,6 @@ banana-settings = { path = "crates/banana-settings" }
 banana-input = { path = "crates/banana-input" }
 banana-content = { path = "crates/banana-content" }
 banana-vfs = { path = "crates/banana-vfs" }
-# Game compatibility crates (referenced only by banana-compat)
-banana-game-aliens-armageddon = { path = "game-compat/aliens-armageddon" }
-banana-game-big-buck-hunter = { path = "game-compat/big-buck-hunter" }
-banana-game-jurassic-park = { path = "game-compat/jurassic-park" }
-banana-game-super-cars = { path = "game-compat/super-cars" }
-banana-game-ford-racing = { path = "game-compat/ford-racing" }
-banana-game-minecraft-dungeons = { path = "game-compat/minecraft-dungeons" }
-banana-game-skylanders-cloud-patrol = { path = "game-compat/skylanders-cloud-patrol" }
 # Execution backends
 banana-android = { path = "backends/android" }
 banana-native = { path = "backends/native" }

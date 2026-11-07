@@ -15,7 +15,7 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
     for destination in ["PQMTClient.dll", "KaboomComDll.dll",
         "Skylanders_Data/Plugins/PQMTClient.dll", "Skylanders_Data/Plugins/KaboomComDll.dll"] {
         p.adapters.push(Adapter {
-            artifact: "games/skylanders/windows-x86/PQMTClient.dll".into(),
+            artifact: "PQMTClient".into(),
             destination: destination.into(), preload: false,
         });
     }

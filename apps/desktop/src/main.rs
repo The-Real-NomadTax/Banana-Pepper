@@ -114,6 +114,29 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    if args.first().is_some_and(|a| a == "--pack") {
+        if args.len() != 3 {
+            return Err("Usage: arcade-desktop --pack GAME-FOLDER OUTPUT.zar".into());
+        }
+        let output = PathBuf::from(&args[2]);
+        let mut last_phase = "";
+        banana_content::pack::convert(
+            &PathBuf::from(&args[1]),
+            &output,
+            &std::sync::atomic::AtomicBool::new(false),
+            |p| {
+                if p.phase == "Complete" && !p.skipped_links.is_empty() {
+                    eprintln!("{}", p.skipped_links_message());
+                }
+                if p.phase != last_phase {
+                    eprintln!("{} ({} files, {} bytes)", p.phase, p.files_total, p.bytes_total);
+                    last_phase = p.phase;
+                }
+            },
+        )?;
+        println!("Created {}", output.display());
+        return Ok(());
+    }
     if args.first().is_some_and(|a| a == "--scan") {
         if args.len() > 2 {
             return Err("Usage: arcade-desktop --scan [games-root]".into());
@@ -140,7 +163,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             .map(|c| format!(" | {} [PATH]", c.flag))
             .collect();
         return Err(format!(
-            "Usage: arcade-desktop [--runtime-info | --games-root PATH | --scan [PATH]{}]",
+            "Usage: arcade-desktop [--runtime-info | --games-root PATH | --scan [PATH] | --pack FOLDER OUTPUT.zar{}]",
             flags.concat()
         )
         .into());

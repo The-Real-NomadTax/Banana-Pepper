@@ -6,3 +6,4 @@ license.workspace = true
 description = "Android Box64/Wine process and display transport for shared mounted sessions"
 [dependencies]
 banana-api.workspace = true
+banana-content.workspace = true

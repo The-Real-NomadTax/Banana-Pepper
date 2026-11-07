@@ -45,7 +45,7 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
     });
     p.cwd = "FordRacing".into();
     p.adapters.push(Adapter {
-        artifact: "games/ford/windows-x86/inpout32.dll".into(),
+        artifact: "inpout32".into(),
         destination: "FordRacing/inpout32.dll".into(),
         preload: false,
     });

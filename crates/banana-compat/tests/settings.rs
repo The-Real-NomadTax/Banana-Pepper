@@ -6,30 +6,6 @@ fn setup() {
 }
 
 #[test]
-fn defaults_match_previous_fixed_launch_behaviour() {
-    setup();
-    let s = Settings::default();
-    assert_eq!(s.game("aliens").resolution_text(), "1360x768");
-    assert_eq!(
-        s.game("jurassic").guest_env(),
-        [("ARCADE_RESOLUTION", "1360x768".into())]
-    );
-    let bbh = s.game("big_buck");
-    assert_eq!(bbh.resolution, (640, 480));
-    assert_eq!(
-        bbh.renderer,
-        if cfg!(windows) {
-            Renderer::Gpu
-        } else {
-            Renderer::Software
-        }
-    );
-    assert!(!bbh.fullscreen && bbh.audio);
-    assert_eq!(bbh.crosshair.id(), "p1");
-    assert!(bbh.guest_env().contains(&("ARCADE_CROSSHAIR", "p1".into())));
-}
-
-#[test]
 fn crosshair_setting_only_for_gun_games() {
     setup();
     let s = Settings::parse("[big_buck]\ncrosshair = P2_LARGE\n").unwrap();

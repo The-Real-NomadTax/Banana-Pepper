@@ -349,45 +349,7 @@ pub fn start_with_env(
         );
     }
     let mount = banana_vfs::mount(view.clone(), &point).map_err(|e| e.to_string())?;
-    #[cfg(target_os = "android")]
-    {
-        if plan.guest_root.starts_with('/') {
-            mount
-                .map_namespace(&plan.guest_root, "", false)
-                .map_err(|e| e.to_string())?;
-        }
-        if plan.binary.format == "PE" {
-            if let Some((drive, relative)) = plan.guest_root.split_once(":/") {
-                if drive.len() != 1 || !drive.as_bytes()[0].is_ascii_alphabetic() {
-                    return Err("Invalid planned Windows drive".into());
-                }
-                banana_content::path(relative).map_err(|e| e.to_string())?;
-                let guest = format!(
-                    "/work/prefix/drive_{}/{relative}",
-                    drive.to_ascii_lowercase()
-                );
-                mount
-                    .map_namespace(&guest, "", false)
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-        mount
-            .map_namespace("/proc/cpuinfo", ".banana/proc/cpuinfo", true)
-            .map_err(|e| e.to_string())?;
-        for mapping in &plan.guest_mounts {
-            mount
-                .map_namespace(&mapping.target, &mapping.source, mapping.readonly)
-                .map_err(|e| e.to_string())?;
-        }
-        plan.env.insert(
-            "BANANA_VFS_SOCKET".into(),
-            mount.namespace_endpoint().to_string_lossy().into_owned(),
-        );
-        plan.env.insert(
-            "BANANA_VFS_EMPTY".into(),
-            mount.path.to_string_lossy().into_owned(),
-        );
-    }
+    selected.prepare_namespace(&mut plan, &Namespace(&mount))?;
     let handle = selected.launch(PreparedSession {
         devices,
         plan,
@@ -432,11 +394,14 @@ pub fn run_report(id: &str, source: &Path, action: ActionRequest) -> Result<Sess
 pub fn run(id: &str, source: &Path, action: ActionRequest) -> Result<String, String> {
     run_report(id, source, action).map(|r| r.message)
 }
+/// Resolve a crate-declared artifact by name: packaged location in a
+/// distribution (`artifacts.json`), build output in a checkout.
 fn resource(root: &Path, artifact: &str) -> Result<PathBuf, String> {
-    if crate::is_distribution(root) {
-        return Ok(root.join(artifact));
-    }
-    let catalog = root.join("target/artifacts.json");
+    let catalog = if crate::is_distribution(root) {
+        root.join("artifacts.json")
+    } else {
+        root.join("target/artifacts.json")
+    };
     let map: BTreeMap<String, String> = serde_json::from_slice(
         &std::fs::read(&catalog)
             .map_err(|_| "Build artifact catalog is missing. Run just build.")?,
@@ -470,6 +435,21 @@ fn cpuinfo() -> String {
     String::new()
 }
 
+struct Namespace<'a>(&'a banana_vfs::MountLease);
+impl GuestNamespace for Namespace<'_> {
+    fn root(&self) -> &Path {
+        &self.0.path
+    }
+    fn map(&self, guest: &str, source: &str, readonly: bool) -> Result<(), String> {
+        self.0
+            .map_namespace(guest, source, readonly)
+            .map_err(|e| e.to_string())
+    }
+    fn endpoint(&self) -> Option<&Path> {
+        self.0.namespace_endpoint()
+    }
+}
+
 struct Completed;
 impl SessionHandle for Completed {
     fn next_event(&mut self) -> Result<Option<SessionEvent>, String> {
@@ -483,5 +463,38 @@ impl SessionHandle for Completed {
     }
     fn wait(&mut self) -> Result<i32, String> {
         Ok(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adapters_resolve_by_artifact_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let dist = temp.path().join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join(crate::DIST_MARKER), "v2").unwrap();
+        std::fs::write(
+            dist.join("artifacts.json"),
+            r#"{"hook":"games/demo/windows-x86/hook.dll"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resource(&dist, "hook").unwrap(),
+            dist.join("games/demo/windows-x86/hook.dll")
+        );
+        assert!(resource(&dist, "games/demo/windows-x86/hook.dll").is_err());
+
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir_all(checkout.join("target")).unwrap();
+        let built = checkout.join("target/release/hook.dll");
+        std::fs::write(
+            checkout.join("target/artifacts.json"),
+            serde_json::to_vec(&BTreeMap::from([("hook", &built)])).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(resource(&checkout, "hook").unwrap(), built);
     }
 }

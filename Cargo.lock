@@ -187,6 +187,7 @@ name = "banana-android"
 version = "0.1.0"
 dependencies = [
  "banana-api",
+ "banana-content",
 ]
 
 [[package]]
@@ -532,15 +533,6 @@ name = "banana-wine"
 version = "0.1.0"
 dependencies = [
  "banana-api",
-]
-
-[[package]]
-name = "banana-zar"
-version = "0.1.0"
-dependencies = [
- "banana-content",
- "eframe",
- "rfd",
 ]
 
 [[package]]

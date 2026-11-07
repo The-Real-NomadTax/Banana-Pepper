@@ -18,6 +18,7 @@ struct Artifact {
 fn declarations(metadata: &Value, host: &str) -> Result<Vec<Artifact>, String> {
     let mut output = Vec::new();
     let mut destinations = std::collections::BTreeSet::new();
+    let mut names = std::collections::BTreeSet::new();
     for p in metadata["packages"]
         .as_array()
         .ok_or("Missing workspace packages")?
@@ -46,9 +47,13 @@ fn declarations(metadata: &Value, host: &str) -> Result<Vec<Artifact>, String> {
                 if !destinations.insert(destination.clone()) {
                     return Err(format!("Duplicate artifact destination {destination}"));
                 }
+                let name = get("name")?;
+                if !names.insert(name.clone()) {
+                    return Err(format!("Duplicate artifact name {name}"));
+                }
                 output.push(Artifact {
                     package: p["name"].as_str().ok_or("Missing package name")?.into(),
-                    name: get("name")?,
+                    name,
                     kind: get("kind")?,
                     target: get("target")?,
                     destination,
@@ -174,8 +179,20 @@ fn run() -> Result<(), String> {
                 .permissions(),
         )
         .map_err(|e| e.to_string())?;
-        catalog.insert(a.destination.clone(), source.to_string_lossy().into_owned());
+        catalog.insert(a.name.clone(), source.to_string_lossy().into_owned());
     }
+    // Plans name artifacts; the package maps each name to its location.
+    write(
+        &staging,
+        "artifacts.json",
+        &serde_json::to_vec_pretty(
+            &artifacts
+                .iter()
+                .map(|a| (a.name.clone(), a.destination.clone()))
+                .collect::<BTreeMap<_, _>>(),
+        )
+        .map_err(|e| e.to_string())?,
+    )?;
     banana_compat::install();
     if !android {
         write(
@@ -197,15 +214,27 @@ fn run() -> Result<(), String> {
         b"banana-pepper distribution v2\n",
     )?;
     write(&staging, "README.txt", include_bytes!("../README-dist.txt"))?;
-    let docs = root.join("docs");
-    for e in fs::read_dir(docs).map_err(|e| e.to_string())? {
+    // Shared docs, then each game's own docs from game-compat/<game>/docs.
+    let mut docs = vec![(root.join("docs"), "docs".to_owned())];
+    for e in fs::read_dir(root.join("game-compat")).map_err(|e| e.to_string())? {
         let e = e.map_err(|e| e.to_string())?;
-        if e.path().extension().is_some_and(|e| e == "md") {
-            write(
-                &staging,
-                &format!("docs/{}", e.file_name().to_string_lossy()),
-                &fs::read(e.path()).map_err(|e| e.to_string())?,
-            )?;
+        if e.path().join("docs").is_dir() {
+            docs.push((
+                e.path().join("docs"),
+                format!("docs/games/{}", e.file_name().to_string_lossy()),
+            ));
+        }
+    }
+    for (directory, destination) in docs {
+        for e in fs::read_dir(directory).map_err(|e| e.to_string())? {
+            let e = e.map_err(|e| e.to_string())?;
+            if e.path().extension().is_some_and(|e| e == "md") {
+                write(
+                    &staging,
+                    &format!("{destination}/{}", e.file_name().to_string_lossy()),
+                    &fs::read(e.path()).map_err(|e| e.to_string())?,
+                )?;
+            }
         }
     }
     write(&staging,"THIRD-PARTY-NOTICES.txt",b"PRoot: GPL-2.0-or-later; https://github.com/termux/proot (Android tracer built from pinned source).\nBox64: MIT; https://github.com/ptitSeb/box64\nWinFsp and winfsp-rs: GPL-3.0; https://github.com/winfsp/winfsp and https://github.com/SnowflakePowered/winfsp-rs\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\nWinFsp must be installed separately on Windows. Linux requires FUSE/fusermount and bubblewrap; Wine for PE games.\n")?;

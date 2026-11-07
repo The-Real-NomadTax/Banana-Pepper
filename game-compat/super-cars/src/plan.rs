@@ -35,7 +35,7 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
         ),
     );
     p.adapters.push(Adapter {
-        artifact: "games/super-cars/windows-x86/arcade_wine_hook.dll".into(),
+        artifact: "arcade_wine_hook".into(),
         destination: "dinput8.dll".into(),
         preload: false,
     });

@@ -216,12 +216,26 @@ impl MountLease {
         self._rootless.flush()?;
         Ok(())
     }
-    #[cfg(target_os = "android")]
+    /// Expose view path `source` ("" for the root) at absolute guest path
+    /// `guest`. Only the interception adapter (Android) supports mappings;
+    /// OS mounts expose the view at [`MountLease::path`] alone.
     pub fn map_namespace(&self, guest: &str, source: &str, readonly: bool) -> io::Result<()> {
-        self._rootless.map(guest, source, readonly)
+        #[cfg(target_os = "android")]
+        return self._rootless.map(guest, source, readonly);
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (guest, source, readonly);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "This host's mount does not support guest path mappings",
+            ))
+        }
     }
-    #[cfg(target_os = "android")]
-    pub fn namespace_endpoint(&self) -> &Path {
-        &self._rootless.socket
+    /// The socket a guest-side interception adapter connects to, if any.
+    pub fn namespace_endpoint(&self) -> Option<&Path> {
+        #[cfg(target_os = "android")]
+        return Some(self._rootless.socket.as_path());
+        #[cfg(not(target_os = "android"))]
+        None
     }
 }

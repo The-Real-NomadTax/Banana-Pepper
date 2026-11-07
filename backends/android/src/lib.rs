@@ -43,6 +43,46 @@ impl ExecutionBackend for Android {
     fn check(&self, p: &LaunchPlan) -> Result<(), CapabilityError> {
         check_host(self, p)
     }
+    /// PRoot intercepts guest paths: map the planned root (and, for Wine, its
+    /// prefix drive), the generated cpuinfo and the plan's extra mounts.
+    fn prepare_namespace(
+        &self,
+        plan: &mut LaunchPlan,
+        ns: &dyn GuestNamespace,
+    ) -> Result<(), String> {
+        if plan.guest_root.starts_with('/') {
+            ns.map(&plan.guest_root, "", false)?;
+        }
+        if plan.binary.format == "PE" {
+            if let Some((drive, relative)) = plan.guest_root.split_once(":/") {
+                if drive.len() != 1 || !drive.as_bytes()[0].is_ascii_alphabetic() {
+                    return Err("Invalid planned Windows drive".into());
+                }
+                banana_content::path(relative).map_err(|e| e.to_string())?;
+                let guest = format!(
+                    "/work/prefix/drive_{}/{relative}",
+                    drive.to_ascii_lowercase()
+                );
+                ns.map(&guest, "", false)?;
+            }
+        }
+        ns.map("/proc/cpuinfo", ".banana/proc/cpuinfo", true)?;
+        for mapping in &plan.guest_mounts {
+            ns.map(&mapping.target, &mapping.source, mapping.readonly)?;
+        }
+        let endpoint = ns
+            .endpoint()
+            .ok_or("Android sessions need the PRoot filesystem endpoint")?;
+        plan.env.insert(
+            "BANANA_VFS_SOCKET".into(),
+            endpoint.to_string_lossy().into_owned(),
+        );
+        plan.env.insert(
+            "BANANA_VFS_EMPTY".into(),
+            ns.root().to_string_lossy().into_owned(),
+        );
+        Ok(())
+    }
     fn launch(&self, s: PreparedSession) -> Result<Box<dyn SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
         let files = s

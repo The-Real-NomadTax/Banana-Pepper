@@ -44,7 +44,7 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
     p.executable = "game".into();
     p.args.push(format!("-f{}", c.settings.resolution_text()));
     p.adapters.push(Adapter {
-        artifact: "games/jurassic/linux-x86/libarcade_jurassic.so".into(),
+        artifact: "arcade_jurassic".into(),
         destination: ".banana/guest.so".into(),
         preload: true,
     });

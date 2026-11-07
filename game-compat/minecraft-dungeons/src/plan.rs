@@ -32,7 +32,7 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
     p.generated.insert(b.executable.clone(), image.into());
     p.args = vec!["-f1920x1080".into(), "-n".into()];
     p.adapters.push(Adapter {
-        artifact: "games/minecraft/linux-x86_64/libarcade_minecraft_io.so".into(),
+        artifact: "arcade_minecraft_io".into(),
         destination: ".banana/cards.so".into(),
         preload: true,
     });

@@ -116,7 +116,27 @@ pub trait ExecutionBackend: Sync {
     fn formats(&self) -> &'static [&'static str];
     fn availability(&self) -> Availability;
     fn check(&self, plan: &LaunchPlan) -> Result<(), CapabilityError>;
+    /// Runs after the view is exposed and before [`launch`](Self::launch):
+    /// map guest paths and publish adapter endpoints into the plan. Backends
+    /// that run the guest directly from the mount path need nothing here.
+    fn prepare_namespace(
+        &self,
+        _plan: &mut LaunchPlan,
+        _namespace: &dyn GuestNamespace,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn launch(&self, session: PreparedSession) -> Result<Box<dyn SessionHandle>, String>;
+}
+
+/// A session's exposed view, as seen by the backend preparing the guest.
+pub trait GuestNamespace {
+    /// Host directory where the view is exposed.
+    fn root(&self) -> &std::path::Path;
+    /// Expose view path `source` ("" for the root) at absolute guest path `guest`.
+    fn map(&self, guest: &str, source: &str, readonly: bool) -> Result<(), String>;
+    /// Endpoint a guest-side interception adapter connects to, if any.
+    fn endpoint(&self) -> Option<&std::path::Path>;
 }
 
 /// Everything unique to one supported title.

@@ -32,7 +32,7 @@ Each library entry has a stable ID bound to its content fingerprint. Moving a so
 
 The install directory can be read-only. Settings are initialized from packaged defaults or previous checkout settings. Compatibility modules declare which legacy saves or captured records can be imported. Imports preserve their sources and report conflicts. Existing generated game copies and development caches are left in place for manual housekeeping.
 
-Use `arcade-desktop --runtime-info` to inspect storage paths, `--entries` to list entry IDs, and `--scan SOURCE` to inspect a folder or archive without mounting it.
+Use `arcade-desktop --runtime-info` to inspect storage paths, `--entries` to list entry IDs, `--scan SOURCE` to inspect a folder or archive without mounting it, and `--pack FOLDER OUTPUT.zar` to archive a game folder (also available from the desktop app's ZAR compressor).
 
 ## Architecture and actions
 

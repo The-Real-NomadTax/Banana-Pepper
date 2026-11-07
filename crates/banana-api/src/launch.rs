@@ -117,6 +117,8 @@ pub struct PlanContext {
 }
 #[derive(Clone, Debug)]
 pub struct Adapter {
+    /// Artifact `name` from the owning crate's `[[package.metadata.banana.artifacts]]`;
+    /// the build catalog resolves where it was built or packaged.
     pub artifact: String,
     pub destination: String,
     pub preload: bool,

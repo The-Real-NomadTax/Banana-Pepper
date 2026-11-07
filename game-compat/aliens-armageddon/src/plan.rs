@@ -31,7 +31,7 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
         ),
     ]);
     p.adapters.push(Adapter {
-        artifact: "games/aliens/linux-x86/libarcade_aliens.so".into(),
+        artifact: "arcade_aliens".into(),
         destination: ".banana/guest.so".into(),
         preload: true,
     });

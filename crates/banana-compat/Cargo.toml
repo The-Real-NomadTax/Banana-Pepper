@@ -9,11 +9,11 @@ description = "Registry of the built-in Banana Pepper game compatibility crates"
 banana-api.workspace = true
 banana-input.workspace = true
 banana-settings.workspace = true
-banana-game-aliens-armageddon.workspace = true
-banana-game-big-buck-hunter.workspace = true
-banana-game-jurassic-park.workspace = true
-banana-game-super-cars.workspace = true
-banana-game-ford-racing.workspace = true
+banana-game-aliens-armageddon = { path = "../../game-compat/aliens-armageddon" }
+banana-game-big-buck-hunter = { path = "../../game-compat/big-buck-hunter" }
+banana-game-jurassic-park = { path = "../../game-compat/jurassic-park" }
+banana-game-super-cars = { path = "../../game-compat/super-cars" }
+banana-game-ford-racing = { path = "../../game-compat/ford-racing" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 banana-android.workspace = true
@@ -22,8 +22,8 @@ banana-android.workspace = true
 banana-native.workspace = true
 banana-wine.workspace = true
 banana-water.workspace = true
-banana-game-minecraft-dungeons.workspace = true
-banana-game-skylanders-cloud-patrol.workspace = true
+banana-game-minecraft-dungeons = { path = "../../game-compat/minecraft-dungeons" }
+banana-game-skylanders-cloud-patrol = { path = "../../game-compat/skylanders-cloud-patrol" }
 
 [dev-dependencies]
 banana-content.workspace = true

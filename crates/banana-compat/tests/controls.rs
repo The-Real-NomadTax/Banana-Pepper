@@ -5,76 +5,24 @@ fn setup() {
     banana_compat::install();
 }
 
+// Each game's default bindings are checked against its adapter's built-in
+// fallbacks in game-compat/<game>/tests/defaults.rs.
 #[test]
-fn defaults_are_valid_and_match_previous_fixed_keys() {
+fn every_registered_default_is_valid() {
     setup();
-    let b = Bindings::default();
-    b.validate().unwrap();
-    assert_eq!(b.codes("aliens").unwrap()[0], (0x154, 49));
-    assert!(b.codes("aliens").unwrap().contains(&(0x150, 116)));
-    let jurassic = b.env_value("jurassic").unwrap();
-    assert!(jurassic.starts_with("371:49,372:50,379:53,380:54,378:116,377:57,383:273,384:274,385:13,386:8,333:326,334:327"));
-    assert_eq!(b.codes("big_buck").unwrap()[..2], [(5, 49), (5, 13)]);
-    // Super Cars must match the hook DLL's built-in fallback bindings.
-    let cars = b.env_value("super_cars").unwrap();
-    assert!(cars.starts_with("1:203,2:205,3:200,4:208,65536:28,65536:2,65537:46"));
-    assert!(cars.ends_with("65547:20,65548:10,65550:201,65551:209"));
-    // The Linux shim's controller fallbacks (jamma.rs, jurassic_pad.rs,
-    // aliens_exit.rs) must match too.
-    assert_eq!(
-        b.pad_env_value("big_buck").unwrap(),
-        "5:16,7:32,256:131072,256:4096,257:65536,257:8192"
-    );
-    assert_eq!(
-        b.pad_env_value("jurassic").unwrap(),
-        "371:16,379:32,383:1,384:2,385:4096,386:8192,333:131072,334:65536"
-    );
-    assert_eq!(
-        b.pad_key_env_value("aliens").unwrap(),
-        "49:16,49:4096,53:32,57:8192,273:1,274:2"
-    );
-    // Ford's adapter has the same controller fallback (DEFAULT_PAD).
-    assert_eq!(
-        b.pad_env_value("ford").unwrap(),
-        "1:4,2:8,3:131072,4:65536,5:16,5:4096,6:32768,7:512,8:256,9:32"
-    );
-    // ... and its built-in controller fallback (DEFAULT_PAD in hook.rs).
-    assert_eq!(
-        b.pad_env_value("super_cars").unwrap(),
-        "1:4,2:8,3:131072,4:65536,65536:16,65536:4096,65537:16384,65538:32768,\
-65539:8192,65540:128,65541:256,65542:512,65543:1,65544:2,65545:32"
-    );
-}
-
-#[test]
-fn controller_two_drives_player_two() {
-    setup();
-    let b = Bindings::default();
-    // The Linux shims' DEFAULT_PAD_P2 fallbacks must match these.
-    assert_eq!(
-        b.pad_env_value_p2("big_buck").unwrap(),
-        "6:16,8:32,258:131072,258:4096,259:65536,259:8192"
-    );
-    assert_eq!(
-        b.pad_env_value_p2("jurassic").unwrap(),
-        "372:16,380:32,383:1,384:2,385:4096,386:8192,343:131072,344:65536"
-    );
-    assert_eq!(
-        b.pad_key_env_value_p2("aliens").unwrap(),
-        "50:16,50:4096,54:32,57:8192,273:1,274:2"
-    );
-    // One-player games have no controller-2 bindings.
-    assert_eq!(b.pad_env_value_p2("ford").unwrap(), "");
-    assert_eq!(b.pad_env_value_p2("super_cars").unwrap(), "");
-    assert_eq!(b.pad_key_env_value_p2("ford").unwrap(), "");
-    // Every listed player-one action exists.
+    Bindings::default().validate().unwrap();
+    // Every listed player-two action exists for player one.
     for g in games() {
         for (id, _) in g.player_two {
             assert!(g.actions.iter().any(|a| a.id == *id), "{} {id}", g.id);
         }
     }
-    // Rebinding player one's start moves controller 2's start with it.
-    let mut b = b;
+}
+
+#[test]
+fn rebinding_player_one_start_moves_controller_two() {
+    setup();
+    let mut b = Bindings::default();
     b.toggle_pad("big_buck", "start1", "PadY").unwrap();
     assert!(b.pad_env_value_p2("big_buck").unwrap().contains("6:32768"));
 }
