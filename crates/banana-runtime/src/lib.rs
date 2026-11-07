@@ -191,3 +191,5 @@ fn device_capabilities() {
     assert_eq!(device_kind("", "", ""), None);
 }
 
+
+pub mod android;

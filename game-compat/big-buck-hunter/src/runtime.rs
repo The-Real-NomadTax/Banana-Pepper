@@ -118,7 +118,7 @@ fn wsl(project: &Path, game: &Path, probe: bool) -> Result<String, String> {
     Ok("WSL2 Big Buck session closed".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn run(root: &Path, probe: bool) -> Result<String, String> {
     let materialized = banana_runtime::content::resolve(root)?;
     let root = materialized.as_path();
@@ -127,4 +127,9 @@ pub fn run(root: &Path, probe: bool) -> Result<String, String> {
     } else {
         crate::linux::launch_big_buck(root)
     }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn run(_root: &Path, _probe: bool) -> Result<String, String> {
+    Err("Use the Android launch-plan API on this host".into())
 }

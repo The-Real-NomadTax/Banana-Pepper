@@ -1,0 +1,16 @@
+--- a/src/wrapped/wrappedlibc.c
++++ b/src/wrapped/wrappedlibc.c
+@@ -4066,6 +4066,13 @@
+     uintptr_t start = (uintptr_t)addr;
+     if(box64_pagesize == X86_PAGE_SIZE) {
+         int ret = mprotect(addr, len, prot);
++        // x86 guest code is translated, never executed directly by the ARM CPU.
++        // Android can reject PROT_EXEC on app-data files even though reading
++        // those bytes into the translator is allowed. Keep guest permissions
++        // intact while requesting only data access from the host kernel.
++        if(ret && (errno==EACCES || errno==EPERM) && (prot&PROT_EXEC)
++            && getenv("BOX64_ANDROID_NOEXEC"))
++            ret = mprotect(addr, len, prot&~PROT_EXEC);
+         if(!ret && len) {
+             updateProtection(start, len, prot);
+             setGuestProtection(start, len, prot, 0);

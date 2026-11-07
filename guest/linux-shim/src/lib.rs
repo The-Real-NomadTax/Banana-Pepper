@@ -17,6 +17,10 @@ mod inputs;
 mod jamma;
 #[cfg(target_arch = "x86")]
 mod jurassic;
+#[cfg(target_arch = "x86")]
+mod box32_abi;
+#[cfg(target_arch = "x86")]
+mod android_threads;
 #[cfg(any(target_arch = "x86", test))]
 mod jurassic_pad;
 

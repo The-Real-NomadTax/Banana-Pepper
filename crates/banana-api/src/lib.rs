@@ -169,6 +169,11 @@ pub trait GameCompat: Sync {
     /// Prepare and run `action` for the content below `root`. Blocks until
     /// the session ends; returns a user-facing message.
     fn run(&self, root: &Path, action: &str) -> Result<String, String>;
+    /// Android preparation stays with the title; the frontend only executes the plan.
+    fn android_profile(&self) -> Option<AndroidProfile> { None }
+    fn prepare_android(&self, _source: &Path, _work: &Path, _tools: &Path) -> Result<AndroidLaunch, String> {
+        Err("Android launch preparation is not implemented for this title".into())
+    }
 }
 
 static GAMES: OnceLock<Vec<&'static dyn GameCompat>> = OnceLock::new();
@@ -197,4 +202,29 @@ pub fn backends() -> &'static [&'static dyn ExecutionBackend] {
 
 pub fn backend(kind: BackendKind) -> Option<&'static dyn ExecutionBackend> {
     backends().iter().copied().find(|b| b.kind() == kind)
+}
+
+/// Requirements are rootfs-relative files, checked before exposing Play.
+#[derive(Debug, Clone, Serialize)]
+pub struct AndroidProfile {
+    pub executable: &'static str,
+    pub requirements: &'static [&'static str],
+    pub status: &'static str,
+    pub verified: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AndroidLaunch {
+    pub directory: String,
+    pub command: Vec<String>,
+    pub binds: Vec<(String, String)>,
+    pub environment: Vec<(String, String)>,
+}
+impl AndroidLaunch {
+    pub fn new(directory: &str, command: &[&str]) -> Self {
+        Self { directory: directory.into(), command: command.iter().map(|s| (*s).into()).collect(), binds: vec![], environment: vec![] }
+    }
+    pub fn bind(&mut self, host: impl AsRef<Path>, guest: &str) {
+        self.binds.push((host.as_ref().to_string_lossy().into_owned(), guest.into()));
+    }
+    pub fn env(&mut self, key: &str, value: &str) { self.environment.push((key.into(), value.into())); }
 }

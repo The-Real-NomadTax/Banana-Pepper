@@ -110,3 +110,5 @@ pub fn run_game(id: String, root: String, action: String) -> Result<String, FfiE
     initialize();
     Ok(banana_runtime::run(&id, Path::new(&root), &action)?)
 }
+
+pub mod android;

@@ -40,8 +40,11 @@ The guest-side pieces are shared too:
 - **Linux shim:** the 32-bit library (`guest/linux-shim`) turns cabinet fullscreen requests into ordinary windows. It also bridges OSS audio to PulseAudio/PipeWire and reads controllers.
 - **Windows runtime:** the freestanding Windows guest runtime (`guest/win32`) provides XInput and DirectInput readers to the adapter DLLs and Water.
 
-An Android frontend (`apps/android`) drives the same framework through a UniFFI
-API (`crates/banana-ffi`). It runs x86 guests with box64/box32 inside a proot rootfs.
+The Kotlin Android frontend (`apps/android`) drives the same Rust framework
+through `crates/banana-ffi` (JNI, with UniFFI also available). Five games declare
+Android launch profiles; Big Buck has prior Android gameplay verification and
+the others remain experimental. It runs x86 guests with box64/box32 inside a
+proot rootfs, with Wine WoW64 for Windows games. See [Android status and builds](docs/android.md).
 
 ## Build and run
 

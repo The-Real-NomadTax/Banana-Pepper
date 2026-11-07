@@ -222,6 +222,7 @@ pub fn initialize() {
 fn rebind() -> Result<(), String> {
     // Validate every instruction/slot identity and resolve every name before mutation.
     let mut resolved = Vec::new();
+    let mut missing = Vec::new();
     for binding in LIBC_BINDINGS
         .iter()
         .chain(PTHREAD_BINDINGS)
@@ -235,7 +236,7 @@ fn rebind() -> Result<(), String> {
         if bytes[..2] != [0xff, 0x25] || got != binding.got {
             return Err(format!("incompatible PLT at {:#x}", binding.plt));
         }
-        let function = if binding.plt == 0x0813b770 {
+        let mut function = if binding.plt == 0x0813b770 {
             poll_event as *const () as *mut c_void
         } else if binding.plt == 0x0813a450 {
             set_video_mode as *const () as *mut c_void
@@ -246,14 +247,16 @@ fn rebind() -> Result<(), String> {
         } else {
             unsafe { dlsym((-1isize) as *mut c_void, binding.symbol.as_ptr()) }
         };
+        if function.is_null() && std::env::var_os("ARCADE_ANDROID").is_some() {
+            function = crate::box32_abi::resolve(binding.symbol);
+        }
         if function.is_null() {
-            return Err(format!(
-                "cannot resolve {:?} (saved {:#x})",
-                binding.symbol, binding.saved
-            ));
+            missing.push(format!("{:?} (saved {:#x})", binding.symbol, binding.saved));
+            continue;
         }
         resolved.push((got, function));
     }
+    if !missing.is_empty() { return Err(format!("cannot resolve {}", missing.join(", "))); }
     for (got, function) in resolved {
         unsafe {
             (got as *mut *mut c_void).write(function);

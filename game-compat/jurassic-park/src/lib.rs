@@ -2,6 +2,7 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
+pub mod android;
 pub mod prepare;
 pub mod runtime;
 pub mod controls;
@@ -72,6 +73,10 @@ impl GameCompat for JurassicPark {
             CliCommand { flag: "--probe-jurassic-legacy", action: "probe-legacy", banner: "" },
             CliCommand { flag: "--probe-jurassic-native", action: "probe-native", banner: "" },
         ]
+    }
+    fn android_profile(&self) -> Option<banana_api::AndroidProfile> { Some(android::profile()) }
+    fn prepare_android(&self, source: &Path, work: &Path, tools: &Path) -> Result<banana_api::AndroidLaunch, String> {
+        android::prepare(source, work, tools)
     }
     fn run(&self, root: &Path, action: &str) -> Result<String, String> {
         match action {

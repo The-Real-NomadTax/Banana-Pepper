@@ -1,60 +1,116 @@
-# Android: Big Buck Hunter Pro
+# Android frontend and runtime
 
-Banana pepper has an Android app (`apps/android/`) that runs the supplied 2008 Linux build of Big Buck Hunter Pro on ARM64 phones. Gameplay was verified on a Samsung Galaxy S24 FE (SM-S721U, Exynos 2400, Android 17, ARM64 only with no 32-bit support): attract mode, game and mode menus, a Whitetail hunt with scored shots, and initials entry. Audio reaches an active Android AudioTrack. Audibility, long sessions and other devices are not yet verified.
+The Android application is written in Kotlin and calls the shared Rust backend
+through `libbanana_ffi.so` (JNI). Its library is generated from registered `GameCompat` implementations that declare an Android profile.
+Minecraft Dungeons is excluded from Android at the user's request. There is no separate Java game registry or
+Android copy of a game's executable patches.
+
+## Current verification
+
+| Title | Android path | Verification |
+| --- | --- | --- |
+| Big Buck Hunter Pro | box32 + Rust JAMMA/OSS shim | Prior app reached scored gameplay on SM-S721U. The Kotlin/Rust launch path renders calibration, receives gun/Test/Start events, and advances to right-gun calibration. |
+| Jurassic Park 2015 | box32 + import repair, plaintext script checks, shader overrides | Attract video, mission selection and a 3D mission sequence render after fixing denied real-time file-worker threads. Coin/Start and gun events reach the game. Full gameplay and sound regression testing remain. |
+| Aliens Armageddon | box32 + existing Rust executable preparer and legacy PhysX libraries | Experimental. Worker scheduling is repaired, but static Xlib code encounters a Display layout mismatch during initialization. Gameplay remains unverified. |
+| Super Cars | box64 + x86-64 Wine WoW64 + cabinet DLL | Restoring localhost resolution gets past its hostname crash to a link-system error. The app now declares the network permission required for its sockets; retesting remains. |
+| Ford Racing | box64 + x86-64 Wine WoW64 + cabinet DLL | Renders its loading screen and receives Start. The virtual audio device avoids its previous sound-loader fault; racing remains unverified. |
+
+Listing a title or enabling Play establishes that its known files and declared
+runtime components are present. It does not establish Android gameplay support.
+Only Big Buck carries the historical Android verification badge. All other
+profiles explicitly say experimental.
+
+All five supplied game folders are present on the phone. Wine startup requires
+native X11 extension libraries and fontconfig/fonts, now included in the rootfs.
+Windows titles use a private PulseAudio null sink and a PCM transport to Android.
+These observations do not establish that every listed title is playable.
 
 ## Using the app
 
-1. Install `BananaPepper.apk`. The first launch unpacks the game runtime, which takes a few seconds.
-2. Tap **Import game folder…** and choose your own `Big Bug Hunter Pro` folder, the one containing `game` and `bbh3data` (about 640 MB). The app copies it into private storage and checks that `game` is the supported build (SHA-256 `c569677c…`). Files placed in `Android/data/com.bananapepper/files/games/` (for example with `adb push`) are also found, and are used in place.
-3. Tap **Play**. The game screen is landscape:
-   - Tap the picture to aim and fire. A held finger can be dragged to aim.
-   - Pump or reload: the **PUMP** button, a second finger, or a tap beside the picture.
-   - **COIN**, **START**, **P2 START** and **TEST** are the cabinet switches. At the calibration screen, **TEST** skips it.
-   - **EXIT** or the Back gesture quits.
-4. **Sound** on the main screen turns audio on or off. **Show last game log** shows the runtime logs.
+1. Install the APK. Its first launch installs proot, the Linux rootfs and tools.
+   Updating tools preserves the rootfs, imported games and existing saves.
+2. Choose **Import a game folder**, select a title and choose your own folder.
+   Imports are staged and identified by the Rust backend before replacing an
+   earlier import. A failed or unrecognized import retains the old files.
+   The folder may be the title itself or a conventional library containing it.
+3. Games in `Android/data/<application ID>/files/games` are discovered in place.
+   **Ready to play** filters to titles whose files and required tools are present.
+   **Details** lists missing runtime components.
+4. **Play** opens a landscape game view. Gun games use touch to aim/fire and a
+   second finger or **RELOAD** for right-click. Cabinet and racing buttons come
+   from each title's Rust controls. Controls are scrollable at either side.
+5. **EXIT** or Back confirms session closure. Held inputs are released on pause
+   and cancellation. **Session logs** displays the last launch failure.
 
-## How it works
+Sources and prepared executables are separate. Big Buck migrates previous
+`files/saves/bbh3user` state into its session before seeding any missing files.
+Writable sessions are under `files/sessions/<game-id>`; the last session's
+framebuffer, command plan and logs are under `files/run`.
 
-```
-Android app (Java)                      proot (Debian trixie arm64 rootfs)
- MainActivity: runtime install,          run-big-buck.sh
-   import, hash check, prepare            ├─ Xvfb :0 640x480 (llvmpipe GLX)
- GameActivity ──touch──► abstract ──────► ├─ afbridge: XTest input in,
-   GameView ◄── mmap frame file ◄────────┤    screen copy out (60 fps)
-   AudioBridge ◄── abstract socket ◄─────┘─ box64 (BOX32) /game/game
-                       (S16LE PCM)              + LD_PRELOAD guest shim
-```
+## Build
 
-- **CPU:** box64 built with `BOX32=ON` translates the i386 game. It wraps the native arm64 libc, X11, GL, GLU, SDL and Pulse libraries; freeglut and libgcc are emulated i386 copies. The phone has no AArch32 support, so box86 is not an option.
-- **Graphics:** Mesa llvmpipe renders into Xvfb. `afbridge` copies the screen into `files/run/frame.bin` (32-byte header plus RGBA), and `GameView` draws it scaled to 4:3 with a hardware canvas. Android apps cannot open the GPU's DRM device, so rendering is software only.
-- **Input:** the app sends `m x y`, `b N 0|1` and `k keysym 0|1` lines to `afbridge` over an abstract Unix socket. `afbridge` injects them with XTest. The existing shim turns them into JAMMA switch edges and gun callbacks, exactly as on the desktop.
-- **Audio:** with `ARCADE_AUDIO_SOCKET` set, the shim's OSS device streams PCM to the app over an abstract socket instead of using PulseAudio. A small send buffer and the blocking `AudioTrack` writes pace the game.
-- **Exec permission:** the app targets API 28, as Termux does, because Android only lets apps execute binaries from their private files directory at that target level.
-- **SELinux:** sockets are abstract because SELinux denies named FIFOs in some app and shell directories.
-- **Lifecycle:** `run-big-buck.sh` kills any processes left by an earlier session and exits when the app process (`AF_APP_PID`) disappears.
-
-### Compatibility fixes made for Android
-
-1. **box64: section-less i386 ELF.** The prepared game has no section header table. box64's 32-bit loader only found `.dynamic` and `.dynsym` through section headers, so it crashed in `old_elf_lookup` with a null hash table. `apps/android/rootfs/patches/box64-sectionless-elf32.patch` recovers them from `PT_DYNAMIC`: `DT_SYMTAB`, `DT_STRTAB`, `DT_HASH`/`DT_GNU_HASH`, `DT_VERSYM` and `DT_PLTGOT`. It applies to box64 commit `59b3eb1`.
-2. **Shim raw syscalls.** box32's `syscall()` wrapper returns `ENOSYS` for i386 `openat` (295) and `ioctl` (54). The shim now falls back to the next libc symbol (`RTLD_NEXT`) after the first `ENOSYS`, so desktop behaviour is unchanged. The fallback uses libc `open`, not `openat`, because box64 substitutes an x86 `/proc/cpuinfo` there. The game reads "MHz" from that file and crashes if it's missing.
-
-## Building
-
-Requirements: Android SDK (build-tools, platform 36+), JDK 17, Rust with the `i686-unknown-linux-gnu` target, and an arm64 phone with USB debugging.
+Requires JDK 17, Kotlin 2.2.x (compatible with the SDK D8), Android SDK build-tools,
+platform 36+, NDK r27+, Rust targets `aarch64-linux-android`,
+`i686-unknown-linux-gnu`, `i686-pc-windows-msvc`, desktop multilib graphics
+libraries and `lld-link`. The build can use `KOTLINC=/absolute/path/to/kotlinc`.
+If the local `build/kotlin-2.2.21/kotlinc` installation exists it is selected
+automatically. No Gradle or Java app sources are required.
 
 ```sh
-apps/android/fetch-proot.sh               # proot for Android, from the Termux repo
-apps/android/rootfs/setup-dev-device.sh   # one-time: Debian + box64 build on the phone
-apps/android/rootfs/make-rootfs.sh        # build the trimmed runtime rootfs on the phone
-apps/android/build-apk.sh                 # -> apps/android/build/BananaPepper.apk
+apps/android/fetch-proot.sh
+apps/android/rootfs/setup-dev-device.sh
+apps/android/rootfs/make-rootfs.sh
+apps/android/fetch-wine.sh
+apps/android/build-apk.sh
 adb install -r apps/android/build/BananaPepper.apk
 ```
 
-The rootfs is built on the phone itself, through proot over adb, so the host needs no ARM toolchain or QEMU. `make-rootfs.sh` installs only runtime packages and removes the i386 Mesa and LLVM that package dependencies pull in, since box32 uses the native GL. The archive is about 127 MB. `TRIM_ONLY=1` re-trims and repacks without reinstalling. `build-apk.sh` builds a debuggable APK, so `adb shell run-as com.bananapepper` can read `files/run/*.log`. `RELEASE=1` builds a non-debuggable one. Signing uses `apps/android/debug.keystore`, which is generated on first build and not committed.
+`fetch-wine.sh` pins Wine 11.0 amd64 WoW64 and verifies the publisher's SHA-256.
+The APK includes it when `build/wine` exists; otherwise the racing profiles show
+that runtime as missing. The publisher's release is
+<https://github.com/Kron4ek/Wine-Builds/releases/tag/11.0>.
 
-## Known limits
+The build packages locally prepared Jurassic libraries from
+`runtime/jurassic/libs`. `prepare-x64-libs.sh` collects GCC runtime libraries
+for Wine. `make-rootfs.sh` also exports the patched box64 into `build/box64`,
+which is bundled ahead of the rootfs copy. Games themselves are never bundled.
 
-- Software rendering only. A 640×480 game window, scaled up on screen.
-- Only the hash-verified build is accepted, as on the desktop.
-- One player gun. Two-gun Shootout, physical light guns, lamps and calibration fidelity are not implemented.
-- The game stops when the app is closed. If you switch away, the game keeps running until Android stops the app.
+The default application ID is `com.bananapepper`. To update the earlier installed
+app without deleting its private data or changing its external game directory:
+
+```sh
+APP_ID=com.arcadefoundry apps/android/build-apk.sh
+adb install -r apps/android/build/BananaPepper.apk
+```
+
+The same local signing key must be retained. Both IDs use the Kotlin namespace
+`com.bananapepper`; manifest activities are fully qualified. `RELEASE=1` disables
+debugging. The debug APK supports `adb shell run-as <application ID>`.
+
+## Runtime boundaries
+
+- Rust supplies title identity, executable fingerprints, preparation, touch
+  actions, runtime requirements and the proot command plan. Game-specific
+  Android code lives in each game's `android.rs`, behind the shared API.
+- Kotlin supplies Android UI, folder-picker copying, transactional runtime
+  installation, process lifecycle, frame presentation, input sockets and
+  AudioTrack. The generic `rootfs/run-game.sh` supervises Xvfb, afbridge and the
+  command supplied by Rust. No cabinet boot scripts are invoked.
+- ARM64 Android uses box64 with BOX32 enabled; AArch32 Android support is not
+  required. The existing sectionless-ELF patch remains necessary.
+- Xvfb/llvmpipe supplies a 640×480 software display. Native JNI libraries and
+  APK entries use 16 KiB alignment; this does not establish that box32/the Linux
+  rootfs works on a phone actually booted with 16 KiB pages.
+- Big Buck's OSS audio streams PCM into AudioTrack. SDL and Wine audio
+  have not been validated through Android's audio bridge.
+- proot supplies a compatibility filesystem view, not a security sandbox.
+  target SDK 28 is deliberate because the runtime executes binaries in private
+  app storage. Abstract input/audio sockets use a random per-session token;
+  Xvfb's TCP and abstract local transports are disabled.
+
+## Checks
+
+```sh
+cargo test -p banana-ffi -p banana-compat --offline
+cargo test -p banana-linux-shim --target i686-unknown-linux-gnu --offline
+```

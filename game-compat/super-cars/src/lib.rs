@@ -2,6 +2,7 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
+pub mod android;
 pub mod runtime;
 pub mod controls;
 pub mod settings;
@@ -38,6 +39,9 @@ impl GameCompat for SuperCars {
     fn finds_own_folder(&self) -> bool {
         true
     }
+    fn known_builds(&self) -> &'static [banana_api::KnownBuild] {
+        &[banana_api::KnownBuild { name: "Cabinet build", sha256: android::SOURCE_SHA256 }]
+    }
     fn status(&self) -> Status {
         Status { level: SupportLevel::Experimental, label: "Wine desktop gameplay" }
     }
@@ -64,6 +68,10 @@ impl GameCompat for SuperCars {
         &[
             CliCommand { flag: "--launch-super-cars", action: "launch", banner: "Launching Super Cars under Wine. Arrows or an XInput controller (stick steers, triggers = gas/brake) drive, Enter = start, 5 = coin, Esc or Back+Start = exit; bindings come from controls.cfg." },
         ]
+    }
+    fn android_profile(&self) -> Option<banana_api::AndroidProfile> { Some(android::profile()) }
+    fn prepare_android(&self, source: &Path, work: &Path, tools: &Path) -> Result<banana_api::AndroidLaunch, String> {
+        android::prepare(source, work, tools)
     }
     fn run(&self, root: &Path, action: &str) -> Result<String, String> {
         match action {

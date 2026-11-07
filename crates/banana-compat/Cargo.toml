@@ -14,12 +14,14 @@ banana-game-big-buck-hunter.workspace = true
 banana-game-jurassic-park.workspace = true
 banana-game-super-cars.workspace = true
 banana-game-ford-racing.workspace = true
-banana-game-minecraft-dungeons.workspace = true
-banana-game-skylanders-cloud-patrol.workspace = true
 banana-native.workspace = true
 banana-wine.workspace = true
 banana-wsl.workspace = true
 banana-water.workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+banana-game-minecraft-dungeons.workspace = true
+banana-game-skylanders-cloud-patrol.workspace = true
 
 [dev-dependencies]
 banana-core.workspace = true

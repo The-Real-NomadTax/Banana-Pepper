@@ -104,9 +104,8 @@ above and are tracked for follow-up work:
 - The desktop's settings window still has some per-tab layout that assumes
   the current set of settings; the backend selector, audio routing, status,
   hints and extra actions are now capability-driven.
-- The Android app is still the Java Big Buck app. A Kotlin/Jetpack Compose
-  frontend on `banana-ffi` is the next step; the FFI crate exposes library
-  scanning and launching, and Kotlin bindings are generated with
-  `uniffi-bindgen`.
+- Android now uses a Kotlin frontend and a Rust JNI launch-plan API. Five
+  titles declare Android profiles; Android gameplay verification remains
+  incomplete outside Big Buck. See `android.md` for the device-test matrix.
 - `runtime` paths and guest build outputs are resolved from the repository
   root at compile time (`CARGO_MANIFEST_DIR`), as before.

@@ -14,8 +14,13 @@ banana-settings.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uniffi = "0.32.2"
+sha2.workspace = true
+banana-input.workspace = true
 
 [lib]
 # cdylib for Android (loaded by the generated Kotlin bindings), lib for tests.
 crate-type = ["cdylib", "lib"]
 name = "banana_ffi"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21.1"

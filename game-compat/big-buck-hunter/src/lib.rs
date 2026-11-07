@@ -2,6 +2,7 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
+pub mod android;
 pub mod prepare;
 pub mod runtime;
 pub mod controls;
@@ -71,6 +72,10 @@ impl GameCompat for BigBuckHunter {
             CliCommand { flag: "--launch-big-buck", action: "launch", banner: "Launching Big Buck Hunter on your display. Mouse = aim/fire, right click = pump; controller stick aims, RT fires, LT pumps; Esc or Back+Start = exit; bindings come from controls.cfg." },
             CliCommand { flag: "--probe-big-buck", action: "probe", banner: "" },
         ]
+    }
+    fn android_profile(&self) -> Option<banana_api::AndroidProfile> { Some(android::profile()) }
+    fn prepare_android(&self, source: &Path, work: &Path, tools: &Path) -> Result<banana_api::AndroidLaunch, String> {
+        android::prepare(source, work, tools)
     }
     fn run(&self, root: &Path, action: &str) -> Result<String, String> {
         match action {

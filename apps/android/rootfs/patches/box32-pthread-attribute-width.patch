@@ -1,0 +1,41 @@
+--- a/src/libtools/threads32.c
++++ b/src/libtools/threads32.c
+@@ -150,11 +150,16 @@
+     return ret;
+ }
+ 
+-EXPORT int my32_pthread_attr_getstack(x64emu_t* emu, void* attr, void** stackaddr, size_t* stacksize)
+-{
+-    int ret = pthread_attr_getstack(get_attr(attr), stackaddr, stacksize);
+-    if (ret==0)
+-        GetStackSize((uintptr_t)attr, stackaddr, stacksize);
++EXPORT int my32_pthread_attr_getstack(x64emu_t* emu, void* attr, ptr_t* stackaddr, ulong_t* stacksize)
++{
++    void* address = NULL;
++    size_t size = 0;
++    int ret = pthread_attr_getstack(get_attr(attr), &address, &size);
++    if (ret==0) {
++        GetStackSize((uintptr_t)attr, &address, &size);
++        *stackaddr = to_ptrv(address);
++        *stacksize = to_ulong(size);
++    }
+     return ret;
+ }
+ 
+@@ -718,9 +723,13 @@
+ {
+     return pthread_attr_getdetachstate(get_attr(attr), p);
+ }
+-EXPORT int my32_pthread_attr_getguardsize(x64emu_t* emu, void* attr, void* p)
+-{
+-    return pthread_attr_getguardsize(get_attr(attr), p);
++EXPORT int my32_pthread_attr_getguardsize(x64emu_t* emu, void* attr, ulong_t* p)
++{
++    size_t size = 0;
++    int ret = pthread_attr_getguardsize(get_attr(attr), &size);
++    if (ret==0)
++        *p = to_ulong(size);
++    return ret;
+ }
+ EXPORT int my32_pthread_attr_getinheritsched(x64emu_t* emu, void* attr, void* p)
+ {
