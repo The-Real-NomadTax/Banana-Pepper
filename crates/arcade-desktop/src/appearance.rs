@@ -97,10 +97,16 @@ pub fn install(ctx: &egui::Context, theme: Theme) {
     ] {
         widget.corner_radius = 4.into();
     }
-    visuals.widgets.inactive.bg_fill = palette.raised;
-    visuals.widgets.hovered.bg_fill = palette.selection;
+    // Give controls their own surface so they remain visible before hovering.
+    visuals.widgets.inactive.bg_fill = Color32::from_gray(65);
+    visuals.widgets.inactive.weak_bg_fill = Color32::from_gray(65);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_gray(120));
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_gray(235));
+    visuals.widgets.hovered.bg_fill = Color32::from_gray(85);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_gray(85);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, palette.accent);
     visuals.widgets.active.bg_fill = palette.selection;
+    visuals.widgets.active.weak_bg_fill = palette.selection;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, palette.accent);
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, palette.selection);
     style.visuals = visuals;

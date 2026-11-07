@@ -29,7 +29,7 @@ From the project root:
 cargo run -p arcade-desktop
 ```
 
-The game source defaults to the `games` folder relative to the working directory. Enter a folder or ZArchive path in **Game folder or ZArchive**. Inspection runs on a worker thread. Export JSON saves `arcade-report.json` in the working directory.
+Configure each game’s folder or ZArchive in its **Settings → Game folder or ZArchive** field. Each game source is saved separately; unconfigured games use the default `games` folder relative to the working directory. Inspection runs on a worker thread. Export JSON saves `arcade-report.json` in the working directory.
 
 Interactive Big Buck Hunter on your own display:
 

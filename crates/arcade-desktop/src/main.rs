@@ -348,7 +348,8 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
                         }
                         for (tab, label) in tabs {
                             if ui
-                                .selectable_label(app.settings.tab == tab, label)
+                                .add(egui::Button::selectable(app.settings.tab == tab, label)
+                                    .frame_when_inactive(true))
                                 .clicked()
                             {
                                 app.settings.tab = tab;
@@ -422,6 +423,24 @@ fn settings_window(ctx: &egui::Context, app: &mut ArcadeApp, frame: &eframe::Fra
     }
 }
 
+/// Framed choices keep both selected and available settings visible.
+fn settings_choice<T: PartialEq>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    value: T,
+    label: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    let mut response = ui.add(
+        egui::Button::selectable(*current == value, label.into())
+            .frame_when_inactive(true),
+    );
+    if response.clicked() && *current != value {
+        *current = value;
+        response.mark_changed();
+    }
+    response
+}
+
 /// One or two players, for two-player games (settings.cfg `players`).
 fn players_row(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settings::Profile) {
     if profile.max_players < 2 {
@@ -432,7 +451,7 @@ fn players_row(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static settin
     ui.horizontal(|ui| {
         ui.label("Players");
         for (players, label) in [(1, "1 player"), (2, "2 players")] {
-            if ui.radio_value(&mut game.players, players, label).clicked() {
+            if settings_choice(ui, &mut game.players, players, label).clicked() {
                 change = Some(format!("{} {label}", profile.title));
             }
         }
@@ -489,14 +508,12 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
 
             ui.label("Display mode");
             ui.horizontal(|ui| {
-                if ui
-                    .radio_value(&mut game.fullscreen, false, "Windowed")
+                if settings_choice(ui, &mut game.fullscreen, false, "Windowed")
                     .clicked()
                 {
                     change = Some("Windowed".into());
                 }
-                if ui
-                    .radio_value(&mut game.fullscreen, true, "Fullscreen")
+                if settings_choice(ui, &mut game.fullscreen, true, "Fullscreen")
                     .clicked()
                 {
                     change = Some("Fullscreen".into());
@@ -507,7 +524,7 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
             ui.label("VSync");
             ui.horizontal(|ui| {
                 for v in VSync::ALL {
-                    if ui.radio_value(&mut game.vsync, v, v.label()).clicked() {
+                    if settings_choice(ui, &mut game.vsync, v, v.label()).clicked() {
                         change = Some(format!("VSync {}", v.label().to_ascii_lowercase()));
                     }
                 }
@@ -521,7 +538,7 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
                     if r == profile.default_renderer {
                         label += "  (default)";
                     }
-                    if ui.radio_value(&mut game.renderer, r, label).clicked() {
+                    if settings_choice(ui, &mut game.renderer, r, label).clicked() {
                         change = Some(format!("Renderer {}", r.id()));
                     }
                 }
@@ -542,9 +559,8 @@ fn graphics_tab(ui: &mut egui::Ui, app: &mut SettingsUi, profile: &'static setti
                                     ui.add_space(44.0);
                                 }
                             }
-                            if ui.radio(game.crosshair == style, style.label()).clicked() {
+                            if settings_choice(ui, &mut game.crosshair, style.clone(), style.label()).clicked() {
                                 change = Some(format!("Crosshair {}", style.label().to_ascii_lowercase()));
-                                game.crosshair = style;
                             }
                         });
                     }
@@ -925,25 +941,6 @@ impl ArcadeApp {
         }
     }
 
-    fn save_games_folder(&mut self, ctx: egui::Context) {
-        let result = library_preferences::validate(&self.root).and_then(|root| {
-            let mut folders = self.folders.clone();
-            folders.root = root;
-            library_preferences::save(&folders)?;
-            Ok(folders)
-        });
-        match result {
-            Ok(folders) => {
-                self.root = folders.root.clone();
-                self.folders = folders;
-                self.folder_message =
-                    "Default library folder saved. Individual game folders take priority.".into();
-                self.rescan(ctx);
-            }
-            Err(error) => self.folder_message = error,
-        }
-    }
-
     fn game_folder_ui(&mut self, ui: &mut egui::Ui, id: &str, title: &str, frame: &eframe::Frame) {
         let mut save = false;
         let mut reset = false;
@@ -1144,38 +1141,6 @@ impl eframe::App for ArcadeApp {
                 });
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Game folder or ZArchive");
-                    let folder = ui.add_enabled(
-                        self.probe.is_none(),
-                        egui::TextEdit::singleline(&mut self.root)
-                            .hint_text("Folder path or games.zar")
-                            .desired_width((ui.available_width() - 430.0).clamp(210.0, 520.0)),
-                    );
-                    if folder.changed() {
-                        self.folder_message =
-                            "Source changed. Choose Save source to remember it.".into();
-                    }
-                    let mut selected_folder = false;
-                    let browse = ui.add_enabled_ui(self.probe.is_none(), source_browse_menu).inner;
-                    if let Some(kind) = browse {
-                        match pick_source(frame, "Choose default library source", &self.root, kind) {
-                            Ok(Some(folder)) => {
-                                self.root = folder;
-                                selected_folder = true;
-                            }
-                            Ok(None) => {}
-                            Err(error) => self.folder_message = error,
-                        }
-                    }
-                    let save = ui
-                        .add_enabled(self.probe.is_none(), egui::Button::new("Save source"))
-                        .on_hover_text("Remember this folder or archive and inspect its game files")
-                        .clicked();
-                    let enter = folder.lost_focus()
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                    if save || enter || selected_folder {
-                        self.save_games_folder(ctx.clone());
-                    }
                     if ui
                         .add_enabled(self.pending.is_none(), egui::Button::new("Refresh library"))
                         .clicked()
