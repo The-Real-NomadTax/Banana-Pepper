@@ -12,7 +12,7 @@ It runs a test executable directly from a memory-backed file in folder, ZAR and 
 
 Other coverage checks provider parity and fingerprints; path containment; archive corruption and conversion; dirty-block persistence; metadata and case rules; stable identity and single writers; stale mount cleanup; controls and gun aiming modes; worker timeouts; static ELF64 execution; portable CLI archive inspection; and artifact metadata validation.
 
-Live FUSE tests passed against all three source types during this refactor, including cleanup after the mount owner is killed. Run `cargo test -p banana-vfs --test mount -- --ignored --nocapture` to include the crash recovery test. The WinFsp implementation compiles; live Windows mount execution requires the separately installed driver and remains unverified on the current machine.
+Live FUSE tests passed against all three source types during this refactor, including cleanup after the mount owner is killed. Run `cargo test -p banana-vfs --test mount -- --ignored --nocapture` to include the crash recovery test. Windows has no mount: Big Buck Hunter Pro (Water, from a ZAR) and Ford Racing (native, from a folder and a ZAR) run through the served view with no extra software installed.
 
 Synthetic fixtures verify mechanisms. Gameplay, graphics, audio, save behavior and cabinet protocols must be checked separately for each real title/build/backend combination. Current mounted compatibility profiles remain experimental until those checks are completed. ELF64 dynamic linking, PIE and TLS remain explicit Water capability blockers.
 

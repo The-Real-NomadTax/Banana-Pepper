@@ -1,5 +1,5 @@
 //! Unprivileged guest namespace. The process tracer brokers operations into the
-//! same View used by FUSE/WinFsp. Sparse memfds are transient page caches; only
+//! same View used by FUSE and the view protocol. Sparse memfds are transient page caches; only
 //! accessed ranges are populated, and changed blocks are committed to View.
 use crate::{FileHandle, View};
 use sha2::{Digest, Sha256};

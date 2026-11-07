@@ -1,6 +1,6 @@
 # Big Buck on Windows
 
-The Windows plan uses generic `helpers/water-x86.exe` with the title-owned `games/big-buck/windows-x86/banana_buck_water.dll`. WinFsp mounts the selected folder or ZAR together with a persistent overlay and the reconstructed executable in memory.
+The Windows plan uses generic `helpers/water-x86.exe` with the title-owned `games/big-buck/windows-x86/banana_buck_water.dll`. The session host serves the selected folder or ZAR to the worker over private pipes, together with a persistent overlay and the reconstructed executable in memory; nothing is mounted or installed.
 
 Build with `just build`. Select the source in the desktop, or use:
 

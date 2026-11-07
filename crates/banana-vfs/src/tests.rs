@@ -270,3 +270,45 @@ fn wire_protocol_serves_the_view_across_a_pipe() {
     drop(c);
     host.join().unwrap().unwrap();
 }
+
+#[test]
+fn wire_create_truncate_in_a_case_insensitive_view() {
+    use crate::wire::{Client, open};
+    let t =
+        tempfile::tempdir_in(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")).unwrap();
+    let source = Arc::new(MemorySource {
+        files: BTreeMap::from([("Game/game.ini".into(), Arc::from(&b"[a]\r\nb=1\r\n"[..]))]),
+    });
+    let v = Arc::new(
+        View::with_case(source, t.path(), "b", BTreeMap::new(), BTreeMap::new(), false).unwrap(),
+    );
+    let (server_in, client_out) = std::io::pipe().unwrap();
+    let (client_in, server_out) = std::io::pipe().unwrap();
+    let host = {
+        let v = v.clone();
+        std::thread::spawn(move || wire::serve(v, server_in, server_out))
+    };
+    let c = Client::new(client_in, client_out).unwrap();
+    let (h, _) = c
+        .open("Game/arcade.log", open::READ | open::WRITE | open::CREATE | open::TRUNCATE)
+        .unwrap();
+    c.write(h, 0, b"line\r\n").unwrap();
+    c.close(h).unwrap();
+    assert_eq!(c.read_all("game/ARCADE.log", 100).unwrap(), b"line\r\n");
+    drop(c);
+    host.join().unwrap().unwrap();
+    drop(v);
+    let v = View::with_case(
+        Arc::new(MemorySource {
+            files: BTreeMap::from([("Game/game.ini".into(), Arc::from(&b"[a]\r\nb=1\r\n"[..]))]),
+        }),
+        t.path(),
+        "b",
+        BTreeMap::new(),
+        BTreeMap::new(),
+        false,
+    )
+    .unwrap();
+    let mut b = [0; 6];
+    assert_eq!(v.read("Game/arcade.log", 0, &mut b).unwrap(), 6);
+}

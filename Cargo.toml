@@ -8,6 +8,7 @@ members = [
     "backends/wine",
     "backends/water",
     "guest/linux-shim",
+    "guest/view-shim",
     "game-compat/*",
     "game-compat/*/guest",
     "game-compat/*/hook",

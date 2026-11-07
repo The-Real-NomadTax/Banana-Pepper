@@ -1,21 +1,23 @@
 Banana Pepper desktop distribution
 
 Start arcade-desktop[.exe] and select your own game folder or ZArchive.
-arcade-zar[.exe] converts folders to archives. Keep the complete package together.
+Its ZAR compressor (or `arcade-desktop --pack FOLDER OUTPUT.zar`) converts
+folders to archives. Keep the complete package together.
 
 Package layout:
   arcade-desktop[.exe]   Desktop frontend
-  arcade-zar[.exe]       Archive converter
   helpers/              Generic compiled execution workers and setup helpers
   games/<id>/<abi>/     Declared title adapter DLL/SO files
   docs/                 Architecture, setup and compatibility notes
-  settings.cfg          Fresh default settings
-  controls.cfg          Fresh default bindings
+  settings.cfg          Fresh default settings (from each game's declarations)
+  controls.cfg          Fresh default bindings (from each game's declarations)
+  artifacts.json        Artifact name to packaged path
   manifest.json         Package artifact inventory
   THIRD-PARTY-NOTICES.txt
 
-Windows requires WinFsp 2.1 or later and suitable graphics drivers. Linux
-requires FUSE/fusermount, desktop graphics and Bubblewrap; PE games use Wine.
+Windows needs only suitable graphics drivers: game content is served to the
+game process directly, without a mount. Linux requires FUSE/fusermount,
+desktop graphics and Bubblewrap; PE games use Wine.
 Required game libraries are prepared separately in per-user dependency storage.
 Missing mounting components produce an error. Archives are never extracted as
 a fallback. Generic Water workers support only their declared capabilities.

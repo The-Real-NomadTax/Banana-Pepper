@@ -6,7 +6,13 @@
 
 `banana-api` defines build identification, compatibility plans, backend capability checks, prepared sessions, structured actions and session events. `banana-core` inspects providers without requiring host file paths or mounted content. Archive report paths are display locations inside a source, rather than extracted files.
 
-`banana-vfs` composes source content, memory-backed generated files, aliases, dependency subtrees and a persistent overlay. WinFsp, FUSE and the unprivileged Android tracer adapter expose this namespace to ordinary filesystem APIs, executable loaders and memory mapping. Water translates guest paths into this same mount.
+`banana-vfs` composes source content, memory-backed generated files, aliases, dependency subtrees and a persistent overlay. Each backend reaches that view one of three ways, declared by `ExecutionBackend::needs_mount`:
+
+- **Served (Windows).** The session host serves the view over private inherited pipes using the `banana-wire` protocol (`banana_vfs::wire::serve` on the host, the dependency-free `banana_wire::Client` in the guest). Water's workers implement the guest's file calls on it. Native Windows titles get a staged root holding only the view's directory tree and PE images; the staged executable imports `banana_view.dll` first, which hooks the Win32 file API (files, searches, mappings, INI profiles, share modes) so every other path under that root is served from the view. Nothing needs to be installed and no game content is extracted.
+- **Mounted (Linux).** FUSE exposes the view for Native/Bubblewrap and Wine.
+- **Intercepted (Android).** The PRoot tracer brokers filesystem calls into the same view.
+
+`BANANA_VIEW_TRACE=1` (paths), `2` (every read, seek and size query) or `3` (also what is left to Windows) makes the Windows shim log to the session's `game.log`. With `3` and no view, the shim only observes, which shows how an unmodified game reads its files.
 
 `banana-runtime` owns session orchestration and per-user storage. It selects a backend through registered capability checks, resolves declared artifacts and dependencies, creates the view, keeps the mount alive, supervises execution, and releases it after the process tree ends. It contains no title branches.
 

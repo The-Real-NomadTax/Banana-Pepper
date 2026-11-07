@@ -450,6 +450,7 @@ dependencies = [
  "banana-api",
  "banana-content",
  "banana-input",
+ "goblin 0.10.7",
  "libc",
  "serde_json",
 ]
@@ -501,6 +502,15 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
  "zarchive-rs",
+]
+
+[[package]]
+name = "banana-view-shim"
+version = "0.1.0"
+dependencies = [
+ "banana-wire",
+ "iced-x86",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

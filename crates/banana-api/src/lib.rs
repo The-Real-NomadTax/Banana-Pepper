@@ -122,6 +122,11 @@ pub trait ExecutionBackend: Sync {
     fn needs_mount(&self, _plan: &LaunchPlan) -> bool {
         true
     }
+    /// Generic guest components this backend places in the view for a plan
+    /// (resolved like title adapters), e.g. the Windows view shim.
+    fn adapters(&self, _plan: &LaunchPlan) -> Vec<Adapter> {
+        Vec::new()
+    }
     /// Runs after the view is exposed and before [`launch`](Self::launch):
     /// map guest paths and publish adapter endpoints into the plan. Backends
     /// that run the guest directly from the mount path need nothing here.

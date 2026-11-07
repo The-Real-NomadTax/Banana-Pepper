@@ -152,6 +152,10 @@ pub fn prepare_view(
     } else {
         None
     };
+    if let Some(selected) = backend.and_then(banana_api::backend) {
+        let extra = selected.adapters(&plan);
+        plan.adapters.extend(extra);
+    }
     plan.env
         .insert("BANANA_GUEST_ROOT".into(), plan.guest_root.clone());
     plan.generated

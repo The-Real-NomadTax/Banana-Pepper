@@ -1,7 +1,12 @@
 //! Native execution: the host runs the guest executable directly. On Linux,
-//! ELF guests run inside a bubblewrap sandbox with a 32-bit userspace.
+//! ELF guests run inside a bubblewrap sandbox with a 32-bit userspace over the
+//! mounted view. On Windows there is no mount: PE images are staged and the
+//! view shim serves every other file (see `staging`).
 use banana_api::{Availability, BackendKind, ExecutionBackend};
+pub mod pe;
 pub mod sandbox;
+#[cfg(windows)]
+mod staging;
 pub use sandbox::Sandbox;
 
 pub struct Native;
@@ -30,85 +35,134 @@ impl ExecutionBackend for Native {
         }
     }
     fn check(&self, p: &banana_api::LaunchPlan) -> Result<(), banana_api::CapabilityError> {
-        banana_api::check_host(self, p)
+        banana_api::check_host(self, p)?;
+        if cfg!(windows) && p.binary.bits != 32 {
+            return Err(banana_api::CapabilityError {
+                backend: self.name().into(),
+                missing: vec!["The Windows view shim is built for 32-bit titles only".into()],
+            });
+        }
+        Ok(())
+    }
+    fn needs_mount(&self, _plan: &banana_api::LaunchPlan) -> bool {
+        !cfg!(windows)
+    }
+    fn adapters(&self, _plan: &banana_api::LaunchPlan) -> Vec<banana_api::Adapter> {
+        #[cfg(windows)]
+        return vec![banana_api::Adapter {
+            artifact: "banana_view".into(),
+            destination: staging::SHIM.into(),
+            preload: false,
+        }];
+        #[cfg(not(windows))]
+        Vec::new()
     }
     fn launch(
         &self,
         s: banana_api::PreparedSession,
     ) -> Result<Box<dyn banana_api::SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
-        let mount = s.mount()?.to_path_buf();
-        #[cfg(target_os = "linux")]
-        let input = s
-            .plan
-            .input
-            .clone()
-            .map(|config| input::Bridge::new(&s.state, config))
-            .transpose()?;
         #[cfg(windows)]
-        let mut command = {
-            let mut c = std::process::Command::new(mount.join(&s.plan.executable));
-            c.current_dir(mount.join(&s.plan.cwd))
-                .envs(&s.plan.env)
-                .args(&s.plan.args);
-            c
-        };
+        return launch_windows(s);
         #[cfg(not(windows))]
-        let mut command = {
-            let mut box_ = Sandbox::new();
-            box_.bind(&mount, &s.plan.guest_root, false)
-                .bind(&s.state, "/work", false)
-                .chdir(&format!("{}/{}", s.plan.guest_root, s.plan.cwd));
-            for m in &s.plan.guest_mounts {
-                banana_content::path(&m.source).map_err(|e| e.to_string())?;
-                box_.bind(mount.join(&m.source), &m.target, m.readonly);
+        launch_unix(s)
+    }
+}
+
+#[cfg(not(windows))]
+fn launch_unix(
+    s: banana_api::PreparedSession,
+) -> Result<Box<dyn banana_api::SessionHandle>, String> {
+    let mount = s.mount()?.to_path_buf();
+    #[cfg(target_os = "linux")]
+    let input = s
+        .plan
+        .input
+        .clone()
+        .map(|config| input::Bridge::new(&s.state, config))
+        .transpose()?;
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut box_ = Sandbox::new();
+        box_.bind(&mount, &s.plan.guest_root, false)
+            .bind(&s.state, "/work", false)
+            .chdir(&format!("{}/{}", s.plan.guest_root, s.plan.cwd));
+        for m in &s.plan.guest_mounts {
+            banana_content::path(&m.source).map_err(|e| e.to_string())?;
+            box_.bind(mount.join(&m.source), &m.target, m.readonly);
+        }
+        for device in &s.devices {
+            box_.device(device);
+        }
+        for name in &s.plan.inert_tools {
+            if let (Some(source), Some(destination)) = (find_program("true"), find_program(name)) {
+                box_.bind(source, destination, true);
             }
-            for device in &s.devices {
+        }
+        if let Some(input) = &input {
+            for device in input.paths() {
                 box_.device(device);
             }
-            for name in &s.plan.inert_tools {
-                if let (Some(source), Some(destination)) =
-                    (find_program("true"), find_program(name))
-                {
-                    box_.bind(source, destination, true);
-                }
-            }
-            if let Some(input) = &input {
-                for device in input.paths() {
-                    box_.device(device);
-                }
-            }
-            box_.desktop()?.gpu();
-            box_.audio(
-                s.plan.env.get("ARCADE_AUDIO").is_none_or(|v| v != "0"),
-                s.plan.env.get("PULSE_SINK").map_or("", String::as_str),
-                "pulse",
-            );
-            for (k, v) in &s.plan.env {
-                box_.env(k, v);
-            }
-            box_.command
-                .arg(format!("{}/{}", s.plan.guest_root, s.plan.executable))
-                .args(&s.plan.args);
-            box_.command
-        };
-        let log = std::fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
-        command
-            .stdout(log.try_clone().map_err(|e| e.to_string())?)
-            .stderr(log);
-        let process = banana_api::process::ProcessSession::spawn_controlled(
-            &mut command,
-            s.plan.timeout_ms,
-            s.plan.command_channel.as_ref().map(|p| s.state.join(p)),
-        )?;
-        #[cfg(target_os = "linux")]
-        return Ok(Box::new(NativeSession {
-            process,
-            _input: input,
-        }));
-        #[cfg(not(target_os = "linux"))]
-        Ok(process)
-    }
+        }
+        box_.desktop()?.gpu();
+        box_.audio(
+            s.plan.env.get("ARCADE_AUDIO").is_none_or(|v| v != "0"),
+            s.plan.env.get("PULSE_SINK").map_or("", String::as_str),
+            "pulse",
+        );
+        for (k, v) in &s.plan.env {
+            box_.env(k, v);
+        }
+        box_.command
+            .arg(format!("{}/{}", s.plan.guest_root, s.plan.executable))
+            .args(&s.plan.args);
+        box_.command
+    };
+    let log = std::fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
+    command
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log);
+    let process = banana_api::process::ProcessSession::spawn_controlled(
+        &mut command,
+        s.plan.timeout_ms,
+        s.plan.command_channel.as_ref().map(|p| s.state.join(p)),
+    )?;
+    #[cfg(target_os = "linux")]
+    return Ok(Box::new(NativeSession {
+        process,
+        _input: input,
+    }));
+    #[cfg(not(target_os = "linux"))]
+    Ok(process)
+}
+
+#[cfg(windows)]
+fn launch_windows(
+    s: banana_api::PreparedSession,
+) -> Result<Box<dyn banana_api::SessionHandle>, String> {
+    let root = s.state.join("root");
+    let executable = staging::stage(s.view.as_ref(), &s.plan, &root)?;
+    let mut command = std::process::Command::new(&executable);
+    command
+        .current_dir(staging::host_path(&root, &s.plan.cwd))
+        .envs(&s.plan.env)
+        .env("BANANA_VIEW_ROOT", &root)
+        .args(&s.plan.args);
+    let log = std::fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
+    command
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log);
+    let pipes = banana_api::process::ViewPipes::new().map_err(|e| e.to_string())?;
+    command.env("BANANA_VIEW", pipes.child_spec());
+    pipes
+        .spawn(s.view.clone(), || {
+            banana_api::process::ProcessSession::spawn_controlled(
+                &mut command,
+                s.plan.timeout_ms,
+                s.plan.command_channel.as_ref().map(|p| s.state.join(p)),
+            )
+        })
+        .map_err(|e| e.to_string())?
 }
 
 /// First `name` on `PATH`.

@@ -1,0 +1,24 @@
+[package]
+name = "banana-view-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows guest shim: serves a native game's file calls from the session view"
+
+# Loaded into native 32-bit Windows games through an import the Native
+# backend adds to the staged executable. Other targets build an empty crate.
+[lib]
+name = "banana_view"
+crate-type = ["cdylib"]
+
+[target.'cfg(all(windows, target_arch = "x86"))'.dependencies]
+banana-wire.workspace = true
+iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder", "instr_info"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemServices", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_Console"] }
+
+[[package.metadata.banana.artifacts]]
+name="banana_view"
+kind="lib"
+target="i686-pc-windows-msvc"
+hosts=["windows"]
+destination="helpers/windows-x86/banana_view.dll"

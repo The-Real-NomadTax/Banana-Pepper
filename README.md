@@ -12,7 +12,7 @@ Original content stays read-only. Executable reconstruction and compatibility pa
 
 Install Rust, just, and the platform build tools, then run `just build`. The build reads artifact declarations from each crate and creates `target/dist/banana-pepper-<os>-<arch>/`. `just run` starts that package.
 
-Windows requires WinFsp 2.1 or later for mounting game content. Linux requires FUSE/fusermount, a desktop display and Bubblewrap; Windows games additionally require Wine. Missing components produce a session error. There is no extraction fallback.
+Windows needs nothing installed: Water and native Windows titles are served the game view directly over private pipes, with no OS mount (see [architecture](docs/architecture.md)). Linux requires FUSE/fusermount, a desktop display and Bubblewrap; Windows games additionally require Wine. Missing components produce a session error. There is no extraction fallback.
 
 | Host | Guest | Backend |
 | --- | --- | --- |
