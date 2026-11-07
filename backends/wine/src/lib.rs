@@ -1,4 +1,6 @@
-//! Wine execution backend for Windows guests on Linux hosts.
+//! Wine execution backend for Windows guests on Linux hosts. Wine, its
+//! server and the game run inside one session namespace that holds the
+//! served view (no host mount); the prefix links its game drive there.
 use banana_api::{Availability, BackendKind, ExecutionBackend};
 use std::{
     collections::BTreeMap,
@@ -8,6 +10,9 @@ use std::{
 };
 
 /// Private prefix lifecycle and Wine registry operations, independent of titles.
+/// Puts a command into the session namespace (with a working directory there).
+pub type Enter = std::sync::Arc<dyn Fn(&mut Command, Option<&Path>) + Send + Sync>;
+
 pub struct Prefix {
     pub path: PathBuf,
     pub env: BTreeMap<String, String>,
@@ -15,9 +20,19 @@ pub struct Prefix {
     log: PathBuf,
     server: PathBuf,
     closed: bool,
+    enter: Option<Enter>,
 }
 impl Prefix {
     pub fn new(path: &Path, log: &Path, architecture: &str) -> Result<Self, String> {
+        Self::new_in(path, log, architecture, None)
+    }
+    /// A prefix whose Wine processes (and server) all run through `enter`.
+    pub fn new_in(
+        path: &Path,
+        log: &Path,
+        architecture: &str,
+        enter: Option<Enter>,
+    ) -> Result<Self, String> {
         fs::File::create(log).map_err(|e| e.to_string())?;
         let wine = std::env::var_os("ARCADE_WINE")
             .map(PathBuf::from)
@@ -27,6 +42,7 @@ impl Prefix {
         let p = Self {
             server,
             closed: false,
+            enter,
             path: path.to_owned(),
             wine,
             log: log.to_owned(),
@@ -43,8 +59,8 @@ impl Prefix {
             if !p.run(&mut c)?.success() {
                 return Err("Wine prefix initialization failed".into());
             }
-            let mut c = Command::new(&p.server);
-            c.arg("-w").envs(&p.env);
+            let mut c = p.server_command();
+            c.arg("-w");
             if !p.run(&mut c)?.success() {
                 return Err("Wine prefix setup did not complete".into());
             }
@@ -60,9 +76,7 @@ impl Prefix {
             return Ok(());
         }
         let output = banana_api::process::utilities::bounded_output(
-            Command::new(&self.server)
-                .args(["-k", "-w"])
-                .envs(&self.env),
+            self.server_command().args(["-k", "-w"]),
             std::time::Duration::from_secs(5),
             65536,
         )?;
@@ -79,8 +93,25 @@ impl Prefix {
         }
     }
     pub fn command(&self) -> Command {
+        self.command_in(None)
+    }
+    /// A Wine command starting in `cwd` (inside the session namespace).
+    pub fn command_in(&self, cwd: Option<&Path>) -> Command {
         let mut c = Command::new(&self.wine);
         c.envs(&self.env).env_remove("ARCADE_GUEST_ENV");
+        if let Some(enter) = &self.enter {
+            enter(&mut c, cwd);
+        } else if let Some(cwd) = cwd {
+            c.current_dir(cwd);
+        }
+        c
+    }
+    fn server_command(&self) -> Command {
+        let mut c = Command::new(&self.server);
+        c.envs(&self.env);
+        if let Some(enter) = &self.enter {
+            enter(&mut c, None);
+        }
         c
     }
     pub fn run(&self, c: &mut Command) -> Result<ExitStatus, String> {
@@ -197,13 +228,35 @@ impl ExecutionBackend for Wine {
     fn check(&self, p: &banana_api::LaunchPlan) -> Result<(), banana_api::CapabilityError> {
         banana_api::check_host(self, p)
     }
+    /// The view is served into the session's own namespace instead.
+    fn needs_mount(&self, _plan: &banana_api::LaunchPlan) -> bool {
+        false
+    }
     fn launch(
         &self,
         s: banana_api::PreparedSession,
     ) -> Result<Box<dyn banana_api::SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
-        let mount = s.mount()?.to_path_buf();
-        let mut prefix = Prefix::new(
+        // The view appears at this (otherwise empty) directory only inside
+        // the session namespace.
+        let mount = s.state.join("view");
+        #[cfg(target_os = "linux")]
+        let holder = std::sync::Arc::new(banana_native::namespace::Holder::start(
+            &s.resources,
+            &mount,
+            s.view.clone(),
+            &s.state.join("sandbox.log"),
+        )?);
+        #[cfg(target_os = "linux")]
+        let enter: Option<Enter> = {
+            let holder = holder.clone();
+            Some(std::sync::Arc::new(move |c: &mut Command, cwd: Option<&Path>| {
+                holder.enter(c, cwd)
+            }))
+        };
+        #[cfg(not(target_os = "linux"))]
+        let enter: Option<Enter> = None;
+        let mut prefix = Prefix::new_in(
             &s.state.join("prefix"),
             &s.state.join("game.log"),
             if s.plan.binary.bits == 32 {
@@ -211,6 +264,7 @@ impl ExecutionBackend for Wine {
             } else {
                 "win64"
             },
+            enter,
         )?;
         #[cfg(unix)]
         if let Some(relative) = s.plan.guest_root.strip_prefix("C:/") {
@@ -236,18 +290,22 @@ impl ExecutionBackend for Wine {
                     .is_some_and(|v| v == "1"),
             )?;
         }
-        let mut command = prefix.command();
+        let mut command = prefix.command_in(Some(&mount.join(&s.plan.cwd)));
         command
             .arg(mount.join(&s.plan.executable))
             .args(&s.plan.args)
-            .current_dir(mount.join(&s.plan.cwd))
             .envs(&s.plan.env);
         let log = fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
         command
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
         let process = banana_api::process::ProcessSession::spawn(&mut command, s.plan.timeout_ms)?;
-        Ok(Box::new(WineSession { process, prefix }))
+        Ok(Box::new(WineSession {
+            process,
+            prefix,
+            #[cfg(target_os = "linux")]
+            _holder: holder,
+        }))
     }
 }
 
@@ -269,6 +327,9 @@ impl Drop for Prefix {
 struct WineSession {
     process: Box<dyn banana_api::SessionHandle>,
     prefix: Prefix,
+    /// Dropped after the prefix closes, ending the session namespace.
+    #[cfg(target_os = "linux")]
+    _holder: std::sync::Arc<banana_native::namespace::Holder>,
 }
 impl banana_api::SessionHandle for WineSession {
     fn next_event(&mut self) -> Result<Option<banana_api::SessionEvent>, String> {

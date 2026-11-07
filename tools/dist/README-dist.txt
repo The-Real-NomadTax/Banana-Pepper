@@ -16,8 +16,10 @@ Package layout:
   THIRD-PARTY-NOTICES.txt
 
 Windows needs only suitable graphics drivers: game content is served to the
-game process directly, without a mount. Linux requires FUSE/fusermount,
-desktop graphics and Bubblewrap; PE games use Wine.
+game process directly, without a mount. Linux needs /dev/fuse,
+unprivileged user namespaces and desktop graphics (helpers/banana-sandbox
+mounts the game view inside each session); PE games use Wine. On Ubuntu
+23.10+, allow user namespaces for helpers/banana-sandbox in AppArmor.
 Required game libraries are prepared separately in per-user dependency storage.
 Missing mounting components produce an error. Archives are never extracted as
 a fallback. Generic Water workers support only their declared capabilities.

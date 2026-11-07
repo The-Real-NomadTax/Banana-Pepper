@@ -496,6 +496,10 @@ impl SessionView for ServedView {
     fn read_dir(&self, path: &str) -> std::io::Result<Vec<banana_content::Entry>> {
         self.0.read_dir(path)
     }
+    #[cfg(target_os = "linux")]
+    fn serve_fuse(&self, device: std::fs::File) -> std::io::Result<()> {
+        banana_vfs::serve_fuse(self.0.clone(), device.into())
+    }
 }
 
 struct Namespace<'a>(&'a banana_vfs::MountLease);

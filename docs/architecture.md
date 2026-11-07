@@ -9,7 +9,7 @@
 `banana-vfs` composes source content, memory-backed generated files, aliases, dependency subtrees and a persistent overlay. Each backend reaches that view one of three ways, declared by `ExecutionBackend::needs_mount`:
 
 - **Served (Windows).** The session host serves the view over private inherited pipes using the `banana-wire` protocol (`banana_vfs::wire::serve` on the host, the dependency-free `banana_wire::Client` in the guest). Water's workers implement the guest's file calls on it. Native Windows titles get a staged root holding only the view's directory tree and PE images; the staged executable imports `banana_view.dll` first, which hooks the Win32 file API (files, searches, mappings, INI profiles, share modes) so every other path under that root is served from the view. Nothing needs to be installed and no game content is extracted.
-- **Mounted (Linux).** FUSE exposes the view for Native/Bubblewrap and Wine.
+- **Namespaced (Linux).** `banana-sandbox` (built from `backends/native`) creates user and mount namespaces as an unprivileged process, opens `/dev/fuse` there (the kernel requires the device to come from the mounting namespace), mounts it and passes the connection back to the host over a socket; the host serves the view on it. In `run` mode it then builds an isolated root (read-only system directories, fresh `/dev`, `/proc` and `/tmp`, the desktop/GPU/audio binds) and runs native guests as PID 2 under a minimal init. In `hold` mode it keeps the host root and holds the namespace so Wine, its server and the game can enter it. The mount exists only inside the session and disappears with it: no fusermount, no Bubblewrap and no stale mounts. On Ubuntu 23.10 and later, AppArmor restricts unprivileged user namespaces; allow them for `helpers/banana-sandbox` with an AppArmor profile containing `userns,` (or system-wide).
 - **Intercepted (Android).** The PRoot tracer brokers filesystem calls into the same view.
 
 `BANANA_VIEW_TRACE=1` (paths), `2` (every read, seek and size query) or `3` (also what is left to Windows) makes the Windows shim log to the session's `game.log`. With `3` and no view, the shim only observes, which shows how an unmodified game reads its files.
@@ -32,9 +32,9 @@ Mount leases own the driver host, ownership lock and empty mountpoint. Stale cle
 
 ## Execution
 
-Windows uses Native for supported PE plans and Water for supported ELF plans. Linux uses Native/Bubblewrap or Wine. Water has generic x86 and x64 workers. Its versioned C adapter interface validates structure sizes and separates generic loading, graphics and audio from title behavior.
+Windows uses Native for supported PE plans and Water for supported ELF plans. Linux uses Native (in the session sandbox) or Wine (in a held session namespace). Water has generic x86 and x64 workers. Its versioned C adapter interface validates structure sizes and separates generic loading, graphics and audio from title behavior.
 
-Windows children start suspended, join a kill-on-close job, and resume after assignment. Linux children run in owned process groups; native guest isolation additionally uses Bubblewrap. Session handles expose events, cancellation, commands and exit status. Time-limited diagnostics report a timeout distinctly.
+Windows children start suspended, join a kill-on-close job, and resume after assignment. Linux children run in owned process groups; native guests are additionally isolated by `banana-sandbox`. Session handles expose events, cancellation, commands and exit status. Time-limited diagnostics report a timeout distinctly.
 
 Keyboard transport uses bounded, sequenced frames with focus state, held sources and edges. Receivers release held input after transport loss. Session actions use bounded structured messages. Game modules validate action payloads.
 

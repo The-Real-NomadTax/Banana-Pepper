@@ -1,4 +1,5 @@
-//! Linux filesystem/display/audio isolation. Game policy belongs to callers.
+//! Linux filesystem/display/audio isolation, run by `banana-sandbox` (see
+//! `namespace`). Game policy belongs to callers.
 use std::{
     ffi::OsStr,
     fs,
@@ -10,17 +11,14 @@ pub struct Sandbox {
     pub command: Command,
 }
 
-impl Default for Sandbox {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 impl Sandbox {
-    pub fn new() -> Self {
+    /// A sandbox run by the `helper` executable.
+    pub fn new(helper: &Path) -> Self {
         let mut s = Self {
-            command: Command::new("bwrap"),
+            command: Command::new(helper),
         };
         s.command.args([
+            "run",
             "--unshare-all",
             "--die-with-parent",
             "--new-session",
@@ -65,6 +63,29 @@ impl Sandbox {
             .arg(if readonly { "--ro-bind" } else { "--bind" })
             .arg(source)
             .arg(destination);
+        self
+    }
+    /// Mount the session view at `destination`.
+    pub fn view(&mut self, destination: impl AsRef<OsStr>) -> &mut Self {
+        self.command.arg("--view").arg(destination);
+        self
+    }
+    /// Bind `source` (relative to the view) at `destination`.
+    pub fn view_bind(
+        &mut self,
+        source: impl AsRef<OsStr>,
+        destination: impl AsRef<OsStr>,
+        readonly: bool,
+    ) -> &mut Self {
+        self.command
+            .arg(if readonly { "--view-ro-bind" } else { "--view-bind" })
+            .arg(source)
+            .arg(destination);
+        self
+    }
+    /// The program and its arguments; options must come first.
+    pub fn exec(&mut self, program: impl AsRef<OsStr>, args: &[String]) -> &mut Self {
+        self.command.arg("--").arg(program).args(args);
         self
     }
     pub fn device(&mut self, p: impl AsRef<OsStr>) -> &mut Self {

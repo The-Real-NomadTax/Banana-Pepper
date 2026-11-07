@@ -237,7 +237,7 @@ fn run() -> Result<(), String> {
             }
         }
     }
-    write(&staging,"THIRD-PARTY-NOTICES.txt",b"PRoot: GPL-2.0-or-later; https://github.com/termux/proot (Android tracer built from pinned source).\nBox64: MIT; https://github.com/ptitSeb/box64\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\niced-x86: MIT; https://github.com/icedland/iced\nLinux requires FUSE/fusermount and bubblewrap; Wine for PE games.\n")?;
+    write(&staging,"THIRD-PARTY-NOTICES.txt",b"PRoot: GPL-2.0-or-later; https://github.com/termux/proot (Android tracer built from pinned source).\nBox64: MIT; https://github.com/ptitSeb/box64\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\niced-x86: MIT; https://github.com/icedland/iced\nLinux requires /dev/fuse and unprivileged user namespaces; Wine for PE games.\n")?;
     let inventory = inventory(&staging)?;
     write(&staging,"manifest.json",&serde_json::to_vec_pretty(&json!({"version":2,"files":inventory,"os":host,"arch":if android {"aarch64"}else{std::env::consts::ARCH}})).map_err(|e|e.to_string())?)?;
     fs::write(

@@ -1,11 +1,14 @@
 //! Shared composed filesystems, persistent overlays and their exposure to
 //! guests: the [`wire`] protocol for intercepting backends (Water, the
-//! Windows file shim), FUSE on Linux and the PRoot tracer on Android.
+//! Windows file shim), FUSE connections served into a session's own Linux
+//! namespace, and the PRoot tracer on Android.
 mod view;
 pub mod wire;
 pub use view::*;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::serve_fuse;
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
@@ -14,8 +17,6 @@ use std::{
 };
 pub struct MountLease {
     pub path: PathBuf,
-    #[cfg(target_os = "linux")]
-    _host: Option<fuser::BackgroundSession>,
     #[cfg(target_os = "android")]
     _rootless: rootless::Server,
     _lock: Option<File>,
@@ -23,8 +24,6 @@ pub struct MountLease {
 }
 impl Drop for MountLease {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
-        self._host.take();
         let _ = fs::remove_dir(&self.path);
         self._lock.take();
         if let Some(path) = self._lock_path.take() {
@@ -58,8 +57,6 @@ pub fn cleanup_stale_mounts(parent: &Path) -> io::Result<()> {
             continue;
         }
         let point = e.path().with_extension("");
-        #[cfg(target_os = "linux")]
-        unmount_stale(&point)?;
         let removed = match fs::remove_dir(&point) {
             Ok(()) => true,
             Err(err) if err.kind() == io::ErrorKind::NotFound => true,
@@ -95,8 +92,6 @@ pub fn mount(view: Arc<View>, point: &Path) -> io::Result<MountLease> {
     lock.try_lock().map_err(io::Error::other)?;
     lock.write_all(b"banana-mount-v1\n")?;
     lock.sync_all()?;
-    #[cfg(target_os = "linux")]
-    let result = linux::mount(view, point);
     #[cfg(target_os = "android")]
     let result = (|| {
         fs::create_dir(point)?;
@@ -109,12 +104,12 @@ pub fn mount(view: Arc<View>, point: &Path) -> io::Result<MountLease> {
             _lock_path: None,
         })
     })();
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    #[cfg(not(target_os = "android"))]
     let result = {
         let _ = view;
         Err::<MountLease, _>(io::Error::new(
             io::ErrorKind::Unsupported,
-            "This host has no OS mount; its backends are served the view directly",
+            "Only Android mounts views; other hosts serve them to the session",
         ))
     };
     match result {
@@ -133,76 +128,6 @@ pub fn mount(view: Arc<View>, point: &Path) -> io::Result<MountLease> {
 }
 #[cfg(test)]
 mod tests;
-
-#[cfg(target_os = "linux")]
-fn unmount_stale(point: &Path) -> io::Result<()> {
-    use std::os::unix::ffi::OsStringExt;
-    fn decode(s: &str) -> std::ffi::OsString {
-        let bytes = s.as_bytes();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'\\'
-                && i + 3 < bytes.len()
-                && bytes[i + 1..i + 4]
-                    .iter()
-                    .all(|b| (b'0'..=b'7').contains(b))
-            {
-                out.push(
-                    (bytes[i + 1] - b'0') * 64 + (bytes[i + 2] - b'0') * 8 + bytes[i + 3] - b'0',
-                );
-                i += 4;
-            } else {
-                out.push(bytes[i]);
-                i += 1;
-            }
-        }
-        std::ffi::OsString::from_vec(out)
-    }
-    let canonical = point
-        .parent()
-        .ok_or_else(|| io::Error::other("Mountpoint has no parent"))?
-        .canonicalize()?
-        .join(
-            point
-                .file_name()
-                .ok_or_else(|| io::Error::other("Mountpoint has no name"))?,
-        );
-    let mounts = fs::read_to_string("/proc/self/mountinfo")?;
-    let owned = mounts.lines().any(|line| {
-        let Some((left, right)) = line.split_once(" - ") else {
-            return false;
-        };
-        let fields = left.split_whitespace().collect::<Vec<_>>();
-        let kind = right.split_whitespace().collect::<Vec<_>>();
-        fields.len() > 4
-            && kind.len() > 1
-            && kind[0].starts_with("fuse")
-            && kind[1] == "banana-pepper"
-            && PathBuf::from(decode(fields[4])) == canonical
-    });
-    if owned {
-        let status = match std::process::Command::new("fusermount3")
-            .args(["-u", "-z"])
-            .arg(&canonical)
-            .status()
-        {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                std::process::Command::new("fusermount")
-                    .args(["-u", "-z"])
-                    .arg(&canonical)
-                    .status()
-            }
-            result => result,
-        }?;
-        if !status.success() {
-            return Err(io::Error::other(
-                "Could not release an abandoned Banana Pepper mount",
-            ));
-        }
-    }
-    Ok(())
-}
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod rootless;

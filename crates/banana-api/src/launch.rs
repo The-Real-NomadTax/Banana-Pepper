@@ -290,6 +290,11 @@ pub trait SessionView: Send + Sync {
     fn read(&self, path: &str, limit: u64) -> std::io::Result<Vec<u8>>;
     /// List a view directory.
     fn read_dir(&self, path: &str) -> std::io::Result<Vec<banana_content::Entry>>;
+    /// Serve a FUSE connection (an opened `/dev/fuse` that the session's own
+    /// namespace mounted) until that mount ends. Linux only.
+    fn serve_fuse(&self, _device: std::fs::File) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SessionEvent {

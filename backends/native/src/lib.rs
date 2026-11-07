@@ -1,8 +1,11 @@
-//! Native execution: the host runs the guest executable directly. On Linux,
-//! ELF guests run inside a bubblewrap sandbox with a 32-bit userspace over the
-//! mounted view. On Windows there is no mount: PE images are staged and the
-//! view shim serves every other file (see `staging`).
+//! Native execution: the host runs the guest executable directly. Neither
+//! host mounts the view: on Linux, ELF guests run in `banana-sandbox`, which
+//! mounts the served view inside the session's own namespaces (see
+//! `namespace`); on Windows, PE images are staged and the view shim serves
+//! every other file (see `staging`).
 use banana_api::{Availability, BackendKind, ExecutionBackend};
+#[cfg(target_os = "linux")]
+pub mod namespace;
 pub mod pe;
 pub mod sandbox;
 #[cfg(windows)]
@@ -26,9 +29,10 @@ impl ExecutionBackend for Native {
         if cfg!(windows) {
             Availability::Available
         } else if cfg!(target_os = "linux") {
-            match find_program("bwrap") {
-                Some(_) => Availability::Available,
-                None => Availability::Missing("bubblewrap (bwrap) is not installed".into()),
+            if std::path::Path::new("/dev/fuse").exists() {
+                Availability::Available
+            } else {
+                Availability::Missing("FUSE (/dev/fuse) is unavailable".into())
             }
         } else {
             Availability::Unsupported
@@ -45,7 +49,7 @@ impl ExecutionBackend for Native {
         Ok(())
     }
     fn needs_mount(&self, _plan: &banana_api::LaunchPlan) -> bool {
-        !cfg!(windows)
+        false
     }
     fn adapters(&self, _plan: &banana_api::LaunchPlan) -> Vec<banana_api::Adapter> {
         #[cfg(windows)]
@@ -73,7 +77,8 @@ impl ExecutionBackend for Native {
 fn launch_unix(
     s: banana_api::PreparedSession,
 ) -> Result<Box<dyn banana_api::SessionHandle>, String> {
-    let mount = s.mount()?.to_path_buf();
+    #[cfg(target_os = "linux")]
+    let connection = namespace::ViewConnection::new().map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
     let input = s
         .plan
@@ -83,13 +88,18 @@ fn launch_unix(
         .transpose()?;
     #[cfg(not(windows))]
     let mut command = {
-        let mut box_ = Sandbox::new();
-        box_.bind(&mount, &s.plan.guest_root, false)
+        #[cfg(target_os = "linux")]
+        let mut box_ = Sandbox::new(&namespace::helper(&s.resources));
+        #[cfg(not(target_os = "linux"))]
+        let mut box_ = Sandbox::new(std::path::Path::new("banana-sandbox"));
+        #[cfg(target_os = "linux")]
+        box_.command.args(connection.args());
+        box_.view(&s.plan.guest_root)
             .bind(&s.state, "/work", false)
             .chdir(&format!("{}/{}", s.plan.guest_root, s.plan.cwd));
         for m in &s.plan.guest_mounts {
             banana_content::path(&m.source).map_err(|e| e.to_string())?;
-            box_.bind(mount.join(&m.source), &m.target, m.readonly);
+            box_.view_bind(&m.source, &m.target, m.readonly);
         }
         for device in &s.devices {
             box_.device(device);
@@ -113,9 +123,10 @@ fn launch_unix(
         for (k, v) in &s.plan.env {
             box_.env(k, v);
         }
-        box_.command
-            .arg(format!("{}/{}", s.plan.guest_root, s.plan.executable))
-            .args(&s.plan.args);
+        box_.exec(
+            format!("{}/{}", s.plan.guest_root, s.plan.executable),
+            &s.plan.args,
+        );
         box_.command
     };
     let log = std::fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
@@ -127,6 +138,8 @@ fn launch_unix(
         s.plan.timeout_ms,
         s.plan.command_channel.as_ref().map(|p| s.state.join(p)),
     )?;
+    #[cfg(target_os = "linux")]
+    connection.serve(s.view.clone())?;
     #[cfg(target_os = "linux")]
     return Ok(Box::new(NativeSession {
         process,

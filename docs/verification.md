@@ -8,11 +8,11 @@ The real mount test requires an installed filesystem component and mount permiss
 cargo test -p banana-vfs --test mount -- --ignored --exact mounted_sources_execute_and_preserve_dirty_pages --nocapture
 ```
 
-It runs a test executable directly from a memory-backed file in folder, ZAR and memory views. It exercises shared writable mappings, persistence, rename/delete with an open description, cleanup, and unchanged originals. Linux mountpoints must be on a filesystem accepted by fusermount; Windows-shared development drives may be rejected. Normal Linux XDG cache directories provide suitable mountpoints.
+It runs a test executable directly from a memory-backed file in folder, ZAR and memory views. It exercises shared writable mappings, persistence, rename/delete with an open description, cleanup, and unchanged originals. Linux mounts happen inside each session's own namespace, so no fusermount-compatible host mountpoint is needed.
 
 Other coverage checks provider parity and fingerprints; path containment; archive corruption and conversion; dirty-block persistence; metadata and case rules; stable identity and single writers; stale mount cleanup; controls and gun aiming modes; worker timeouts; static ELF64 execution; portable CLI archive inspection; and artifact metadata validation.
 
-Live FUSE tests passed against all three source types during this refactor, including cleanup after the mount owner is killed. Run `cargo test -p banana-vfs --test mount -- --ignored --nocapture` to include the crash recovery test. Windows has no mount: Big Buck Hunter Pro (Water, from a ZAR) and Ford Racing (native, from a folder and a ZAR) run through the served view with no extra software installed.
+`cargo test -p banana-native --test namespace` (Linux) serves a real view into `banana-sandbox` in both modes: an isolated guest reads the view and a read-only sub-bind, writes into the overlay, runs as PID 2 with its own `/proc` and cannot write `/usr`; a held namespace serves processes that enter it, nothing is visible outside it, and the connection ends with it. Windows has no mount: Big Buck Hunter Pro (Water, from a ZAR) and Ford Racing (native, from a folder and a ZAR) run through the served view with no extra software installed.
 
 Synthetic fixtures verify mechanisms. Gameplay, graphics, audio, save behavior and cabinet protocols must be checked separately for each real title/build/backend combination. Current mounted compatibility profiles remain experimental until those checks are completed. ELF64 dynamic linking, PIE and TLS remain explicit Water capability blockers.
 

@@ -1,10 +1,12 @@
-use super::{MountLease, View};
+//! FUSE adapter: serves a View on a `/dev/fuse` connection that a session's
+//! own namespace mounted (no fusermount, no host-visible mount).
+use super::View;
 use fuser::*;
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
     io,
-    path::Path,
+    os::fd::OwnedFd,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -16,6 +18,9 @@ struct Fs {
     paths: BTreeMap<u64, String>,
 }
 fn errno(e: io::Error) -> i32 {
+    if e.kind() != io::ErrorKind::NotFound && std::env::var_os("BANANA_VIEW_TRACE").is_some() {
+        eprintln!("[banana-view] fuse: {e}");
+    }
     match e.kind() {
         io::ErrorKind::NotFound => libc::ENOENT,
         io::ErrorKind::AlreadyExists => libc::EEXIST,
@@ -125,7 +130,7 @@ impl Filesystem for Fs {
             Err(e) => r.error(errno(e)),
         }
     }
-    fn getattr(&mut self, _: &Request<'_>, i: u64, r: ReplyAttr) {
+    fn getattr(&mut self, _: &Request<'_>, i: u64, _: Option<u64>, r: ReplyAttr) {
         match self.attr(i) {
             Ok(a) => r.attr(&TTL, &a),
             Err(e) => r.error(errno(e)),
@@ -365,35 +370,22 @@ impl Filesystem for Fs {
         }
     }
 }
-pub fn mount(view: Arc<View>, point: &Path) -> io::Result<MountLease> {
-    std::fs::create_dir_all(point)?;
+/// Serve `view` on an opened `/dev/fuse` until its mount goes away (the
+/// session's namespace ends). The mount itself happens in that namespace.
+pub fn serve_fuse(view: Arc<View>, device: OwnedFd) -> io::Result<()> {
     let fs = Fs {
         files: BTreeMap::new(),
         next_file: 0,
         view,
         paths: BTreeMap::from([(1, String::new())]),
     };
-    let host = fuser::spawn_mount2(
-        fs,
-        point,
-        &[
-            MountOption::FSName("banana-pepper".into()),
-            MountOption::RW,
-            MountOption::NoSuid,
-            MountOption::NoDev,
-        ],
-    )
-    .map_err(|e| {
-        io::Error::other(format!(
-            "Cannot mount game filesystem. Enable FUSE and install fusermount3: {e}"
-        ))
-    })?;
-    Ok(MountLease {
-        path: point.into(),
-        _host: Some(host),
-        _lock: None,
-        _lock_path: None,
-    })
+    // Requests come only from the session's own namespace.
+    let mut session = Session::from_fd(fs, device, SessionACL::All);
+    match session.run() {
+        // The connection ends when the namespace (and so the mount) is gone.
+        Err(e) if e.raw_os_error() == Some(libc::ENODEV) => Ok(()),
+        r => r,
+    }
 }
 
 fn time_ns(t: Option<TimeOrNow>) -> u64 {

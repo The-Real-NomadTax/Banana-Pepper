@@ -21,3 +21,12 @@ workspace=true
 
 [dev-dependencies]
 goblin.workspace = true
+banana-vfs.workspace = true
+tempfile = "3"
+
+[[package.metadata.banana.artifacts]]
+name="banana-sandbox"
+kind="bin"
+target=""
+hosts=["linux"]
+destination="helpers/banana-sandbox"

@@ -12,13 +12,13 @@ Original content stays read-only. Executable reconstruction and compatibility pa
 
 Install Rust, just, and the platform build tools, then run `just build`. The build reads artifact declarations from each crate and creates `target/dist/banana-pepper-<os>-<arch>/`. `just run` starts that package.
 
-Windows needs nothing installed: Water and native Windows titles are served the game view directly over private pipes, with no OS mount (see [architecture](docs/architecture.md)). Linux requires FUSE/fusermount, a desktop display and Bubblewrap; Windows games additionally require Wine. Missing components produce a session error. There is no extraction fallback.
+Windows needs nothing installed: Water and native Windows titles are served the game view directly over private pipes, with no OS mount (see [architecture](docs/architecture.md)). Linux needs `/dev/fuse`, unprivileged user namespaces and a desktop display; Windows games additionally require Wine. No fusermount or Bubblewrap: the package's own `banana-sandbox` helper mounts the served view inside each session's namespace. Missing components produce a session error. There is no extraction fallback.
 
 | Host | Guest | Backend |
 | --- | --- | --- |
 | Windows x86-64 | Supported Windows PE builds | Native |
 | Windows x86-64 | Supported Linux ELF builds | Water |
-| Linux x86-64 | Supported Linux ELF builds | Native / Bubblewrap |
+| Linux x86-64 | Supported Linux ELF builds | Native (session sandbox) |
 | Linux x86-64 | Supported Windows PE builds | Wine |
 | Android ARM64 (unrooted) | Experimental Linux / Windows plans | Box64 / Wine with the shared virtual filesystem |
 
