@@ -1,18 +1,21 @@
 //! Shared game preparation and process orchestration: settings and
 //! controller hand-off, content resolution and launch dispatch. Individual
-//! games supply their own launchers through `banana-api`.
+//! games supply declarative compatibility plans through `banana-api`.
 pub mod content;
 pub mod dependencies;
 pub mod process;
-pub mod session;
-pub use banana_native::Sandbox;
+
+mod configuration;
+mod migration;
+mod orchestrator;
+pub mod storage;
 
 use banana_settings::{GameSettings, Settings};
 use std::path::{Path, PathBuf};
 
 /// Distribution root beside the executable, or the checkout for development.
 /// Resolve from the executable rather than the working directory so shortcuts
-/// and relocated bundles use their own settings, adapters, saves and caches.
+/// and relocated bundles resolve their own immutable defaults and adapters.
 pub fn project_root() -> Result<PathBuf, String> {
     root_for(
         &std::env::current_exe().map_err(|e| e.to_string())?,
@@ -46,15 +49,6 @@ pub fn resource_path(root: &Path, bundled: &str, development: &str) -> PathBuf {
     } else {
         development
     })
-}
-
-/// Compiled registry host for Linux/WSL, separate from the desktop frontend.
-pub fn linux_host(project: &Path) -> PathBuf {
-    resource_path(
-        project,
-        "helpers/linux/banana-game-host",
-        "target/wsl/release/banana-game-host",
-    )
 }
 
 #[cfg(test)]
@@ -99,46 +93,19 @@ mod path_tests {
     }
 }
 
-/// Run `action` for the registered game `id` against content below `root`.
 pub fn run(id: &str, root: &Path, action: &str) -> Result<String, String> {
-    let game = banana_api::game(id).ok_or_else(|| format!("Unknown game {id}"))?;
-    game.run(root, action)
+    orchestrator::run(id, root, banana_api::ActionRequest::new(action))
 }
-
+pub use orchestrator::{SessionReport, run_report, start};
 /// Per-game settings from settings.cfg in the project root.
-pub fn game_settings(project: &Path, game: &str) -> Result<GameSettings, String> {
-    Ok(Settings::load(&project.join("settings.cfg"))?
-        .game(game)
-        .clone())
+pub fn game_settings(_project: &Path, game: &str) -> Result<GameSettings, String> {
+    Ok(
+        Settings::load(&storage::Paths::discover()?.config.join("settings.cfg"))?
+            .game(game)
+            .clone(),
+    )
 }
 
-/// Apply declared settings and device hand-off directly to a native sandbox.
-pub fn sandbox_settings(
-    sandbox: &mut Sandbox,
-    project: &Path,
-    game: &str,
-    settings: &GameSettings,
-) -> Result<(), String> {
-    sandbox.env("ARCADE_RESOLUTION", settings.resolution_text());
-    for (key, value) in settings.guest_env() {
-        sandbox.env(key, value);
-    }
-    for (key, value) in pad_env(project, game)? {
-        sandbox.env(key, value);
-    }
-    #[cfg(target_os = "linux")]
-    for device in pad_devices(&settings.input_assignment()) {
-        sandbox.device(device);
-    }
-    Ok(())
-}
-
-/// Input device nodes (`/dev/input/eventN`) to expose to a sandboxed Linux
-/// game: only the kinds its players' input methods read
-/// ([`banana_input::pad::Inputs::device_player`]): Xbox-style gamepads,
-/// other game controllers, or (Raw Input) mice and light guns. Keyboards
-/// and touchpads are never exposed, so keystrokes stay unreadable to the
-/// game. Devices must be connected before the game starts.
 #[cfg(target_os = "linux")]
 pub fn pad_devices(inputs: &banana_input::pad::Inputs) -> Vec<std::path::PathBuf> {
     let mut devices = Vec::new();
@@ -230,8 +197,10 @@ fn device_kind(key: &str, rel: &str, abs: &str) -> Option<banana_input::pad::Dev
 /// `ARCADE_PAD_DEVICES` (colon-separated device nodes) for the Linux
 /// sandboxes. Games whose adapters press keys for controller buttons add
 /// [`pad_key_env`] themselves.
-pub fn pad_env(project: &Path, game: &str) -> Result<Vec<(&'static str, String)>, String> {
-    let controls = banana_input::controls::Bindings::load(&project.join("controls.cfg"))?;
+pub fn pad_env(_project: &Path, game: &str) -> Result<Vec<(&'static str, String)>, String> {
+    let controls = banana_input::controls::Bindings::load(
+        &storage::Paths::discover()?.config.join("controls.cfg"),
+    )?;
     let mut env = vec![("ARCADE_PAD", controls.pad_env_value(game)?)];
     // Controller 2 in two-player games (used when settings.cfg players = 2).
     let p2 = controls.pad_env_value_p2(game)?;
@@ -247,7 +216,7 @@ pub fn pad_env(project: &Path, game: &str) -> Result<Vec<(&'static str, String)>
     #[cfg(target_os = "linux")]
     env.push((
         "ARCADE_PAD_DEVICES",
-        pad_devices(&game_settings(project, game)?.input_assignment())
+        pad_devices(&game_settings(_project, game)?.input_assignment())
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
@@ -258,8 +227,10 @@ pub fn pad_env(project: &Path, game: &str) -> Result<Vec<(&'static str, String)>
 
 /// `ARCADE_PAD_KEYS` and `ARCADE_PAD_KEYS_P2`: controller buttons mapped to
 /// the key codes bound to each action, for adapters that inject keystrokes.
-pub fn pad_key_env(project: &Path, game: &str) -> Result<Vec<(&'static str, String)>, String> {
-    let controls = banana_input::controls::Bindings::load(&project.join("controls.cfg"))?;
+pub fn pad_key_env(_project: &Path, game: &str) -> Result<Vec<(&'static str, String)>, String> {
+    let controls = banana_input::controls::Bindings::load(
+        &storage::Paths::discover()?.config.join("controls.cfg"),
+    )?;
     Ok(vec![
         ("ARCADE_PAD_KEYS", controls.pad_key_env_value(game)?),
         ("ARCADE_PAD_KEYS_P2", controls.pad_key_env_value_p2(game)?),
@@ -297,4 +268,57 @@ fn device_capabilities() {
         Some(Device::DirectInput)
     );
     assert_eq!(device_kind("", "", ""), None);
+}
+
+/// Dispatch a structured command to an existing session; no game utility executable.
+pub fn send_action(entry: &str, action: banana_api::ActionRequest) -> Result<(), String> {
+    let paths = storage::Paths::discover()?;
+    let record = storage::entries(&paths)?
+        .into_iter()
+        .find(|r| r.id == entry)
+        .ok_or("Unknown library entry")?;
+    let game = banana_api::game(&record.game).ok_or("Unknown game")?;
+    if !storage::valid_identity(&record.id) {
+        return Err("Invalid entry identity".into());
+    }
+    game.validate_session_action(&action)?;
+    #[cfg(unix)]
+    {
+        let bytes = serde_json::to_vec(&action).map_err(|e| e.to_string())?;
+        if bytes.len() > 8192 {
+            return Err("Action payload exceeds 8 KiB".into());
+        }
+        let socket = std::os::unix::net::UnixDatagram::unbound().map_err(|e| e.to_string())?;
+        socket.set_nonblocking(true).map_err(|e| e.to_string())?;
+        socket
+            .send_to(
+                &bytes,
+                paths
+                    .state
+                    .join("entries")
+                    .join(&record.id)
+                    .join("actions.sock"),
+            )
+            .map_err(|e| format!("Session is unavailable: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = action;
+        Err("This backend has no active session command transport".into())
+    }
+}
+
+/// Explicit user reset, protected by the same single-writer lock as a game session.
+pub fn reset_overlay(entry: &str, path: Option<&str>) -> Result<(), String> {
+    let paths = storage::Paths::discover()?;
+    let record = storage::entries(&paths)?
+        .into_iter()
+        .find(|r| r.id == entry)
+        .ok_or("Unknown library entry")?;
+    if !storage::valid_identity(&record.id) {
+        return Err("Invalid entry identity".into());
+    }
+    banana_vfs::reset_overlay(&paths.data.join("overlays").join(record.id), path)
+        .map_err(|e| e.to_string())
 }

@@ -10,6 +10,7 @@ fn parse_scan(line: &[u8]) -> Option<(usize, [u8; 8])> {
         .then_some(((line[0] - b'1') as usize, code))
 }
 
+#[cfg(test)]
 fn parse_key(line: &[u8]) -> Option<(usize, bool)> {
     let text = std::str::from_utf8(line).ok()?;
     let (source, state) = text.split_once(' ')?;
@@ -57,7 +58,7 @@ fn order_maps(
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod native {
-    use std::{collections::VecDeque, ffi::c_void, io::Read, ptr, time::Duration};
+    use std::{collections::VecDeque, ffi::c_void, ptr, time::Duration};
 
     // All addresses belong to the hash-checked, non-PIE Minecraft 3.07 dump.
     const MUTEXES: usize = 0x1c62e20;
@@ -66,61 +67,94 @@ mod native {
     static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     struct Keyboard {
-        file: std::fs::File,
-        line: Vec<u8>,
-        oversized: bool,
+        socket: std::os::unix::net::UnixDatagram,
+        sequence: u64,
         held: [bool; 128],
         owned: [bool; 128],
         elapsed: [u32; 128],
         last: std::time::Instant,
+        received: std::time::Instant,
     }
-
+    fn bind_socket(path: &str) -> std::io::Result<std::os::unix::net::UnixDatagram> {
+        use std::os::unix::fs::FileTypeExt;
+        if let Ok(m) = std::fs::symlink_metadata(path) {
+            if !m.file_type().is_socket() {
+                return Err(std::io::Error::other("Input endpoint is not a socket"));
+            }
+            std::fs::remove_file(path)?;
+        }
+        let socket = std::os::unix::net::UnixDatagram::bind(path)?;
+        socket.set_nonblocking(true)?;
+        Ok(socket)
+    }
     impl Keyboard {
         fn open() -> std::io::Result<Self> {
             Ok(Self {
-                file: std::fs::File::open("/work/key-events")?,
-                line: Vec::with_capacity(16),
-                oversized: false,
+                socket: bind_socket("/work/input.sock")?,
+                sequence: 0,
                 held: [false; 128],
                 owned: [false; 128],
                 elapsed: [0; 128],
                 last: std::time::Instant::now(),
+                received: std::time::Instant::now(),
             })
         }
-
         unsafe fn merge(&mut self) -> bool {
             let mut presses = [0u32; 128];
             let mut releases = [0u32; 128];
-            let mut bytes = [0; 512];
-            // Regular file at EOF is nonblocking. Bound work per polling frame.
+            let mut bytes = [0; 16384];
             for _ in 0..8 {
-                let Ok(count) = self.file.read(&mut bytes) else {
+                let Ok(n) = self.socket.recv(&mut bytes) else {
                     break;
                 };
-                if count == 0 {
-                    break;
+                let Ok(frame) =
+                    serde_json::from_slice::<banana_input::transport::InputFrame>(&bytes[..n])
+                else {
+                    continue;
+                };
+                if !frame.valid() || frame.sequence <= self.sequence {
+                    continue;
                 }
-                for byte in &bytes[..count] {
-                    if *byte == b'\n' {
-                        if !self.oversized
-                            && let Some((source, down)) = super::parse_key(&self.line)
-                        {
-                            self.owned[source] = true;
-                            if self.held[source] != down {
-                                if down {
-                                    presses[source] += 1;
-                                } else {
-                                    releases[source] += 1;
-                                }
-                            }
-                            self.held[source] = down;
+                self.sequence = frame.sequence;
+                self.received = std::time::Instant::now();
+                for (source, down) in frame.edges {
+                    let source = source as usize;
+                    if source >= 128 {
+                        continue;
+                    }
+                    self.owned[source] = true;
+                    let down = down && frame.focused;
+                    if self.held[source] != down {
+                        if down {
+                            presses[source] += 1
+                        } else {
+                            releases[source] += 1
                         }
-                        self.line.clear();
-                        self.oversized = false;
-                    } else if self.line.len() < 16 {
-                        self.line.push(*byte);
-                    } else {
-                        self.oversized = true;
+                        self.held[source] = down;
+                    }
+                }
+                for source in frame.sources {
+                    let source = source as usize;
+                    if source >= 128 {
+                        continue;
+                    }
+                    self.owned[source] = true;
+                    let down = frame.focused && frame.held.contains(&(source as u16));
+                    if self.held[source] != down {
+                        if down {
+                            presses[source] += 1
+                        } else {
+                            releases[source] += 1
+                        }
+                        self.held[source] = down;
+                    }
+                }
+            }
+            if self.received.elapsed() > Duration::from_millis(600) {
+                for source in 0..128 {
+                    if self.held[source] {
+                        releases[source] += 1;
+                        self.held[source] = false;
                     }
                 }
             }
@@ -138,8 +172,6 @@ mod native {
                 };
                 let raw = (0x185ee40 + 0x1248 + source * 48) as *mut u32;
                 unsafe {
-                    // Once a host key is seen, that source has one authority;
-                    // duplicate SDL delivery cannot create a second edge.
                     raw.add(1).write(presses[source]);
                     raw.add(2).write(releases[source]);
                     raw.add(3).write(self.elapsed[source]);
@@ -172,15 +204,13 @@ mod native {
 
     unsafe extern "C" fn worker(_: *mut c_void) -> *mut c_void {
         let mut queues: [VecDeque<[u8; 8]>; 4] = std::array::from_fn(|_| VecDeque::new());
-        let mut file = match std::fs::File::open("/work/card-events") {
-            Ok(file) => file,
-            Err(error) => {
-                eprintln!("[minecraft-cards] Cannot open events: {error}");
+        let socket = match bind_socket("/work/actions.sock") {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Cannot bind session actions: {e}");
                 return ptr::null_mut();
             }
         };
-        let mut line = Vec::with_capacity(16);
-        let mut oversized = false;
         // Physical camera ordering runs before this worker starts. Virtual slots
         // already have fixed player assignments and need no brightness calibration.
         unsafe {
@@ -189,31 +219,30 @@ mod native {
         ACTIVE.store(true, std::sync::atomic::Ordering::Release);
         eprintln!("[minecraft-cards] Four virtual QR scanners ready");
         while unsafe { ptr::read_volatile(0x17ba463 as *const u8) } == 0 {
-            // Bounded reads/queues: malformed or excessively fast writers cannot grow memory.
-            let mut bytes = [0; 512];
-            if let Ok(count) = file.read(&mut bytes) {
-                for byte in &bytes[..count] {
-                    if *byte == b'\n' {
-                        if !oversized {
-                            if let Some((player, code)) = super::parse_scan(&line) {
-                                if queues[player].len() < 32 {
-                                    queues[player].push_back(code);
-                                } else {
-                                    eprintln!(
-                                        "[minecraft-cards] P{} queue full; scan dropped",
-                                        player + 1
-                                    );
-                                }
-                            } else {
-                                eprintln!("[minecraft-cards] Invalid scan ignored");
-                            }
-                        }
-                        line.clear();
-                        oversized = false;
-                    } else if line.len() < 16 {
-                        line.push(*byte);
-                    } else {
-                        oversized = true;
+            let mut bytes = [0; 8192];
+            for _ in 0..8 {
+                let Ok(n) = socket.recv(&mut bytes) else {
+                    break;
+                };
+                let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes[..n]) else {
+                    continue;
+                };
+                if value["id"] != "scan-card" {
+                    continue;
+                }
+                let Some(player) = value["payload"]["player"]
+                    .as_u64()
+                    .filter(|p| (1..=4).contains(p))
+                else {
+                    continue;
+                };
+                let Some(code) = value["payload"]["code"].as_str() else {
+                    continue;
+                };
+                let line = format!("{player} {code}");
+                if let Some((player, code)) = super::parse_scan(line.as_bytes()) {
+                    if queues[player].len() < 32 {
+                        queues[player].push_back(code);
                     }
                 }
             }
@@ -346,20 +375,12 @@ mod native {
             let presses =
                 unsafe { ((0x185ee40 + 0x1248 + (58 + player) * 48 + 4) as *const u32).read() };
             if presses != 0 {
-                use std::io::Write;
                 let code =
                     std::env::var("ARCADE_MINECRAFT_CARD").unwrap_or_else(|_| "a0000000".into());
-                let line = format!("{} {}", player + 1, code);
-                if super::parse_scan(line.as_bytes()).is_some() {
-                    match std::fs::OpenOptions::new()
-                        .append(true)
-                        .open("/work/card-events")
-                    {
-                        Ok(mut file) => {
-                            let _ = writeln!(file, "{line}");
-                        }
-                        Err(error) => eprintln!("[minecraft-cards] Hotkey scan failed: {error}"),
-                    }
+                let value =
+                    serde_json::json!({"id":"scan-card","payload":{"player":player+1,"code":code}});
+                if let Ok(socket) = std::os::unix::net::UnixDatagram::unbound() {
+                    let _ = socket.send_to(value.to_string().as_bytes(), "/work/actions.sock");
                 }
             }
         }

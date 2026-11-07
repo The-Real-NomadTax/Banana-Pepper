@@ -7,7 +7,7 @@ use windows_sys::Win32::{
 #[path = "gl_words.rs"]
 mod gl_words;
 
-/// Big Buck crosshair (settings.cfg `crosshair`, via ARCADE_CROSSHAIR), drawn
+/// Configurable crosshair (settings.cfg `crosshair`, via ARCADE_CROSSHAIR), drawn
 /// over each finished frame at the aim position. All GL state is restored.
 mod crosshair {
     use super::*;
@@ -32,7 +32,10 @@ mod crosshair {
         })
     }
     unsafe fn upload(player: usize) -> Option<(u32, u32, u32)> {
-        let image = match image::load_from_memory_with_format(player_style(player)?, image::ImageFormat::Png) {
+        let image = match image::load_from_memory_with_format(
+            player_style(player)?,
+            image::ImageFormat::Png,
+        ) {
             Ok(image) => image.to_rgba8(),
             Err(e) => {
                 eprintln!("[water] crosshair disabled: {e}");
@@ -77,7 +80,7 @@ mod crosshair {
     }
     /// Every player's crosshair.
     pub unsafe fn draw() {
-        for player in 0..jamma::players() {
+        for player in 0..hooks::players() {
             draw_player(player);
         }
     }
@@ -86,7 +89,7 @@ mod crosshair {
         let Some((texture, w, h)) = *TEXTURE[player].get_or_init(|| upload(player)) else {
             return;
         };
-        let (x, y) = jamma::aim_position(player);
+        let (x, y) = hooks::aim_position(player);
         static SIZE: OnceLock<u32> = OnceLock::new();
         let size = *SIZE.get_or_init(|| {
             banana_input::crosshair::size_percent(
@@ -148,47 +151,44 @@ mod crosshair {
 
 static mut WINDOW: HWND = ptr::null_mut();
 static mut DC: HDC = ptr::null_mut();
-static mut WIDTH: i32 = 640;
-static mut HEIGHT: i32 = 480;
+static mut WIDTH: i32 = 0;
+static mut HEIGHT: i32 = 0;
 static mut DISPLAY: usize = 0;
 static mut RESHAPE: usize = 0;
 static mut FRAME: u64 = 0;
-static mut STEP: usize = 0;
-static mut HUNT_TICK: u128 = u128::MAX;
-static mut MOUSE_RELEASE: Option<(u128, i32, i32, i32)> = None;
 static START: OnceLock<std::time::Instant> = OnceLock::new();
 
 unsafe extern "system" fn wndproc(window: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match message {
         WM_CLOSE => {
-            jamma::release();
+            hooks::release();
             eprintln!("[water] window closed");
             ExitProcess(0);
         }
         WM_KEYDOWN | WM_KEYUP => {
             if w == 27 && message == WM_KEYDOWN {
-                jamma::release();
+                hooks::release();
                 ExitProcess(0);
             }
             if message == WM_KEYUP || l & (1 << 30) == 0 {
-                jamma::key(w as u8, message == WM_KEYDOWN);
+                hooks::key(w as u8, message == WM_KEYDOWN);
             }
             return 0;
         }
-        WM_KILLFOCUS => jamma::release(),
-        WM_INPUT => rawinput::input(l),
+        WM_KILLFOCUS => hooks::release(),
+        WM_INPUT => hooks::raw_input(l),
         // The drawn crosshair replaces the pointer inside the window.
         WM_SETCURSOR if (l & 0xffff) as u32 == HTCLIENT && crosshair::enabled() => {
             SetCursor(ptr::null_mut());
             return 1;
         }
         WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MOUSEMOVE => {
-            let x = (l as i16 as i32) * 640 / WIDTH.max(1);
-            let y = ((l >> 16) as i16 as i32) * 480 / HEIGHT.max(1);
+            let x = (l as i16 as i32) * display_config().width / WIDTH.max(1);
+            let y = ((l >> 16) as i16 as i32) * display_config().height / HEIGHT.max(1);
             if message == WM_MOUSEMOVE {
-                jamma::aim(x, y, false);
+                hooks::aim(x, y, false);
             } else {
-                jamma::mouse(
+                hooks::mouse(
                     if message == WM_LBUTTONDOWN || message == WM_LBUTTONUP {
                         0
                     } else {
@@ -215,6 +215,12 @@ unsafe extern "system" fn wndproc(window: HWND, message: u32, w: WPARAM, l: LPAR
 }
 
 unsafe extern "C" fn create(_title: *const i8) -> i32 {
+    if WIDTH == 0 {
+        WIDTH = display_config().width;
+    }
+    if HEIGHT == 0 {
+        HEIGHT = display_config().height;
+    }
     if !WINDOW.is_null() {
         return 1;
     }
@@ -237,9 +243,7 @@ unsafe extern "C" fn create(_title: *const i8) -> i32 {
     WINDOW = CreateWindowExA(
         0,
         class.lpszClassName,
-        c"Banana pepper - Big Buck Hunter Pro (Water)"
-            .as_ptr()
-            .cast(),
+        (display_config().title)().cast(),
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -257,7 +261,7 @@ unsafe extern "C" fn create(_title: *const i8) -> i32 {
         );
         ExitProcess(125);
     }
-    rawinput::register(WINDOW);
+    hooks::register_raw(WINDOW);
     DC = GetDC(WINDOW);
     let format = PIXELFORMATDESCRIPTOR {
         nSize: std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16,
@@ -340,9 +344,7 @@ unsafe extern "C" fn create(_title: *const i8) -> i32 {
         "[water] OpenGL renderer: {}",
         text(glGetString(GL_RENDERER).cast())
     );
-    eprintln!("[water] Windows OpenGL window {}x{}", { WIDTH }, {
-        HEIGHT
-    });
+    eprintln!("[water] Windows OpenGL window {}x{}", { WIDTH }, { HEIGHT });
     1
 }
 unsafe extern "C" fn init(_argc: usize, _argv: usize) {}
@@ -372,14 +374,20 @@ unsafe extern "C" fn reshape(callback: usize) {
     }
 }
 unsafe extern "C" fn enter_game() -> i32 {
-    create(c"Big Buck".as_ptr())
+    create((display_config().title)())
 }
 unsafe extern "C" fn main_loop() -> ! {
     eprintln!("[water] entering native event loop");
     let mut message: MSG = std::mem::zeroed();
     loop {
-        probe();
-        jamma::controller_frame(GetForegroundWindow() == WINDOW);
+        (display_config().probe)(
+            START
+                .get_or_init(std::time::Instant::now)
+                .elapsed()
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
+        );
+        hooks::controller_frame(GetForegroundWindow() == WINDOW);
         while PeekMessageA(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
             if message.message == WM_QUIT {
                 ExitProcess(0);
@@ -419,6 +427,9 @@ unsafe extern "C" fn swap() {
     Sleep(1);
 }
 unsafe fn capture(name: &str) {
+    if banana_content::path(name).is_err() {
+        return;
+    }
     if WIDTH <= 0 || HEIGHT <= 0 {
         return;
     }
@@ -439,102 +450,6 @@ unsafe fn capture(name: &str) {
             eprintln!("[water] capture failed: {e}");
         }
     }
-}
-unsafe fn probe() {
-    if std::env::var_os("ARCADE_NATIVE_PROBE").is_none() {
-        return;
-    }
-    let elapsed = START
-        .get_or_init(std::time::Instant::now)
-        .elapsed()
-        .as_millis();
-    if let Some((time, button, x, y)) = MOUSE_RELEASE {
-        if elapsed >= time {
-            jamma::mouse(button, false, x, y);
-            MOUSE_RELEASE = None;
-        }
-    }
-    if std::env::var_os("ARCADE_NATIVE_FIRE_PROBE").is_some() && (48000..50000).contains(&elapsed) {
-        let tick = (elapsed - 48000) / 200;
-        if tick != HUNT_TICK {
-            HUNT_TICK = tick;
-            let x = 80 + ((tick / 2 * 120) % 480) as i32;
-            let y = 260;
-            let button = if tick % 2 == 0 { 2 } else { 0 };
-            probe_mouse(elapsed, button, x, y);
-        }
-    }
-    // Repeat the measured Linux progression sequence through the same cabinet
-    // adapter. No OS input injection, no automatic inputs in ordinary sessions.
-    let steps: &[(u128, u8, i32, i32, &str)] = &[
-        (2000, b't', 0, 0, "calibration.png"),
-        (2200, 0, 0, 0, ""),
-        (4000, b'1', 0, 0, "tracking.png"),
-        (4200, 0, 0, 0, ""),
-        (6000, b'5', 0, 0, "attract.png"),
-        (6300, 0, 0, 0, ""),
-        (7000, b'5', 0, 0, ""),
-        (7300, 0, 0, 0, ""),
-        (8000, b'5', 0, 0, ""),
-        (8300, 0, 0, 0, ""),
-        (9000, b'5', 0, 0, ""),
-        (9300, 0, 0, 0, "coins.png"),
-        (11000, b'1', 0, 0, "before-start.png"),
-        (11300, 0, 0, 0, ""),
-        (14000, 1, 160, 220, "game-select.png"),
-        (17000, 1, 160, 220, "mode-select.png"),
-        (20000, 1, 160, 140, "adventure-select.png"),
-        (23000, 1, 160, 180, "adventure-intro.png"),
-        (26000, 1, 160, 180, "records.png"),
-        (29000, 1, 160, 180, "instructions.png"),
-        (35000, 1, 320, 240, "instructions2.png"),
-        (39000, 1, 120, 150, "site-select.png"),
-        (45000, 1, 120, 150, "site-select2.png"),
-        (50000, 1, 350, 240, "hunt.png"),
-        (51000, 2, 350, 240, "after-shot.png"),
-        (52000, 1, 300, 200, "after-pump.png"),
-        (53000, 2, 300, 200, ""),
-        (54000, 1, 200, 300, ""),
-        (58000, 0, 0, 0, "final.png"),
-        (62000, 0, 0, 0, "shot-result.png"),
-        (70000, 0, 0, 0, "hunt-end.png"),
-        (72000, 1, 320, 400, "initials.png"),
-        (80000, 0, 0, 0, "results.png"),
-        (90000, 0, 0, 0, "site-results.png"),
-    ];
-    if STEP >= steps.len() {
-        return;
-    }
-    let (time, key, x, y, name) = steps[STEP];
-    if elapsed < time {
-        return;
-    }
-    if !name.is_empty() {
-        capture(name);
-        eprintln!("[water] probe checkpoint {name}");
-    }
-    if std::env::var_os("ARCADE_NATIVE_FIRE_PROBE").is_some() && (50000..60000).contains(&elapsed) {
-        // Observe the first hunt's outcome without later shots hitting a doe.
-    } else if key == 1 || key == 2 {
-        probe_mouse(elapsed, if key == 1 { 0 } else { 2 }, x, y);
-    } else {
-        jamma::key(b't', false);
-        jamma::key(b'1', false);
-        jamma::key(b'5', false);
-        if key != 0 {
-            jamma::key(key, true);
-        }
-    }
-    STEP += 1;
-}
-unsafe fn probe_mouse(elapsed: u128, button: i32, x: i32, y: i32) {
-    let previous = MOUSE_RELEASE;
-    MOUSE_RELEASE = None;
-    if let Some((_, old, x, y)) = previous {
-        jamma::mouse(old, false, x, y);
-    }
-    jamma::mouse(button, true, x, y);
-    MOUSE_RELEASE = Some((elapsed + 100, button, x, y));
 }
 unsafe extern "C" fn sync(counter: *mut u32) -> i32 {
     if !counter.is_null() {
@@ -604,7 +519,7 @@ mod tests {
             let matrix = [
                 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
             ];
-            let viewport = [0, 0, 640, 480];
+            let viewport = [0, 0, display_config().width, display_config().height];
             let (mut x, mut y, mut z) = (0., 0., 0.);
             assert_eq!(
                 f(
@@ -623,8 +538,8 @@ mod tests {
             assert_eq!((x, y, z), (0., 0., 0.));
             assert_eq!(
                 f(
-                    640.,
-                    480.,
+                    display_config().width as f32,
+                    display_config().height as f32,
                     1.,
                     matrix.as_ptr(),
                     matrix.as_ptr(),
@@ -636,6 +551,14 @@ mod tests {
                 1
             );
             assert_eq!((x, y, z), (1., 1., 1.));
+        }
+    }
+}
+
+pub unsafe extern "C" fn capture_service(name: *const i8) {
+    if !name.is_null() {
+        unsafe {
+            capture(text(name));
         }
     }
 }

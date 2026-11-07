@@ -9,3 +9,5 @@ description = "Folder and ZArchive game sources for Banana Pepper"
 zarchive-rs = "0.1.1"
 sha2.workspace = true
 tempfile = "3.20.0"
+
+cap-std = "4.0.3"

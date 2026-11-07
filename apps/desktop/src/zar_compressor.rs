@@ -268,7 +268,10 @@ mod tests {
 
     #[test]
     fn background_job_creates_a_loadable_archive_and_keeps_source_files() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir_in(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"),
+        )
+        .unwrap();
         let source = temp.path().join("game folder");
         std::fs::create_dir_all(source.join("data/empty")).unwrap();
         std::fs::write(source.join("game.exe"), b"game bytes").unwrap();
@@ -288,12 +291,12 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(tool.message.as_ref().unwrap().is_ok(), "{:?}", tool.message);
-        let extracted = banana_content::prepare(&tool.output, &temp.path().join("cache")).unwrap();
+        let provider = banana_content::open(&tool.output).unwrap();
         assert_eq!(
-            std::fs::read(extracted.join("game.exe")).unwrap(),
+            banana_content::read_all(provider.as_ref(), "game.exe", 1024 * 1024).unwrap(),
             b"game bytes"
         );
-        assert!(extracted.join("data/empty").is_dir());
+        assert!(provider.metadata("data/empty").unwrap().directory);
         assert_eq!(
             std::fs::read(source.join("data/asset")).unwrap(),
             b"asset bytes"

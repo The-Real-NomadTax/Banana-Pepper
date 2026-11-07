@@ -1,3 +1,5 @@
+> Research record: paths and launch transcripts below describe the earlier development harness. Current launches use the provider/mount/session architecture in architecture.md. Generated images are memory-backed; durable state uses per-user directories. Revalidate gameplay through the new pipeline before treating historical results as current support.
+
 # Aliens Armageddon desktop runtime
 
 Status: Aliens opens on the user's display and reaches playable 3D gameplay. The user confirmed playing successfully with working controls. Native desktop mouse maps are enabled, with keyboard **1** for Start and **5** for coin. Audio remains disabled. A complete playthrough, all weapons, two-player play and physical cabinet hardware are not verified.

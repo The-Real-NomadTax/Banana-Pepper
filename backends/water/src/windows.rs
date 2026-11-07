@@ -497,9 +497,7 @@ impl State {
             }
             _ => {
                 if self.unknown.insert(number) {
-                    eprintln!(
-                        "[watertime] unsupported syscall {number}; returning Linux ENOSYS"
-                    );
+                    eprintln!("[watertime] unsupported syscall {number}; returning Linux ENOSYS");
                 }
                 Err(ENOSYS)
             }
@@ -623,17 +621,11 @@ unsafe extern "system" fn enter(parameter: *mut c_void) {
     }
 }
 
-pub fn run(
-    bytes: &[u8],
-    plan: &Image,
-    root: &Path,
-    work: &Path,
-    argv: &[String],
-) -> Result<(), String> {
+pub fn run(bytes: &[u8], plan: &Image, root: &Path, argv: &[String]) -> Result<(), String> {
     if !STATE.load(Ordering::Acquire).is_null() {
         return Err("Only one guest may execute in a worker".into());
     }
-    let vfs = Vfs::new(root, work).map_err(|e| e.to_string())?;
+    let vfs = Vfs::new(root).map_err(|e| e.to_string())?;
     let size = (plan.image_end - plan.image_start) as usize;
     let allocation = unsafe {
         VirtualAlloc(

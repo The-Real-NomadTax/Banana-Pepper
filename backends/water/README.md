@@ -1,31 +1,11 @@
 # Water
 
-**Water Adapts The ELF Runtime.**
+Water Adapts The ELF Runtime translates Linux guest interfaces into Windows APIs. It executes guest x86 code in a dedicated process and provides reusable ELF loading, C-library, graphics, audio and filesystem mechanisms.
 
-Water is Banana pepper's Linux-to-Windows compatibility layer. It translates
-Linux executable interfaces to Windows APIs while x86 guest instructions run
-directly on the host CPU. The name expands recursively, like Wine's.
+`water-x86.exe` and `water-x64.exe` are generic architecture-specific workers. The x86 worker loads a compatibility DLL through the versioned `AdapterV1` interface. Size/version checks run before guest loading. Title-specific patches, input mappings, cabinet devices and diagnostic input sequences live under `game-compat/`.
 
-Development has resumed for Big Buck Hunter Pro. `water-buck` is the separate
-32-bit Windows ELF32 worker for its measured imported APIs. See
-[`docs/big-buck-windows.md`](../../docs/big-buck-windows.md) for build instructions,
-verification and remaining limits. WSL2 stays available; Minecraft still uses it.
+The filesystem is the same composed view used by Native and Wine. Water has no separate root/work write policy and creates no game copies. Its path translator confines guest paths to the mounted namespace; game writes reach the persistent overlay.
 
-The current proof of execution loads constrained static x86-64 ELF programs in
-a Windows worker process. Ordinary instructions execute directly; certified
-Linux `syscall` sites are translated through a Windows exception handler.
-Implemented calls cover basic file I/O, anonymous memory, clocks and exit.
-Eight tests passed, including actual guest writes, mmap/mprotect/munmap, file
-round trips, Linux error returns, BSS/initial stack, and parent timeout handling.
+The ELF64 implementation supports a constrained static ABI. Dynamic linking, PIE relocation, TLS, broader threading and graphics requirements are reported as missing capabilities. Support grows per game and build; selecting Water does not imply arbitrary Linux compatibility.
 
-The original `water` ELF64 worker does not run dynamically linked games. ELF shared libraries, TLS,
-Linux threads, signals, X11/GLX and graphics translation remain unimplemented.
-Minecraft is not supported by the native backend. The worker is a compatibility
-boundary, not a security sandbox for untrusted native code. No performance claim
-has been established against WSL2.
-
-```powershell
-cargo test -p banana-water
-cargo run -p banana-water --bin water -- inspect path\to\guest.elf
-cargo run -p banana-water --bin water -- run path\to\static.elf --root path\to\root --work path\to\work --timeout 10
-```
+Build through `just build`. Worker executables and adapter DLLs are selected from crate-owned artifact declarations. Normal launches use the shared session API, which owns process lifetimes and timeouts. `cargo test -p banana-water` runs synthetic ELF64 loader and execution checks.

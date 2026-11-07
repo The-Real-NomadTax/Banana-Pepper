@@ -1,8 +1,8 @@
 //! Host-independent discovery, executable identification and library
 //! state. No game execution, host graphics APIs or individual games belong
 //! in this crate: games are reached through the `banana-api` registry.
-pub use banana_api::{BinaryInfo, Controls};
 use banana_api::GameCompat;
+pub use banana_api::{BinaryInfo, Controls};
 use goblin::Object;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -35,7 +35,10 @@ impl GameProfile {
 
 /// Paths are relative to the selected games root, never to a developer's home.
 pub fn profiles() -> Vec<GameProfile> {
-    banana_api::games().iter().map(|g| GameProfile::of(*g)).collect()
+    banana_api::games()
+        .iter()
+        .map(|g| GameProfile::of(*g))
+        .collect()
 }
 
 pub fn inspect_bytes(bytes: &[u8]) -> Result<BinaryInfo, String> {
@@ -92,13 +95,39 @@ pub struct GameReport {
 }
 
 pub fn scan(root: &Path) -> Vec<GameReport> {
-    banana_api::games().iter().map(|game| report(*game, root)).collect()
+    let source = banana_content::open(root).map_err(|e| e.to_string());
+    banana_api::games()
+        .iter()
+        .map(|game| {
+            report_source(
+                *game,
+                root,
+                source.as_ref().map(|s| s.as_ref()).map_err(Clone::clone),
+            )
+        })
+        .collect()
 }
 
 /// Inspect one game's executable below `root`.
 pub fn report(game: &dyn GameCompat, root: &Path) -> GameReport {
-    let path = game.locate_executable(root);
-    let result = inspect_file(&path);
+    let source = banana_content::open(root).map_err(|e| e.to_string());
+    report_source(
+        game,
+        root,
+        source.as_ref().map(|s| s.as_ref()).map_err(Clone::clone),
+    )
+}
+pub fn report_source(
+    game: &dyn GameCompat,
+    root: &Path,
+    source: Result<&dyn banana_content::ContentSource, String>,
+) -> GameReport {
+    let identified = source.and_then(|source| game.identify(source));
+    let path = identified
+        .as_ref()
+        .map(|b| root.join(&b.source_root).join(&b.executable))
+        .unwrap_or_else(|_| root.join(game.default_executable()));
+    let result = identified.map(|b| b.binary);
     let blockers = match game.compatibility_notes() {
         Some(notes) => notes.iter().map(|n| (*n).to_owned()).collect(),
         None => generic_notes(result.as_ref().ok()),
@@ -107,7 +136,13 @@ pub fn report(game: &dyn GameCompat, root: &Path) -> GameReport {
         Ok(b) => (Some(b), None),
         Err(e) => (None, Some(e)),
     };
-    GameReport { profile: GameProfile::of(game), path, binary, error, blockers }
+    GameReport {
+        profile: GameProfile::of(game),
+        path,
+        binary,
+        error,
+        blockers,
+    }
 }
 
 /// Notes for a game that has not described its own compatibility state.
@@ -123,7 +158,9 @@ fn generic_notes(info: Option<&BinaryInfo>) -> Vec<String> {
                 info.bits
             ));
             if info.section_count == 0 {
-                blockers.push("Section table absent; inspection uses ELF program/dynamic headers.".into());
+                blockers.push(
+                    "Section table absent; inspection uses ELF program/dynamic headers.".into(),
+                );
             }
         } else {
             blockers.push("Windows execution backend is not implemented.".into());
@@ -141,7 +178,10 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
 }
 
 /// The recognised build of `game` at `path`, if any.
-pub fn identify_build(game: &dyn GameCompat, path: &Path) -> Option<&'static banana_api::KnownBuild> {
+pub fn identify_build(
+    game: &dyn GameCompat,
+    path: &Path,
+) -> Option<&'static banana_api::KnownBuild> {
     let hash = sha256_file(path).ok()?;
     game.known_builds().iter().find(|b| b.sha256 == hash)
 }

@@ -10,3 +10,11 @@ banana-api.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+
+[dependencies.banana-content]
+workspace=true
+
+[dependencies.banana-input]
+workspace=true
+[dependencies.serde_json]
+workspace=true

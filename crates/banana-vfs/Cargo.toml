@@ -1,0 +1,19 @@
+[package]
+name = "banana-vfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+banana-content.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+[target.'cfg(windows)'.dependencies]
+winfsp = { version = "=0.13.1", default-features = false, features = ["notify", "delayload"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Memory"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "0.14", default-features = false, features = ["abi-7-31"] }
+libc = "0.2"
+[dev-dependencies]
+tempfile = "3"
+zarchive-rs="0.1.1"

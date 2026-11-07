@@ -10,7 +10,9 @@ goblin.workspace = true
 banana-api.workspace = true
 banana-core.workspace = true
 banana-input.workspace = true
-banana-runtime.workspace = true
 banana-settings.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+[dependencies.banana-content]
+workspace = true

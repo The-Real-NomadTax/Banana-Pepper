@@ -2,21 +2,16 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
-pub mod prepare;
-pub mod runtime;
 pub mod controls;
-pub mod settings;
 pub mod packet;
+mod plan;
+pub mod prepare;
+pub mod settings;
 
 use banana_api::{BackendKind, CliCommand, Controls, GameCompat, KnownBuild, Status, SupportLevel};
-use std::path::{Path, PathBuf};
 
 pub struct FordRacing;
 pub static GAME: FordRacing = FordRacing;
-
-fn unsupported(action: &str) -> String {
-    format!("Ford Racing Full Blown has no {action} action")
-}
 
 impl GameCompat for FordRacing {
     fn id(&self) -> &'static str {
@@ -34,16 +29,27 @@ impl GameCompat for FordRacing {
     fn default_executable(&self) -> &'static str {
         "windows based/Ford Racing/FordRacing/fordracing.exe"
     }
-    fn locate_executable(&self, root: &Path) -> PathBuf {
-        prepare::directory(root).join("FordRacing/fordracing.exe")
+    fn content_executable(&self) -> &'static str {
+        "FordRacing/fordracing.exe"
     }
     fn known_builds(&self) -> &'static [KnownBuild] {
-        &[
-        KnownBuild { name: "Cabinet build", sha256: prepare::SOURCE_SHA256 }
-        ]
+        &[KnownBuild {
+            name: "Cabinet build",
+            sha256: prepare::SOURCE_SHA256,
+        }]
+    }
+    fn legacy_state(&self) -> &'static [banana_api::LegacyImport] {
+        &[banana_api::LegacyImport {
+            from: "runtime/ford-racing/data/GameSettings.ini",
+            to: "data/GameSettings.ini",
+            kind: banana_api::ImportKind::Overlay,
+        }]
     }
     fn status(&self) -> Status {
-        Status { level: SupportLevel::Experimental, label: "Desktop cabinet adapter" }
+        Status {
+            level: SupportLevel::Experimental,
+            label: "Desktop cabinet adapter",
+        }
     }
     fn compatibility_notes(&self) -> Option<&'static [&'static str]> {
         Some(&[
@@ -64,14 +70,18 @@ impl GameCompat for FordRacing {
         Some(&controls::CONTROLS)
     }
     fn cli_commands(&self) -> &'static [CliCommand] {
-        &[
-            CliCommand { flag: "--launch-ford", action: "launch", banner: "" },
-        ]
+        &[CliCommand {
+            flag: "--launch-ford",
+            action: "launch",
+            banner: "",
+        }]
     }
-    fn run(&self, root: &Path, action: &str) -> Result<String, String> {
-        match action {
-            "launch" => runtime::launch(root),
-            _ => Err(unsupported(action)),
-        }
+    fn plan(
+        &self,
+        build: &banana_api::IdentifiedBuild,
+        context: &banana_api::PlanContext,
+        action: &banana_api::ActionRequest,
+    ) -> Result<banana_api::LaunchPlan, String> {
+        plan::make(build, context, action)
     }
 }

@@ -1,12 +1,12 @@
-//! Shared source preparation for inspection and every game backend.
-use std::path::{Path, PathBuf};
-pub fn resolve(source: &Path) -> Result<PathBuf, String> {
-    let cache = match std::env::var_os("ARCADE_ARCHIVE_CACHE") {
-        Some(path) => PathBuf::from(path),
-        None => crate::project_root()?.join("runtime/archive-cache"),
-    };
-    banana_content::prepare(source, &cache)
-}
-pub fn scan(source: &Path) -> Result<Vec<banana_core::GameReport>, String> {
-    Ok(banana_core::scan(&resolve(source)?))
+//! Provider inspection never creates an extracted filesystem tree.
+use std::path::Path;
+pub fn scan(path: &Path) -> Result<Vec<banana_core::GameReport>, String> {
+    if !path.exists() && path.extension().is_none() {
+        return Ok(banana_core::scan(path));
+    }
+    let source = banana_content::open(path).map_err(|e| e.to_string())?;
+    Ok(banana_api::games()
+        .iter()
+        .map(|game| banana_core::report_source(*game, path, Ok(source.as_ref())))
+        .collect())
 }

@@ -7,3 +7,10 @@ license.workspace = true
 [lib]
 name = "inpout32"
 crate-type = ["cdylib"]
+
+[[package.metadata.banana.artifacts]]
+name="inpout32"
+kind="lib"
+target="i686-pc-windows-msvc"
+hosts=["windows", "linux"]
+destination="games/ford/windows-x86/inpout32.dll"

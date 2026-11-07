@@ -155,10 +155,10 @@ pub fn write_library(path: &Path, bytes: &[u8], bits: u8) -> Result<(), String> 
     fs::rename(temporary, path).map_err(|e| e.to_string())
 }
 pub fn legacy_directory(project: &Path) -> PathBuf {
-    project.join("runtime/dependencies/legacy32/lib")
+    project.join("dependencies/legacy32")
 }
 pub fn setup_legacy(project: &Path) -> Result<(), String> {
-    let cache = project.join("runtime/dependencies/legacy32/packages");
+    let cache = project.join("dependencies/legacy32-packages");
     fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     let physx = cache.join("physx.tar.gz");
     download(
@@ -286,4 +286,53 @@ mod tests {
             .is_err()
         );
     }
+}
+
+/// Execute a declared dependency recipe without installing system packages.
+pub fn prepare(spec: &banana_api::Dependency, root: &Path, cache: &Path) -> Result<(), String> {
+    let recipe = spec.recipe.as_ref().ok_or_else(|| {
+        format!(
+            "Dependency {} must be prepared using the library setup command",
+            spec.id
+        )
+    })?;
+    if !recipe.deb.is_empty() && !cfg!(target_os = "linux") {
+        return Err(
+            "This dependency recipe requires Linux apt/dpkg; no system packages are installed"
+                .into(),
+        );
+    }
+    fs::create_dir_all(root.join("libraries")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(cache).map_err(|e| e.to_string())?;
+    for package in recipe.deb {
+        checked(
+            Command::new("apt-get")
+                .args(["download", package])
+                .current_dir(cache),
+        )?;
+    }
+    for entry in fs::read_dir(cache).map_err(|e| e.to_string())? {
+        let p = entry.map_err(|e| e.to_string())?.path();
+        if p.extension().is_some_and(|e| e == "deb") {
+            checked(
+                Command::new("dpkg-deb")
+                    .arg("--extract")
+                    .arg(p)
+                    .arg(root.join("libraries")),
+            )?;
+        }
+    }
+    for archive in &recipe.downloads {
+        let input = cache.join(format!("{}.archive", archive.sha256));
+        download(archive.url, archive.sha256, &input, archive.limit)?;
+        for (member, dest) in &archive.members {
+            banana_content::path(dest).map_err(|e| e.to_string())?;
+            let bytes = extract_member(&input, member)?;
+            let target = root.join(dest);
+            fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+            fs::write(target, bytes).map_err(|e| e.to_string())?;
+        }
+    }
+    fs::write(root.join("prepared.json"),serde_json::to_vec_pretty(&serde_json::json!({"id":spec.id,"packages":recipe.deb,"downloads":recipe.downloads.iter().map(|d|d.sha256).collect::<Vec<_>>()})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    Ok(())
 }

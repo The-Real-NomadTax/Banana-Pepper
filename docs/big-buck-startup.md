@@ -1,3 +1,5 @@
+> Research record: paths and launch transcripts below describe the earlier development harness. Current launches use the provider/mount/session architecture in architecture.md. Generated images are memory-backed; durable state uses per-user directories. Revalidate gameplay through the new pipeline before treating historical results as current support.
+
 # Big Buck Hunter Pro: first working startup
 
 The supplied build now boots past calibration, reaches attract mode, accepts START and mouse shots in the game/mode/adventure menus, and reaches Whitetail Adventure instructions, Player 1 site selection, and a rendered hunt scene. Full scored gameplay and high-score saving are now confirmed; audio playback has an OSS-to-Pulse bridge. The test runs on a private 1024×768 Xvfb display for up to 45 seconds, with a 53-second outer timeout, and saves checkpoint images along the way.

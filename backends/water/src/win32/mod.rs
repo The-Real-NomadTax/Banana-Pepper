@@ -1,22 +1,10 @@
-//! Measured ELF32 API translation for the fingerprinted Big Buck build.
+//! Measured ELF32 API translation for the fixed-address ELF32 programs.
 //! Guest instructions run directly in a separate 32-bit Windows process.
 #![allow(unsafe_op_in_unsafe_fn)]
 mod crt;
 mod display;
-mod jamma;
-mod rawinput;
+mod hooks;
 mod sound;
-/// XInput and DirectInput controllers (shared with the Super Cars and Ford
-/// adapter DLLs).
-#[path = "../../../../guest/win32/xinput.rs"]
-mod xinput;
-#[path = "../../../../guest/win32/dinput.rs"]
-mod dinput;
-#[path = "../../../../guest/win32/controllers.rs"]
-#[allow(dead_code)] // Water reads every player; the hook DLLs read player one.
-mod controllers;
-use banana_input::pad;
-
 use goblin::elf::{Elf, program_header::PT_LOAD};
 use std::{
     ffi::{CStr, CString, c_void},
@@ -29,8 +17,8 @@ use windows_sys::Win32::System::{
     Diagnostics::Debug::*, LibraryLoader::*, Memory::*, Threading::*,
 };
 
-pub(super) static GAME: OnceLock<PathBuf> = OnceLock::new();
-pub(super) static WORK: OnceLock<PathBuf> = OnceLock::new();
+pub static GAME: OnceLock<PathBuf> = OnceLock::new();
+pub static WORK: OnceLock<PathBuf> = OnceLock::new();
 static TRACES: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
 
 unsafe extern "C" fn trace(index: usize) {
@@ -60,104 +48,65 @@ unsafe fn traced(name: &str, target: usize) -> Result<usize, String> {
     executable(&code)
 }
 
-pub fn launch() -> Result<(), String> {
-    let mut args = std::env::args_os().skip(1);
-    let source = PathBuf::from(
-        args.next()
-            .ok_or("Usage: water-buck GAME_FOLDER [--work PATH] [--timeout SECONDS] [--worker]")?,
-    );
-    let mut work = std::env::current_dir()
-        .map_err(|e| e.to_string())?
-        .join("runtime/big-buck-native");
-    let mut timeout = None;
-    let mut worker = false;
-    while let Some(arg) = args.next() {
-        if arg == "--worker" {
-            worker = true;
-        } else if arg == "--work" {
-            work = PathBuf::from(args.next().ok_or("--work requires a path")?);
-        } else if arg == "--timeout" {
-            let value = args
-                .next()
-                .ok_or("--timeout requires seconds")?
-                .to_string_lossy()
-                .parse::<u64>()
-                .map_err(|e| e.to_string())?;
-            if !(1..=3600).contains(&value) {
-                return Err("Timeout must be 1..3600 seconds".into());
-            }
-            timeout = Some(value);
-        } else {
-            return Err(format!("Unknown argument {}", arg.to_string_lossy()));
+static DISPLAY_EXTENSION: OnceLock<&'static crate::extension::DisplayV1> = OnceLock::new();
+fn display_config() -> &'static crate::extension::DisplayV1 {
+    DISPLAY_EXTENSION
+        .get()
+        .expect("Validated display extension")
+}
+static EXTENSION: OnceLock<&'static crate::extension::AdapterV1> = OnceLock::new();
+pub fn launch(image: &Path, root: &Path, state: &Path, adapter: &Path) -> Result<(), String> {
+    GAME.set(root.to_path_buf())
+        .map_err(|_| "Guest root already set")?;
+    WORK.set(state.to_path_buf())
+        .map_err(|_| "State already set")?;
+    unsafe {
+        use std::os::windows::ffi::OsStrExt;
+        let dll: Vec<u16> = adapter.as_os_str().encode_wide().chain(Some(0)).collect();
+        let module = LoadLibraryW(dll.as_ptr());
+        if module.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
         }
-    }
-    let source = source.canonicalize().map_err(|e| e.to_string())?;
-    let source = if source.is_file() {
-        source.parent().ok_or("No game directory")?.to_path_buf()
-    } else {
-        source
-    };
-    fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let work = work.canonicalize().map_err(|e| e.to_string())?;
-    if !worker {
-        use std::{
-            process::{Command, Stdio},
-            time::{Duration, Instant},
+        let factory = GetProcAddress(module, c"banana_water_adapter_v1".as_ptr().cast())
+            .ok_or("Missing adapter entry point")?;
+        let factory: unsafe extern "C" fn() -> *const crate::extension::AdapterV1 =
+            std::mem::transmute(factory);
+        let extension = factory().as_ref().ok_or("Null Water adapter")?;
+        if extension.version != 1
+            || extension.size != std::mem::size_of::<crate::extension::AdapterV1>() as u32
+        {
+            return Err("Unsupported Water adapter ABI".into());
+        }
+        let display = (extension.display)()
+            .as_ref()
+            .ok_or("Missing display configuration")?;
+        if display.size != std::mem::size_of::<crate::extension::DisplayV1>() as u32
+            || display.width <= 0
+            || display.height <= 0
+        {
+            return Err("Invalid display adapter ABI".into());
+        }
+        DISPLAY_EXTENSION
+            .set(display)
+            .map_err(|_| "Display already installed")?;
+        let root = cpath(root);
+        let state = cpath(state);
+        static SERVICES: crate::extension::HostServicesV1 = crate::extension::HostServicesV1 {
+            size: std::mem::size_of::<crate::extension::HostServicesV1>() as u32,
+            capture: display::capture_service,
         };
-        let lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(work.join("session.lock"))
-            .map_err(|e| e.to_string())?;
-        lock.try_lock()
-            .map_err(|e| format!("Another native session is using this save directory: {e}"))?;
-        let log = fs::File::create(work.join("runner.log")).map_err(|e| e.to_string())?;
-        let mut child = Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
-            .arg(&source)
-            .arg("--work")
-            .arg(&work)
-            .arg("--worker")
-            .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
-            .stderr(Stdio::from(log))
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        let started = Instant::now();
-        loop {
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                return if status.success() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Native guest exited with {status}; see {}",
-                        work.join("runner.log").display()
-                    ))
-                };
-            }
-            if timeout.is_some_and(|limit| started.elapsed() >= Duration::from_secs(limit)) {
-                child.kill().map_err(|e| e.to_string())?;
-                child.wait().map_err(|e| e.to_string())?;
-                eprintln!(
-                    "[water] bounded session ended after {} seconds",
-                    timeout.unwrap()
-                );
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(20));
+        if (extension.initialize)(root.as_ptr(), state.as_ptr(), &SERVICES) != 0 {
+            return Err("Compatibility adapter initialization failed".into());
         }
+        EXTENSION
+            .set(extension)
+            .map_err(|_| "Adapter already installed")?;
+        let bytes = fs::read(image).map_err(|e| e.to_string())?;
+        load(&bytes)
     }
-    // The launcher stages the verified image and saves in `work`; Water
-    // itself applies no game-specific preparation.
-    if !work.join("game").is_file() {
-        return Err(format!("No staged guest image in {}", work.display()));
-    }
-    GAME.set(source).map_err(|_| "Game already set")?;
-    WORK.set(work.clone()).map_err(|_| "Work already set")?;
-    let bytes = fs::read(work.join("game")).map_err(|e| e.to_string())?;
-    unsafe { load(&bytes) }
 }
 
-pub(super) unsafe fn proc(module: *mut c_void, name: &str) -> usize {
+pub unsafe fn proc(module: *mut c_void, name: &str) -> usize {
     let name = CString::new(name).unwrap();
     GetProcAddress(module, name.as_ptr().cast())
         .map(|f| f as usize)
@@ -165,7 +114,7 @@ pub(super) unsafe fn proc(module: *mut c_void, name: &str) -> usize {
 }
 
 /// Adapt an i386 cdecl call to a Windows stdcall API without changing guest args.
-pub(super) unsafe fn stdcall(target: usize, words: usize) -> Result<usize, String> {
+pub unsafe fn stdcall(target: usize, words: usize) -> Result<usize, String> {
     if target == 0 || words > 32 {
         return Err("Invalid stdcall translation".into());
     }
@@ -180,7 +129,7 @@ pub(super) unsafe fn stdcall(target: usize, words: usize) -> Result<usize, Strin
     executable(&code)
 }
 
-pub(super) unsafe fn executable(code: &[u8]) -> Result<usize, String> {
+pub unsafe fn executable(code: &[u8]) -> Result<usize, String> {
     let memory = VirtualAlloc(
         ptr::null(),
         code.len(),
@@ -237,7 +186,7 @@ unsafe extern "system" fn fault(info: *mut EXCEPTION_POINTERS) -> i32 {
 unsafe fn load(bytes: &[u8]) -> Result<(), String> {
     let elf = Elf::parse(bytes).map_err(|e| e.to_string())?;
     if elf.is_64 || elf.header.e_machine != 3 || elf.header.e_type != 2 {
-        return Err("Expected fingerprinted fixed-address ELF32/i386".into());
+        return Err("Expected fixed-address ELF32/i386".into());
     }
     let loads: Vec<_> = elf
         .program_headers
@@ -324,7 +273,9 @@ unsafe fn load(bytes: &[u8]) -> Result<(), String> {
     if !unresolved.is_empty() {
         return Err(format!("Unimplemented imports: {}", unresolved.join(", ")));
     }
-    jamma::install()?;
+    if (EXTENSION.get().ok_or("Missing adapter")?.install)() != 0 {
+        return Err("Compatibility patch installation failed".into());
+    }
     // This verified legacy build has writable executable segments. The worker
     // is explicitly a compatibility boundary, not an untrusted-code sandbox.
     let mut old = 0;
@@ -385,6 +336,11 @@ unsafe fn resolve(name: &str) -> Result<usize, String> {
     if let Some(address) = crt::resolve(name) {
         return Ok(address);
     }
+    let symbol = CString::new(name).map_err(|e| e.to_string())?;
+    let address = (EXTENSION.get().ok_or("Missing adapter")?.resolve)(symbol.as_ptr());
+    if address != 0 {
+        return Ok(address);
+    }
     if let Some(address) = display::resolve(name)? {
         return Ok(address);
     }
@@ -398,45 +354,17 @@ unsafe fn resolve(name: &str) -> Result<usize, String> {
     Ok(proc(library, name))
 }
 
-pub(super) unsafe fn text<'a>(p: *const i8) -> &'a str {
+pub unsafe fn text<'a>(p: *const i8) -> &'a str {
     CStr::from_ptr(p).to_str().unwrap_or("")
 }
-pub(super) fn path(name: &str, write: bool) -> Result<PathBuf, String> {
-    if name == "/proc/cpuinfo" && !write {
-        let file = WORK.get().unwrap().join("cpuinfo");
-        static CPU_MHZ:OnceLock<f64>=OnceLock::new();
-        let mhz=CPU_MHZ.get_or_init(||{
-            let started = std::time::Instant::now();
-            let ticks = unsafe { std::arch::x86::_rdtsc() };
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            (unsafe { std::arch::x86::_rdtsc() } - ticks) as f64
-                / started.elapsed().as_secs_f64()
-                / 1_000_000.0
-        });
-            fs::write(&file,format!("processor\t: 0\nvendor_id\t: BananaPepper\nmodel name\t: Windows x86 host\ncpu MHz\t\t: {mhz:.3}\nbogomips\t: {:.3}\nflags\t\t: fpu tsc mmx sse sse2\n",mhz*2.0)).map_err(|e|e.to_string())?;
-        return Ok(file);
-    }
-    let name = name.replace('\\', "/");
-    if name.contains(':') || name.split('/').any(|s| s == "..") {
-        return Err(format!("Invalid guest path {name}"));
-    }
-    let name = name
-        .strip_prefix("/game/")
-        .unwrap_or(&name)
-        .trim_start_matches('/');
-    if let Some(rest) = name.strip_prefix("bbh3user/") {
-        return Ok(WORK.get().unwrap().join("bbh3user").join(rest));
-    }
-    if name == "bbh3user" {
-        return Ok(WORK.get().unwrap().join(name));
-    }
-    if write {
-        return Err(format!("Read-only game asset: {name}"));
-    }
-    Ok(GAME.get().unwrap().join(name))
+pub fn path(name: &str, write: bool) -> Result<PathBuf, String> {
+    crate::vfs::Vfs::new(GAME.get().ok_or("Missing mount")?)
+        .map_err(|e| e.to_string())?
+        .resolve(name, write)
+        .map_err(|e| e.to_string())
 }
 
-pub(super) fn cpath(path: &Path) -> CString {
+pub fn cpath(path: &Path) -> CString {
     // The legacy CRT cannot open extended-path prefixes. Game paths on this
     // runtime are local, bounded filenames, resolved before entering the guest.
     CString::new(path.to_string_lossy().trim_start_matches(r"\\?\")).unwrap()

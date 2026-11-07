@@ -24,6 +24,13 @@ tempfile = "3.20.0"
 zarchive-rs = "0.1.1"
 
 [[bin]]
-# Binary name kept for existing scripts, docs and the WSL launcher.
+# Stable binary name used by shortcuts and documentation.
 name = "arcade-desktop"
 path = "src/main.rs"
+
+[[package.metadata.banana.artifacts]]
+name="arcade-desktop"
+kind="bin"
+target=""
+hosts=["windows", "linux"]
+destination="arcade-desktop{exe}"

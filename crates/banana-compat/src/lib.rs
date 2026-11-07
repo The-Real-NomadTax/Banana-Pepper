@@ -23,7 +23,6 @@ pub fn backends() -> Vec<&'static dyn ExecutionBackend> {
         &banana_native::BACKEND,
         &banana_wine::BACKEND,
         &banana_water::BACKEND,
-        &banana_wsl::BACKEND,
     ]
 }
 

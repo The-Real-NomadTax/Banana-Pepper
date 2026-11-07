@@ -32,12 +32,25 @@ pub enum Renderer {
     Software,
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub enum Backend { Auto, Water, Wsl }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    Auto,
+    Water,
+}
 impl Backend {
-    pub const ALL:[Self;3]=[Self::Auto,Self::Water,Self::Wsl];
-    pub fn id(self)->&'static str{match self{Self::Auto=>"auto",Self::Water=>"water",Self::Wsl=>"wsl"}}
-    pub fn label(self)->&'static str{match self{Self::Auto=>"Automatic",Self::Water=>"Water (Linux to Windows)",Self::Wsl=>"WSL2 / WSLg"}}
+    pub const ALL: [Self; 2] = [Self::Auto, Self::Water];
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Water => "water",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatic",
+            Self::Water => "Water (Linux to Windows)",
+        }
+    }
 }
 
 impl VSync {
@@ -92,7 +105,11 @@ impl Crosshair {
     /// Off, then every style.
     pub fn all() -> Vec<Self> {
         std::iter::once(Self(None))
-            .chain(banana_input::crosshair::STYLES.iter().map(|s| Self(Some(s.0))))
+            .chain(
+                banana_input::crosshair::STYLES
+                    .iter()
+                    .map(|s| Self(Some(s.0))),
+            )
             .collect()
     }
     fn parse(value: &str) -> Result<Self, String> {
@@ -137,19 +154,16 @@ pub struct Profile {
 pub enum WindowsAudio {
     Never,
     Always,
-    /// Every backend except WSL2 (which routes through WSLg/PulseAudio).
-    UnlessWsl,
 }
 
 impl Profile {
     /// Whether this session plays audio through Windows rather than a
     /// PulseAudio-compatible server.
-    pub fn plays_windows_audio(&self, settings: &GameSettings) -> bool {
+    pub fn plays_windows_audio(&self, _settings: &GameSettings) -> bool {
         cfg!(windows)
             && match self.windows_audio {
                 WindowsAudio::Never => false,
                 WindowsAudio::Always => true,
-                WindowsAudio::UnlessWsl => settings.backend != Backend::Wsl,
             }
     }
     /// Whether to show an execution backend selector on this host.
@@ -256,7 +270,11 @@ impl GameSettings {
     /// The input methods actually in play (player two's only with two players).
     fn methods_label(&self) -> String {
         if self.players > 1 {
-            format!("P1 {}, P2 {}", self.inputs[0].label(), self.inputs[1].label())
+            format!(
+                "P1 {}, P2 {}",
+                self.inputs[0].label(),
+                self.inputs[1].label()
+            )
         } else {
             self.inputs[0].label().to_owned()
         }
@@ -326,7 +344,10 @@ impl GameSettings {
             env.push(("ARCADE_INPUTS", self.inputs_env()));
         }
         if self.aim_modes != [AimMode::Cursor; 2] {
-            env.push(("ARCADE_AIM_MODES", format!("{},{}", self.aim_modes[0].id(), self.aim_modes[1].id())));
+            env.push((
+                "ARCADE_AIM_MODES",
+                format!("{},{}", self.aim_modes[0].id(), self.aim_modes[1].id()),
+            ));
         }
         match self.vsync {
             VSync::Default => {}
@@ -348,7 +369,30 @@ impl GameSettings {
         env
     }
 
-    /// Newline-separated `KEY=VALUE` form handed to the Python launchers.
+    /// Complete settings environment for an owned session, including explicit off/default values.
+    pub fn session_env(&self) -> std::collections::BTreeMap<&'static str, String> {
+        let mut values = self
+            .guest_env()
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        values.extend([
+            ("ARCADE_AUDIO", if self.audio { "1" } else { "0" }.into()),
+            (
+                "ARCADE_FULLSCREEN",
+                if self.fullscreen { "1" } else { "0" }.into(),
+            ),
+            ("ARCADE_RENDERER", self.renderer.id().into()),
+            ("ARCADE_VSYNC", self.vsync.id().into()),
+            (
+                "ARCADE_AIM_MODES",
+                format!("{},{}", self.aim_modes[0].id(), self.aim_modes[1].id()),
+            ),
+            ("ARCADE_CROSSHAIR", self.crosshair.id().into()),
+            ("ARCADE_CROSSHAIR_SIZE", self.crosshair_size.to_string()),
+        ]);
+        values
+    }
+    /// Newline-separated `KEY=VALUE` form retained for legacy frontend integrations.
     pub fn guest_env_value(&self) -> String {
         self.guest_env()
             .iter()
@@ -364,7 +408,15 @@ impl GameSettings {
             _ => Err(format!("expected true or false, got \"{v}\"")),
         };
         match key {
-            "backend"=>self.backend=Backend::ALL.into_iter().find(|b|b.id()==value || (value=="native" && *b==Backend::Water)).ok_or("backend must be auto, water or wsl")?,
+            "backend" => {
+                self.backend = Backend::ALL
+                    .into_iter()
+                    .find(|b| {
+                        b.id() == value
+                            || (matches!(value, "native" | "wsl") && *b == Backend::Water)
+                    })
+                    .ok_or("backend must be auto or water")?
+            }
             "resolution" => self.resolution = parse_resolution(value)?,
             "fullscreen" => self.fullscreen = flag(value)?,
             "vsync" => {
@@ -389,9 +441,10 @@ impl GameSettings {
             "crosshair" => self.crosshair = Crosshair::parse(value)?,
             "crosshair_size" => {
                 use banana_input::crosshair::{SIZE_MAX, SIZE_MIN};
-                let size: u32 = value.trim_end_matches('%').trim().parse().map_err(|_| {
-                    format!("crosshair_size must be a percentage, not \"{value}\"")
-                })?;
+                let size: u32 =
+                    value.trim_end_matches('%').trim().parse().map_err(|_| {
+                        format!("crosshair_size must be a percentage, not \"{value}\"")
+                    })?;
                 if !(SIZE_MIN..=SIZE_MAX).contains(&size) {
                     return Err(format!(
                         "crosshair_size must be {SIZE_MIN} to {SIZE_MAX} (percent), not {size}"
@@ -413,7 +466,10 @@ impl GameSettings {
             }
             "operator_input" => {
                 self.operator_input = InputMethod::parse(value.to_ascii_lowercase().as_bytes())
-                    .ok_or_else(|| "operator_input must be keyboard_mouse, xinput, dinput or rawinput".to_owned())?;
+                    .ok_or_else(|| {
+                        "operator_input must be keyboard_mouse, xinput, dinput or rawinput"
+                            .to_owned()
+                    })?;
             }
             "p1_input" | "p2_input" => {
                 let input = InputMethod::parse(value.to_ascii_lowercase().as_bytes()).ok_or_else(|| {
@@ -509,7 +565,8 @@ impl Settings {
             }
             if matches!(key.trim(), "p1_input" | "p2_input" | "operator_input")
                 && let Some(p) = profile(id)
-                && let Some(method) = InputMethod::parse(value.trim().to_ascii_lowercase().as_bytes())
+                && let Some(method) =
+                    InputMethod::parse(value.trim().to_ascii_lowercase().as_bytes())
                 && !p.input_methods.contains(&method)
             {
                 return Err(at(format!("[{id}] cannot use {}", method.label())));
@@ -533,7 +590,10 @@ impl Settings {
             let g = self.game(p.id);
             out += &format!("\n[{}]  # {}\n", p.id, p.title);
             out += &format!("resolution = {}\n", g.resolution_text());
-            out += &format!("backend = {}  # auto | water | wsl (games with a backend choice on Windows)\n",g.backend.id());
+            out += &format!(
+                "backend = {}  # auto | water (games with a backend choice on Windows)\n",
+                g.backend.id()
+            );
             out += &format!("fullscreen = {}\n", g.fullscreen);
             out += &format!("vsync = {}  # default | on | off\n", g.vsync.id());
             out += &format!("renderer = {}  # gpu | software\n", g.renderer.id());
@@ -561,12 +621,22 @@ impl Settings {
                 );
             }
             if !p.input_methods.is_empty() {
-                let choices = p.input_methods.iter().map(|m| m.id()).collect::<Vec<_>>().join(" | ");
+                let choices = p
+                    .input_methods
+                    .iter()
+                    .map(|m| m.id())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
                 out += &format!("operator_input = {}  # {choices}\n", g.operator_input.id());
-                for (player, input) in g.inputs.iter().enumerate().take(usize::from(p.max_players)) {
+                for (player, input) in g.inputs.iter().enumerate().take(usize::from(p.max_players))
+                {
                     out += &format!("p{}_input = {}  # {choices}\n", player + 1, input.id());
                     if p.input_methods.contains(&InputMethod::RawInput) {
-                        out += &format!("p{}_aim = {}  # cursor | centered\n", player + 1, g.aim_modes[player].id());
+                        out += &format!(
+                            "p{}_aim = {}  # cursor | centered\n",
+                            player + 1,
+                            g.aim_modes[player].id()
+                        );
                     }
                 }
             }
@@ -590,4 +660,3 @@ impl Settings {
             .map_err(|e| format!("Cannot save {}: {e}", path.display()))
     }
 }
-

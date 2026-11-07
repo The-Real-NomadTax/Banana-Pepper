@@ -7,8 +7,9 @@ license.workspace = true
 [lib]
 # Artifact name kept: launch scripts preload libarcade_linux_shim.so.
 name = "arcade_linux_shim"
-crate-type = ["cdylib"]
+crate-type = ["rlib"]
 
 [dependencies]
+banana-input.workspace = true
 libc = "0.2"
 png = "0.18.1"

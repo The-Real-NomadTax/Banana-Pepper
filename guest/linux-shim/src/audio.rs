@@ -70,7 +70,11 @@ static DEVICE: Mutex<Device> = Mutex::new(Device {
     socket: -1,
 });
 /// Raw syscall first; on ENOSYS (translated guests) the next libc symbol.
-fn passthrough(raw: impl FnOnce() -> libc::c_long, name: &CStr, call: impl FnOnce(usize) -> libc::c_long) -> libc::c_long {
+fn passthrough(
+    raw: impl FnOnce() -> libc::c_long,
+    name: &CStr,
+    call: impl FnOnce(usize) -> libc::c_long,
+) -> libc::c_long {
     use std::sync::atomic::AtomicBool;
     static USE_LIBC: AtomicBool = AtomicBool::new(false);
     if !USE_LIBC.load(Ordering::Relaxed) {
@@ -95,7 +99,8 @@ fn sys_openat(path: *const c_char, flags: c_int, mode: usize) -> c_int {
         // /proc/cpuinfo (x86 CPU description) in their open wrapper.
         c"open",
         |f| unsafe {
-            let f: unsafe extern "C" fn(*const c_char, c_int, ...) -> c_int = std::mem::transmute(f);
+            let f: unsafe extern "C" fn(*const c_char, c_int, ...) -> c_int =
+                std::mem::transmute(f);
             f(path, flags, mode as libc::c_uint) as libc::c_long
         },
     ) as c_int
@@ -106,7 +111,8 @@ fn sys_ioctl(fd: c_int, request: u32, arg: *mut i32) -> c_int {
         || unsafe { libc::syscall(libc::SYS_ioctl, fd, request, arg) },
         c"ioctl",
         |f| unsafe {
-            let f: unsafe extern "C" fn(c_int, libc::c_ulong, ...) -> c_int = std::mem::transmute(f);
+            let f: unsafe extern "C" fn(c_int, libc::c_ulong, ...) -> c_int =
+                std::mem::transmute(f);
             f(fd, request as libc::c_ulong, arg) as libc::c_long
         },
     ) as c_int
@@ -117,7 +123,8 @@ fn sys_write(fd: c_int, data: *const c_void, bytes: usize) -> isize {
         || unsafe { libc::syscall(libc::SYS_write, fd, data, bytes) },
         c"write",
         |f| unsafe {
-            let f: unsafe extern "C" fn(c_int, *const c_void, usize) -> isize = std::mem::transmute(f);
+            let f: unsafe extern "C" fn(c_int, *const c_void, usize) -> isize =
+                std::mem::transmute(f);
             f(fd, data, bytes) as libc::c_long
         },
     ) as isize
@@ -200,7 +207,7 @@ unsafe extern "C" fn arcade_oss_open(args: *const usize) -> c_int {
     };
     if !path.is_null()
         && unsafe { CStr::from_ptr(path) }.to_bytes() == b"/dev/dsp"
-        && std::env::var_os("ARCADE_BBH_AUDIO").is_some_and(|v| v == "1")
+        && std::env::var_os("ARCADE_AUDIO").is_some_and(|v| v == "1")
     {
         return open_device();
     }
@@ -391,7 +398,7 @@ pub unsafe extern "C" fn write(fd: c_int, data: *const c_void, bytes: usize) -> 
                 c"Banana pepper".as_ptr(),
                 1,
                 std::ptr::null(),
-                c"Big Buck Hunter Pro".as_ptr(),
+                c"Game audio".as_ptr(),
                 &spec,
                 std::ptr::null(),
                 &buffer,
@@ -435,7 +442,12 @@ fn socket_write(device: &mut Device, name: &[u8], mut pcm: &[u8]) {
     }
     while device.socket >= 0 && !pcm.is_empty() {
         let sent = unsafe {
-            libc::send(device.socket, pcm.as_ptr().cast(), pcm.len(), libc::MSG_NOSIGNAL)
+            libc::send(
+                device.socket,
+                pcm.as_ptr().cast(),
+                pcm.len(),
+                libc::MSG_NOSIGNAL,
+            )
         };
         if sent < 0 {
             if unsafe { *libc::__errno_location() } == libc::EINTR {
@@ -480,7 +492,8 @@ fn connect_audio(name: &[u8], rate: u32, channels: u8) -> c_int {
     header[..4].copy_from_slice(b"AFA1");
     header[4..8].copy_from_slice(&rate.to_le_bytes());
     header[8..].copy_from_slice(&u32::from(channels).to_le_bytes());
-    let ok = unsafe { libc::connect(fd, (&addr as *const libc::sockaddr_un).cast(), addr_len) } == 0
+    let ok = unsafe { libc::connect(fd, (&addr as *const libc::sockaddr_un).cast(), addr_len) }
+        == 0
         && unsafe { libc::send(fd, header.as_ptr().cast(), header.len(), libc::MSG_NOSIGNAL) }
             == header.len() as isize;
     if !ok {

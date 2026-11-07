@@ -1,3 +1,5 @@
+> Research record: paths and launch transcripts below describe the earlier development harness. Current launches use the provider/mount/session architecture in architecture.md. Generated images are memory-backed; durable state uses per-user directories. Revalidate gameplay through the new pipeline before treating historical results as current support.
+
 # Jurassic Park 2015: native startup investigation
 
 Current application launches are implemented in the Rust game crate. The debugger exploration described below is a historical investigation; it is not part of the shipped runtime.

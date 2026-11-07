@@ -36,7 +36,11 @@ fn hash(name: &[u8]) -> u32 {
     n
 }
 pub fn prepare(source: &[u8]) -> Result<Vec<u8>, String> {
-    if banana_runtime::dependencies::sha256(source) != DUMP_SHA256 {
+    if {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(source))
+    } != DUMP_SHA256
+    {
         return Err("Unknown Minecraft build; refusing import reconstruction".into());
     }
     reconstruct(source)
@@ -312,19 +316,28 @@ mod tests {
         }
         source[0x430487 - BASE] = 0xe8;
         assert_eq!(
-            banana_runtime::dependencies::sha256(&source),
+            {
+                use sha2::Digest;
+                format!("{:x}", sha2::Sha256::digest(&source))
+            },
             "b1b5108023f5b5e175789c9b7c200f1fb958ec42d47fccf56208ef56df76de39"
         );
         let prepared = reconstruct(&source).unwrap();
         assert_eq!(prepared.len(), 29006344);
         assert_eq!(
-            banana_runtime::dependencies::sha256(&prepared),
+            {
+                use sha2::Digest;
+                format!("{:x}", sha2::Sha256::digest(&prepared))
+            },
             "218d556a8341a4e53f3d9fea68b091182cbd8b36dce8dac59dc0cbdb264a6dee"
         );
         let records = serde_json::json!({"game_sha256":DUMP_SHA256,"seed64":"11".repeat(64),"seed128":"22".repeat(128)});
         let result = seeded(&prepared, &records).unwrap();
         assert_eq!(
-            banana_runtime::dependencies::sha256(&result),
+            {
+                use sha2::Digest;
+                format!("{:x}", sha2::Sha256::digest(&result))
+            },
             "87e832eb84bfdf400f2acb519866c08b1c4c630dad8fcf278b71f918b5d8e377"
         );
         assert_eq!(

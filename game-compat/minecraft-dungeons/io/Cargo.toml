@@ -9,5 +9,16 @@ description = "Desktop keyboard, QR scanners and virtual dispenser for Minecraft
 name = "arcade_minecraft_io"
 crate-type = ["cdylib", "rlib"]
 
+[dependencies]
+serde_json.workspace=true
+banana-input.workspace=true
+
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 libc = "0.2"
+
+[[package.metadata.banana.artifacts]]
+name="arcade_minecraft_io"
+kind="lib"
+target=""
+hosts=["linux"]
+destination="games/minecraft/linux-x86_64/libarcade_minecraft_io.so"

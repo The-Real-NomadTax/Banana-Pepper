@@ -1,3 +1,5 @@
+> Research record: paths and launch transcripts below describe the earlier development harness. Current launches use the provider/mount/session architecture in architecture.md. Generated images are memory-backed; durable state uses per-user directories. Revalidate gameplay through the new pipeline before treating historical results as current support.
+
 # Fast and Furious Super Cars: Wine runtime
 
 Super Cars is a Windows (PE32, i386, Direct3D 8) cabinet build, so unlike the Linux titles it runs under Wine. The bundled community loader (`MohkerzLoaderz.exe`, MinHook, `teknoparrot.ini`, `dxwnd.dxw`) is not used and is not mapped into the prefix.

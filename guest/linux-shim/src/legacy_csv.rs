@@ -1,4 +1,4 @@
-//! The bounded CSV field writer imported by Aliens. ABI/behavior reference:
+//! Bounded CSV field writer with a C-compatible ABI. ABI/behavior reference:
 //! https://github.com/rgamble/libcsv/blob/master/csv.pdf
 use std::ffi::c_void;
 

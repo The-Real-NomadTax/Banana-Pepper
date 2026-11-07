@@ -1,336 +1,329 @@
-//! Build output only: an allowlist prevents local games, saves, credentials,
-//! caches and developer configuration from entering a distribution.
+//! Build/package only crate-declared artifacts for the current host.
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path};
-
-fn main() {
-    if let Err(error) = package() {
-        eprintln!("Packaging failed: {error}");
-        std::process::exit(1);
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+#[derive(Debug)]
+struct Artifact {
+    package: String,
+    name: String,
+    kind: String,
+    target: String,
+    destination: String,
+}
+fn declarations(metadata: &Value, host: &str) -> Result<Vec<Artifact>, String> {
+    let mut output = Vec::new();
+    let mut destinations = std::collections::BTreeSet::new();
+    for p in metadata["packages"]
+        .as_array()
+        .ok_or("Missing workspace packages")?
+    {
+        if let Some(records) = p
+            .pointer("/metadata/banana/artifacts")
+            .and_then(Value::as_array)
+        {
+            for a in records {
+                if !a["hosts"]
+                    .as_array()
+                    .ok_or("Missing artifact hosts")?
+                    .iter()
+                    .any(|h| h == host)
+                {
+                    continue;
+                }
+                let get = |k: &str| {
+                    a[k].as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| format!("Missing artifact {k}"))
+                };
+                let destination = get("destination")?
+                    .replace("{exe}", if host == "windows" { ".exe" } else { "" });
+                banana_content::path(&destination).map_err(|e| e.to_string())?;
+                if !destinations.insert(destination.clone()) {
+                    return Err(format!("Duplicate artifact destination {destination}"));
+                }
+                output.push(Artifact {
+                    package: p["name"].as_str().ok_or("Missing package name")?.into(),
+                    name: get("name")?,
+                    kind: get("kind")?,
+                    target: get("target")?,
+                    destination,
+                });
+            }
+        }
+    }
+    Ok(output)
+}
+fn command(c: &mut Command) -> Result<(), String> {
+    let s = c.status().map_err(|e| e.to_string())?;
+    if s.success() {
+        Ok(())
+    } else {
+        Err(format!("Build command failed with {s}"))
     }
 }
-
-fn package() -> Result<(), String> {
-    if std::env::args_os().len() != 1 {
-        return Err("Usage: cargo run -p banana-dist --release --locked".into());
+fn output(root: &Path, a: &Artifact) -> PathBuf {
+    let mut p = root.join("target");
+    if !a.target.is_empty() {
+        p = p.join(&a.target);
     }
-    if !cfg!(any(windows, target_os = "linux")) || std::env::consts::ARCH != "x86_64" {
-        return Err("Desktop distributions currently support Windows/Linux x86-64".into());
-    }
-    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let windows = if a.target.is_empty() {
+        cfg!(windows)
+    } else {
+        a.target.contains("windows")
+    };
+    let name = if a.kind == "bin" {
+        format!("{}{}", a.name, if windows { ".exe" } else { "" })
+    } else if windows {
+        format!("{}.dll", a.name)
+    } else {
+        format!("lib{}.so", a.name)
+    };
+    p.join("release").join(name)
+}
+fn run() -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    let dist = project.join("target/dist");
-    fs::create_dir_all(&dist).map_err(|e| e.to_string())?;
-    // Reject redirected output directories before any recursive cleanup.
-    let resolved = dist.canonicalize().map_err(|e| e.to_string())?;
-    if !resolved.starts_with(&project) {
-        return Err("target/dist must stay inside this checkout".into());
+    let build = std::env::args().nth(1).as_deref() == Some("build");
+    let metadata = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !metadata.status.success() {
+        return Err(String::from_utf8_lossy(&metadata.stderr).into());
+    }
+    let metadata: Value = serde_json::from_slice(&metadata.stdout).map_err(|e| e.to_string())?;
+    let artifacts = declarations(&metadata, std::env::consts::OS)?;
+    if build {
+        let mut targets = std::collections::BTreeSet::new();
+        for a in &artifacts {
+            if !a.target.is_empty() {
+                targets.insert(a.target.clone());
+            }
+        }
+        for t in targets {
+            command(Command::new("rustup").args(["target", "add", &t]))?;
+        }
+        for a in &artifacts {
+            let mut c = Command::new("cargo");
+            c.current_dir(&root)
+                .args(["build", "--release", "--locked", "-p", &a.package]);
+            if a.kind == "bin" {
+                c.args(["--bin", &a.name]);
+            } else {
+                c.arg("--lib");
+            }
+            if !a.target.is_empty() {
+                c.args(["--target", &a.target]);
+            }
+            command(&mut c)?;
+        }
     }
     let name = format!(
         "banana-pepper-{}-{}",
         std::env::consts::OS,
         std::env::consts::ARCH
     );
-    let destination = resolved.join(&name);
-    let staging = resolved.join(format!(".{name}-staging-{}", std::process::id()));
-    fs::create_dir(&staging).map_err(|e| e.to_string())?;
-    let result = assemble(&project, &staging);
-    if let Err(error) = result {
-        fs::remove_dir_all(&staging).map_err(|e| format!("{error}; cleaning staging: {e}"))?;
-        return Err(error);
+    let base = root.join("target/dist");
+    fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let staging = base.join(format!(".{name}-staging"));
+    if staging.exists() {
+        remove_owned(&root, &staging)?;
     }
-    // Only replace a distribution we generated, never an arbitrary directory.
-    let previous = resolved.join(format!(".{name}-previous-{}", std::process::id()));
-    if destination.exists() {
-        if fs::symlink_metadata(&destination)
-            .map_err(|e| e.to_string())?
-            .file_type()
-            .is_symlink()
-            || !banana_runtime::is_distribution(&destination)
-        {
-            fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
-            return Err(format!(
-                "Refusing to replace an unmanaged directory: {}",
-                destination.display()
-            ));
+    fs::create_dir(&staging).map_err(|e| e.to_string())?;
+    let mut catalog = BTreeMap::new();
+    for a in &artifacts {
+        let source = output(&root, a);
+        let bytes = fs::read(&source).map_err(|e| {
+            format!(
+                "Missing artifact {}: {e}. Run just build.",
+                source.display()
+            )
+        })?;
+        write(&staging, &a.destination, &bytes)?;
+        fs::set_permissions(
+            staging.join(&a.destination),
+            fs::metadata(&source)
+                .map_err(|e| e.to_string())?
+                .permissions(),
+        )
+        .map_err(|e| e.to_string())?;
+        catalog.insert(a.destination.clone(), source.to_string_lossy().into_owned());
+    }
+    banana_compat::install();
+    write(
+        &staging,
+        "settings.cfg",
+        banana_settings::Settings::default().to_text().as_bytes(),
+    )?;
+    write(
+        &staging,
+        "controls.cfg",
+        banana_input::controls::Bindings::default()
+            .to_text()
+            .as_bytes(),
+    )?;
+    write(
+        &staging,
+        banana_runtime::DIST_MARKER,
+        b"banana-pepper distribution v2\n",
+    )?;
+    write(&staging, "README.txt", include_bytes!("../README-dist.txt"))?;
+    let docs = root.join("docs");
+    for e in fs::read_dir(docs).map_err(|e| e.to_string())? {
+        let e = e.map_err(|e| e.to_string())?;
+        if e.path().extension().is_some_and(|e| e == "md") {
+            write(
+                &staging,
+                &format!("docs/{}", e.file_name().to_string_lossy()),
+                &fs::read(e.path()).map_err(|e| e.to_string())?,
+            )?;
         }
-        fs::rename(&destination, &previous).map_err(|e| e.to_string())?;
+    }
+    write(&staging,"THIRD-PARTY-NOTICES.txt",b"WinFsp and winfsp-rs: GPL-3.0; https://github.com/winfsp/winfsp and https://github.com/SnowflakePowered/winfsp-rs\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\nWinFsp must be installed separately on Windows. Linux requires FUSE/fusermount and bubblewrap; Wine for PE games.\n")?;
+    let inventory = inventory(&staging)?;
+    write(&staging,"manifest.json",&serde_json::to_vec_pretty(&json!({"version":2,"files":inventory,"os":std::env::consts::OS,"arch":std::env::consts::ARCH})).map_err(|e|e.to_string())?)?;
+    fs::write(
+        root.join("target/artifacts.json"),
+        serde_json::to_vec_pretty(&catalog).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let destination = base.join(&name);
+    let previous = base.join(format!(".{name}-previous"));
+    check_output_path(&root, &staging)?;
+    check_output_path(&root, &destination)?;
+    check_output_path(&root, &previous)?;
+    if previous.exists() {
+        if !banana_runtime::is_distribution(&previous) {
+            return Err("Refusing to remove an unrecognized previous distribution".into());
+        }
+        remove_owned(&root, &previous)?;
+    }
+    if destination.exists() {
+        if !banana_runtime::is_distribution(&destination) {
+            return Err("Refusing to replace a directory without the distribution marker".into());
+        }
+        fs::rename(&destination, &previous).map_err(|e| {
+            format!("Cannot replace the previous package; close running package applications: {e}")
+        })?;
     }
     if let Err(error) = fs::rename(&staging, &destination) {
         if previous.exists() {
-            fs::rename(&previous, &destination)
-                .map_err(|e| format!("Publishing: {error}; restoring previous package: {e}"))?;
+            check_output_path(&root, &previous)?;
+            check_output_path(&root, &destination)?;
+            let _ = fs::rename(&previous, &destination);
         }
-        fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
-        return Err(format!("Publishing package: {error}"));
+        return Err(error.to_string());
     }
     if previous.exists() {
-        fs::remove_dir_all(&previous).map_err(|e| e.to_string())?;
+        remove_owned(&root, &previous)?;
     }
     println!("Distribution ready: {}", destination.display());
     Ok(())
 }
-
-fn copy(project: &Path, package: &Path, source: &str, destination: &str) -> Result<(), String> {
-    let source = project.join(source);
-    if !source.is_file() {
-        return Err(format!(
-            "Missing build artifact {}. Run just build first.",
-            source.display()
-        ));
-    }
-    let destination = package.join(destination);
-    fs::create_dir_all(destination.parent().unwrap()).map_err(|e| e.to_string())?;
-    fs::copy(&source, &destination).map_err(|e| format!("Copying {}: {e}", source.display()))?;
-    Ok(())
+fn write(root: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    let p = root.join(name);
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    fs::write(p, bytes).map_err(|e| e.to_string())
 }
-
-fn assemble(project: &Path, package: &Path) -> Result<(), String> {
-    let executable = std::env::consts::EXE_SUFFIX;
-    for binary in ["arcade-desktop", "arcade-zar"] {
-        let name = format!("{binary}{executable}");
-        copy(project, package, &format!("target/release/{name}"), &name)?;
+fn remove_owned(root: &Path, path: &Path) -> Result<(), String> {
+    let target = path.canonicalize().map_err(|e| e.to_string())?;
+    let intended = root
+        .join("target/dist")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if !target.starts_with(&intended) || target == intended {
+        return Err("Refusing deletion outside the distribution output".into());
     }
-    copy(
-        project,
-        package,
-        &format!("target/release/banana-minecraft-card{executable}"),
-        &format!("helpers/banana-minecraft-card{executable}"),
-    )?;
-    for adapter in ["inpout32.dll", "arcade_wine_hook.dll"] {
-        copy(
-            project,
-            package,
-            &format!("target/i686-pc-windows-msvc/release/{adapter}"),
-            &format!("adapters/windows-x86/{adapter}"),
-        )?;
-    }
-    if cfg!(windows) {
-        copy(
-            project,
-            package,
-            "target/i686-pc-windows-msvc/release/water-buck.exe",
-            "helpers/water-buck.exe",
-        )?;
-        copy(
-            project,
-            package,
-            "target/release/water.exe",
-            "helpers/water.exe",
-        )?;
-        if project.join("target/wsl/package-ready").is_file() {
-            for name in ["banana-game-host", "banana-session"] {
-                copy(
-                    project,
-                    package,
-                    &format!("target/wsl/release/{name}"),
-                    &format!("helpers/linux/{name}"),
-                )?;
-            }
-            copy(
-                project,
-                package,
-                "target/wsl/release/libarcade_minecraft_io.so",
-                "adapters/linux-x86_64/libarcade_minecraft_io.so",
-            )?;
-            copy(
-                project,
-                package,
-                "target/wsl/i686-unknown-linux-gnu/release/libarcade_linux_shim.so",
-                "adapters/linux-x86/libarcade_linux_shim.so",
-            )?;
-        }
-    } else {
-        copy(
-            project,
-            package,
-            "target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so",
-            "adapters/linux-x86/libarcade_linux_shim.so",
-        )?;
-        copy(
-            project,
-            package,
-            "target/debug/libarcade_minecraft_io.so",
-            "adapters/linux-x86_64/libarcade_minecraft_io.so",
-        )?;
-        for name in ["banana-session", "banana-game-host"] {
-            copy(
-                project,
-                package,
-                &format!("target/release/{name}"),
-                &format!("helpers/linux/{name}"),
-            )?;
-        }
-    }
-    for entry in fs::read_dir(project.join("docs")).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entry.path().extension().is_some_and(|e| e == "md") {
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| "Non-UTF-8 documentation name")?;
-            copy(
-                project,
-                package,
-                &format!("docs/{name}"),
-                &format!("docs/{name}"),
-            )?;
-        }
-    }
-    banana_compat::install();
-    fs::write(
-        package.join("settings.cfg"),
-        banana_settings::Settings::default().to_text(),
-    )
-    .map_err(|e| e.to_string())?;
-    fs::write(
-        package.join("controls.cfg"),
-        banana_input::controls::Bindings::default().to_text(),
-    )
-    .map_err(|e| e.to_string())?;
-    fs::write(
-        package.join(banana_runtime::DIST_MARKER),
-        "Banana Pepper portable distribution v1\n",
-    )
-    .map_err(|e| e.to_string())?;
-    fs::write(
-        package.join("README.txt"),
-        include_str!("../README-dist.txt"),
-    )
-    .map_err(|e| e.to_string())?;
-    let mut files = Vec::new();
-    inventory(package, package, &mut files)?;
-    files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
-    let manifest = serde_json::json!({
-        "name": "Banana Pepper", "version": env!("CARGO_PKG_VERSION"),
-        "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-        "files": files,
-        "external_dependencies": if cfg!(windows) {
-            "Windows x86-64, graphics driver/OpenGL; optional WSL2/WSLg and Linux guest components for WSL backends"
-        } else {
-            "Linux x86-64, desktop graphics, Bubblewrap, 32-bit game libraries; Wine/DXVK for Windows titles; see README.txt"
-        },
-    });
-    fs::write(
-        package.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    fs::remove_dir_all(target).map_err(|e| e.to_string())
 }
-
-fn inventory(
-    root: &Path,
-    directory: &Path,
-    files: &mut Vec<serde_json::Value>,
-) -> Result<(), String> {
-    for entry in fs::read_dir(directory).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-            inventory(root, &entry.path(), files)?;
-        } else {
-            let bytes = fs::read(entry.path()).map_err(|e| e.to_string())?;
-            files.push(serde_json::json!({
-                "path": entry.path().strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/"),
-                "bytes": bytes.len(), "sha256": format!("{:x}", Sha256::digest(&bytes)),
-            }));
-        }
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Distribution: {e}");
+        std::process::exit(1)
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn package_excludes_local_data_and_has_a_complete_verifiable_manifest() {
-        let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("source");
-        let package = temp.path().join("package");
-        fs::create_dir_all(&package).unwrap();
-        let executable = std::env::consts::EXE_SUFFIX;
-        let mut sources = vec![
-            format!("target/release/arcade-desktop{executable}"),
-            format!("target/release/arcade-zar{executable}"),
-            format!("target/release/banana-minecraft-card{executable}"),
-            "target/i686-pc-windows-msvc/release/inpout32.dll".into(),
-            "target/i686-pc-windows-msvc/release/arcade_wine_hook.dll".into(),
-        ];
-        if cfg!(windows) {
-            sources.extend([
-                "target/i686-pc-windows-msvc/release/water-buck.exe".into(),
-                "target/release/water.exe".into(),
-            ]);
-        } else {
-            sources.extend([
-                "target/i686-unknown-linux-gnu/debug/libarcade_linux_shim.so".into(),
-                "target/debug/libarcade_minecraft_io.so".into(),
-                "target/release/banana-session".into(),
-                "target/release/banana-game-host".into(),
-            ]);
-        }
-        sources.extend([
-            "docs/setup.md".into(),
-            "settings.cfg".into(),
-            "controls.cfg".into(),
-            "games/private-game.exe".into(),
-            "runtime/private-save.bin".into(),
-            ".env".into(),
-            "scripts/old-runtime.py".into(),
-        ]);
-        for source in sources {
-            let path = project.join(source);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, "private fixture data").unwrap();
-        }
-        assemble(&project, &package).unwrap();
-        assert!(banana_runtime::is_distribution(&package));
-        for absent in ["games", "runtime", ".env", "target", "scripts"] {
-            assert!(
-                !package.join(absent).exists(),
-                "Unexpected local data: {absent}"
-            );
-        }
-        assert!(
-            banana_settings::Settings::parse(
-                &fs::read_to_string(package.join("settings.cfg")).unwrap()
+    fn metadata_filters_hosts_and_rejects_unsafe_or_duplicate_destinations() {
+        let package = |destination: &str| json!({"name":"future-adapter","metadata":{"banana":{"artifacts":[{"name":"adapter","kind":"lib","target":"i686-pc-windows-msvc","hosts":["windows"],"destination":destination}]}}});
+        assert_eq!(
+            declarations(
+                &json!({"packages":[package("games/future/adapter.dll")]}),
+                "windows"
             )
-            .is_ok()
+            .unwrap()
+            .len(),
+            1
+        );
+        assert!(declarations(&json!({"packages":[package("../outside")]}), "windows").is_err());
+        assert!(
+            declarations(
+                &json!({"packages":[package("same"),package("same")]}),
+                "windows"
+            )
+            .is_err()
         );
         assert!(
-            banana_input::controls::Bindings::parse(
-                &fs::read_to_string(package.join("controls.cfg")).unwrap()
+            declarations(
+                &json!({"packages":[package("games/future/adapter.dll")]}),
+                "linux"
             )
-            .is_ok()
-        );
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
-        let files = manifest["files"].as_array().unwrap();
-        for file in files {
-            let path = Path::new(file["path"].as_str().unwrap());
-            assert!(
-                !path
-                    .extension()
-                    .is_some_and(|x| ["py", "sh", "ps1"].iter().any(|e| x == *e)),
-                "Distributions must contain compiled runtime components"
-            );
-            let bytes = fs::read(package.join(file["path"].as_str().unwrap())).unwrap();
-            assert_eq!(file["sha256"], format!("{:x}", Sha256::digest(&bytes)));
-            assert_eq!(file["bytes"], bytes.len());
-        }
-        let mut actual = Vec::new();
-        inventory(&package, &package, &mut actual).unwrap();
-        assert_eq!(actual.len(), files.len() + 1); // manifest itself
-        // Missing required artifacts are errors, never partial success.
-        fs::remove_file(project.join(format!("target/release/arcade-desktop{executable}")))
-            .unwrap();
-        assert!(
-            assemble(&project, &package)
-                .unwrap_err()
-                .contains("Missing build artifact")
+            .unwrap()
+            .is_empty()
         );
     }
+}
+
+fn inventory(root: &Path) -> Result<Vec<Value>, String> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for e in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let e = e.map_err(|e| e.to_string())?;
+            if e.file_type().map_err(|e| e.to_string())?.is_dir() {
+                pending.push(e.path());
+            } else {
+                let bytes = fs::read(e.path()).map_err(|e| e.to_string())?;
+                let path = e
+                    .path()
+                    .strip_prefix(root)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.push(json!({"path":path,"size":bytes.len(),"sha256":format!("{:x}",Sha256::digest(&bytes))}));
+            }
+        }
+    }
+    files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    Ok(files)
+}
+fn check_output_path(root: &Path, path: &Path) -> Result<(), String> {
+    let intended = root
+        .join("target/dist")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let resolved = if path.exists() {
+        path.canonicalize().map_err(|e| e.to_string())?
+    } else {
+        path.parent()
+            .ok_or("Missing output parent")?
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .join(path.file_name().ok_or("Missing output name")?)
+    };
+    if !resolved.starts_with(&intended) || resolved == intended {
+        return Err("Refusing a directory move outside distribution output".into());
+    }
+    Ok(())
 }

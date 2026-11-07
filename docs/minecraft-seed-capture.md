@@ -1,3 +1,5 @@
+> Research record: paths and launch transcripts below describe the earlier development harness. Current launches use the provider/mount/session architecture in architecture.md. Generated images are memory-backed; durable state uses per-user directories. Revalidate gameplay through the new pipeline before treating historical results as current support.
+
 # Minecraft seed capture on Windows (handoff)
 
 Goal: record the two decrypted asset seed tables that TeknoParrot's dongle emulation produces for Minecraft Dungeons Arcade 3.07, so Banana pepper's own Linux runner can use them without TeknoParrot.

@@ -7,6 +7,7 @@ members = [
     "crates/banana-settings",
     "crates/banana-input",
     "crates/banana-content",
+    "crates/banana-vfs",
     "crates/banana-ffi",
     "apps/desktop",
     "game-compat/aliens-armageddon",
@@ -21,8 +22,11 @@ members = [
     "backends/native",
     "backends/wine",
     "backends/water",
-    "backends/wsl",
+    "game-compat/big-buck-hunter/water",
     "guest/linux-shim",
+    "game-compat/aliens-armageddon/guest",
+    "game-compat/big-buck-hunter/guest",
+    "game-compat/jurassic-park/guest",
     "tools/zar",
     "tools/dist",
 ]
@@ -43,6 +47,7 @@ banana-runtime = { path = "crates/banana-runtime" }
 banana-settings = { path = "crates/banana-settings" }
 banana-input = { path = "crates/banana-input" }
 banana-content = { path = "crates/banana-content" }
+banana-vfs = { path = "crates/banana-vfs" }
 # Game compatibility crates (referenced only by banana-compat)
 banana-game-aliens-armageddon = { path = "game-compat/aliens-armageddon" }
 banana-game-big-buck-hunter = { path = "game-compat/big-buck-hunter" }
@@ -53,7 +58,6 @@ banana-game-minecraft-dungeons = { path = "game-compat/minecraft-dungeons" }
 # Execution backends
 banana-native = { path = "backends/native" }
 banana-wine = { path = "backends/wine" }
-banana-wsl = { path = "backends/wsl" }
 banana-water = { path = "backends/water" }
 # Third party
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }

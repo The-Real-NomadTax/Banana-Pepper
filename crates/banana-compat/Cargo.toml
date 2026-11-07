@@ -17,9 +17,7 @@ banana-game-ford-racing.workspace = true
 banana-game-minecraft-dungeons.workspace = true
 banana-native.workspace = true
 banana-wine.workspace = true
-banana-wsl.workspace = true
 banana-water.workspace = true
-banana-runtime.workspace = true
 
 [dev-dependencies]
 banana-core.workspace = true

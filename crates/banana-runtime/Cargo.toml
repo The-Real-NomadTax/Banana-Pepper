@@ -11,7 +11,7 @@ banana-content.workspace = true
 banana-core.workspace = true
 banana-input.workspace = true
 banana-settings.workspace = true
-banana-native.workspace = true
+banana-vfs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -22,3 +22,10 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[package.metadata.banana.artifacts]]
+name="banana-session"
+kind="bin"
+target=""
+hosts=["linux"]
+destination="helpers/banana-session"

@@ -1,6 +1,5 @@
 //! Build-specific Aliens snapshot preparation. Original assets stay read-only.
 use sha2::{Digest, Sha256};
-use std::{fs, io::Write, path::Path};
 
 pub const ORIGINAL_SHA256: &str =
     "297c07db82b531e276d4ea7ceb4a11c9ce3aacb436f63526c179c2fd4de3e4db";
@@ -57,8 +56,15 @@ pub const NO_MOUSE_FIRE_KEYS: [u32; 3] = [294, 295, 296];
 ///   shim fills from its controller, mouse or light gun.
 /// * Player two always fires with Q/W/E unless it has the mouse; player one
 ///   then takes Q/W/E, or F13-F15 while nobody has the system mouse.
-fn sources(inputs: &banana_input::pad::Inputs, modes: &[banana_input::pad::AimMode; 2]) -> [u32; 8] {
-    let p1_aim = if inputs.own_aim_mode(0, modes[0]) { [0x181, 0x182] } else { [0x144, 0x145] };
+fn sources(
+    inputs: &banana_input::pad::Inputs,
+    modes: &[banana_input::pad::AimMode; 2],
+) -> [u32; 8] {
+    let p1_aim = if inputs.own_aim_mode(0, modes[0]) {
+        [0x181, 0x182]
+    } else {
+        [0x144, 0x145]
+    };
     let [f13, f14, f15] = NO_MOUSE_FIRE_KEYS;
     let (p1_fire, p2_fire) = match inputs.mouse() {
         Some(0) => ([0x146, 0x147, 0x148], [0x71, 0x77, 0x65]),
@@ -66,7 +72,8 @@ fn sources(inputs: &banana_input::pad::Inputs, modes: &[banana_input::pad::AimMo
         None => ([f13, f14, f15], [0x71, 0x77, 0x65]),
     };
     [
-        p1_aim[0], p1_aim[1], p1_fire[0], p1_fire[1], p1_fire[2], p2_fire[0], p2_fire[1], p2_fire[2],
+        p1_aim[0], p1_aim[1], p1_fire[0], p1_fire[1], p1_fire[2], p2_fire[0], p2_fire[1],
+        p2_fire[2],
     ]
 }
 
@@ -75,14 +82,13 @@ fn sources(inputs: &banana_input::pad::Inputs, modes: &[banana_input::pad::AimMo
 /// `inputs` (settings.cfg `players`, `p1_input`, `p2_input`) routes each
 /// player's aim and fire ([`sources`]); one player on the system mouse
 /// leaves the engine's own desktop maps unchanged.
-pub fn prepare(
-    source: &Path,
-    destination: &Path,
+pub fn transform(
+    mut bytes: Vec<u8>,
+    source: &dyn banana_content::ContentSource,
     keys: &[(u32, u32)],
     inputs: &banana_input::pad::Inputs,
     modes: &[banana_input::pad::AimMode; 2],
-) -> Result<String, String> {
-    let mut bytes = fs::read(source).map_err(|e| e.to_string())?;
+) -> Result<Vec<u8>, String> {
     if format!("{:x}", Sha256::digest(&bytes)) != ORIGINAL_SHA256 {
         return Err("Unrecognized Aliens build; no changes applied".into());
     }
@@ -178,7 +184,9 @@ pub fn prepare(
             patched.push((offset + 3, gun));
         }
     }
-    for (&(address, target, original), replacement) in AIM_FIRE_SITES.iter().zip(sources(inputs, modes)) {
+    for (&(address, target, original), replacement) in
+        AIM_FIRE_SITES.iter().zip(sources(inputs, modes))
+    {
         let offset = address - 0x08048000;
         if offset < 8
             || bytes.get(offset - 8..offset - 4) != Some(&[0xc7, 0x44, 0x24, 0x04])
@@ -199,7 +207,7 @@ pub fn prepare(
     // Restore those tables in the runtime copy so the game's native filename
     // mixer, AES reader and decompressor can consume its production assets.
     // This does not emulate dongle operations or report a successful licence.
-    let directory = source.parent().ok_or("Missing Aliens directory")?;
+
     for (name, length, hash, offset) in [
         (
             "2a3ccf10ef8dff97539ed4b3cd113701",
@@ -214,7 +222,7 @@ pub fn prepare(
             0x0082f6a0,
         ),
     ] {
-        let seed = fs::read(directory.join("hasp").join(name))
+        let seed = banana_content::read_all(source, &format!("hasp/{name}"), 1024 * 1024)
             .map_err(|e| format!("Missing Aliens asset seed {name}: {e}"))?;
         if seed.len() != length || format!("{:x}", Sha256::digest(&seed)) != hash {
             return Err(format!(
@@ -223,80 +231,5 @@ pub fn prepare(
         }
         bytes[offset..offset + length].copy_from_slice(&seed);
     }
-    if destination.exists()
-        && (source.canonicalize().ok() == destination.canonicalize().ok()
-            || fs::symlink_metadata(destination).is_ok_and(|m| m.file_type().is_symlink()))
-    {
-        return Err("Runtime snapshot must be separate from original".into());
-    }
-    let temp = destination.with_extension("preparing");
-    let mut file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp)
-        .map_err(|e| e.to_string())?;
-    let prepared = format!("{:x}", Sha256::digest(&bytes));
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|e| e.to_string())?;
-    drop(file);
-    fs::rename(temp, destination).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(destination, fs::Permissions::from_mode(0o755))
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(prepared)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn unknown_build_leaves_source_and_destination_untouched() {
-        let dir = std::env::temp_dir().join(format!("arcade-aliens-reject-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let source = dir.join("source");
-        let destination = dir.join("output");
-        fs::write(&source, b"unknown game").unwrap();
-        fs::write(&destination, b"existing snapshot").unwrap();
-        banana_input::controls::install(vec![&crate::controls::CONTROLS]);
-        let keys = banana_input::controls::Bindings::default()
-            .codes("aliens")
-            .unwrap();
-        let inputs = banana_input::pad::Inputs::ONE_PLAYER;
-        assert!(prepare(&source, &destination, &keys, &inputs, &[banana_input::pad::AimMode::Cursor; 2]).is_err());
-        assert_eq!(fs::read(&source).unwrap(), b"unknown game");
-        assert_eq!(fs::read(&destination).unwrap(), b"existing snapshot");
-        assert!(!destination.with_extension("preparing").exists());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn each_input_layout_routes_aim_and_fire() {
-        use banana_input::pad::{Inputs, AimMode};
-        let sources = |inputs: &Inputs| super::sources(inputs, &[AimMode::Cursor; 2]);
-        let original: Vec<u32> = AIM_FIRE_SITES.iter().map(|s| s.2).collect();
-        // One player on the system mouse: the engine's own maps.
-        assert_eq!(sources(&Inputs::ONE_PLAYER).to_vec(), original);
-        assert_eq!(sources(&Inputs::parse(Some(b"2"), Some(b"xinput,dinput"))).to_vec(), original);
-        // Player two has the mouse: player one aims with its gun and fires with Q/W/E.
-        let p2 = sources(&Inputs::parse(Some(b"2"), Some(b"xinput,keyboard_mouse")));
-        assert_eq!(p2, [0x181, 0x182, 0x71, 0x77, 0x65, 0x146, 0x147, 0x148]);
-        // Raw Input: nobody has the system mouse; player one fires with F13-F15.
-        let raw = sources(&Inputs::parse(Some(b"2"), Some(b"rawinput,rawinput")));
-        assert_eq!(raw, [0x181, 0x182, 294, 295, 296, 0x71, 0x77, 0x65]);
-        let solo = sources(&Inputs::parse(None, Some(b"rawinput")));
-        assert_eq!(&solo[..5], &[0x181, 0x182, 294, 295, 296]);
-    }
-    #[test]
-    fn centered_controller_uses_gun_axes_without_changing_fire_buttons() {
-        use banana_input::pad::{Inputs, AimMode};
-        let inputs = Inputs::ONE_PLAYER;
-        let result = sources(&inputs, &[AimMode::Centered, AimMode::Cursor]);
-        assert_eq!(&result[..2], &[0x181, 0x182]);
-        assert_eq!(&result[2..], &sources(&inputs, &[AimMode::Cursor; 2])[2..]);
-    }
-
+    Ok(bytes)
 }

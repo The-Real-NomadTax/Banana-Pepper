@@ -1,58 +1,41 @@
-# Runtime architecture and platform plan
+# Mounting and execution architecture
 
-## Windows backend direction
+## Ownership
 
-Keep both WSL2 and the developing native Linux ABI backend as Windows options.
-The Minecraft runner continues to use WSL2/WSLg. Native runtime development has
-resumed for Big Buck at the user's request: `water-buck` is a separate 32-bit
-Windows worker translating that fingerprinted game's ELF imports to Windows.
-The original static ELF64 worker remains available. Neither native worker runs
-Minecraft; do not reroute Minecraft or remove WSL support.
+`banana-content` defines immutable content sources and file handles: metadata, enumeration, random-access reads and fingerprints. Folder, ZAR and memory providers share the contract. A provider registry accepts further formats without modifying games or backends. The archive reader stays on a dedicated owning thread; its last handle closes and joins that worker.
 
-## Scope
+`banana-api` defines build identification, compatibility plans, backend capability checks, prepared sessions, structured actions and session events. `banana-core` inspects providers without requiring host file paths or mounted content. Archive report paths are display locations inside a source, rather than extracted files.
 
-The supplied games contain native PC executables. On a compatible x86 Linux host, the first approach is to investigate native execution with a compatible 32-bit userspace and implement the cabinet interfaces in our own code. A full CPU emulator would add a much larger task without resolving those interfaces by itself.
+`banana-vfs` composes source content, memory-backed generated files, aliases, dependency subtrees and a persistent overlay. WinFsp and FUSE expose this namespace to ordinary filesystem APIs, executable loaders and memory mapping. Water translates guest paths into this same mount.
 
-The current source implements static analysis, local input state, and an experimental Linux startup backend for one hash-verified Big Buck Hunter build. It reaches game/adventure selection and a rendered Whitetail hunt scene on a private Xvfb display, with a 32-bit Rust window shim and an experimental game-side JAMMA API adapter for switch edges and mouse gun callbacks. See `big-buck-startup.md`. The physical serial protocol and full gameplay validation remain outstanding.
+`banana-runtime` owns session orchestration and per-user storage. It selects a backend through registered capability checks, resolves declared artifacts and dependencies, creates the view, keeps the mount alive, supervises execution, and releases it after the process tree ends. It contains no title branches.
 
-## Boundaries
+Compatibility crates identify recognized builds and return plans. Their guest libraries own cabinet protocols, offsets, transforms, input mappings and diagnostics. `banana-compat` registers built-in games and backends. Frontends use these interfaces.
 
-1. **Portable core (implemented):** game identity, static binary metadata, diagnostic reports and normalized input. Goblin reads program/dynamic headers, so missing ELF section tables do not inherently require executable repair.
-2. **Host backend (initial Big Buck Hunter Linux probe implemented; other backends planned):** architecture/ABI capability checks, process supervision, isolated filesystem layout, audio/video integration and logs. Backend capabilities must be explicit; a frontend compiling on a platform does not establish game support.
-3. **Cabinet adapter (planned, per title/build):** verified executable fingerprint, measured device protocol, coin/start/service state, light guns or wheel/pedals, outputs and calibration. Unknown builds must not receive version-specific patches.
-4. **Frontend (initial desktop implementation, including private startup capture):** library, diagnostics and input setup. UI events will feed core state, never directly implement a device protocol. Android will need a platform entry point and touch/device input handling.
+## Overlay and identity
 
-Keep a 64-bit UI and any future 32-bit Linux guest shim in separate processes. A 64-bit shared library cannot be loaded into these 32-bit games. The host/backend interface should carry versioned input snapshots and events; shared state needs explicit disconnect and release semantics before game integration.
+Sources are never written. Overlay files store only dirty 64 KiB blocks plus an atomically replaced metadata index. Renames and deletion markers persist. Untouched assets and executable images are not materialized. Compatibility-generated executables remain in memory.
 
-## Observations from these files
+File descriptions retain identity across renames and remain usable after unlink. Replaced or deleted files with open descriptions stay accessible until those descriptions close. Unreferenced dirty blocks are reclaimed when the view closes. Metadata changes persist independently of file data.
 
-- All three Linux `game` executables are ELF32 i386 with `/lib/ld-linux.so.2` as interpreter.
-- Aliens imports legacy OpenGL/GLU/GLUT, ESD, a hardcoded `/usr/lib/libcsv.so`, and declares `/usr/lib/PhysX/v2.8.1/` as RPATH. Installed 64-bit equivalents cannot satisfy a 32-bit process.
-- Big Buck Hunter's supplied directory is spelled `Big Bug Hunter Pro`; the profile preserves that spelling.
-- Jurassic Park has multiple executable variants and a pre-existing TeknoParrot setup. Its documentation is historical evidence, not a dependency or verified explanation for our runtime.
-- Super Cars includes `sdaemon.exe` and a separate bundled loader. The profile inspects and runs `sdaemon.exe` directly; the loader is not used.
+PE views use ASCII-insensitive lookup and preserve source entry spelling; ambiguous names are rejected. ELF views retain case-sensitive lookup. Paths are relative to the virtual root. Folder providers use capability-relative filesystem access so links cannot escape the selected source.
 
-## Implementation sequence
+Entry records bind a stable ID to a content fingerprint. The fingerprint streams content without extracting it. A changed source cannot reuse its previous overlay automatically. Each writable view holds an exclusive entry lock.
 
-1. Establish executable fingerprints and an import/symbol/device-path inventory for each build. Compare static findings to controlled runtime traces. Never run the supplied cabinet boot scripts on the desktop: they include host configuration operations.
-2. Start with one Linux title. Establish a reproducible 32-bit runtime and private cabinet filesystem view. Record the first failure with logs; distinguish graphics/library failure from hardware or security service failure. Validate original hardware/services where required rather than assuming they can be omitted.
-3. Specify its observed cabinet transport and message semantics. Implement a Rust adapter with captured, reproducible protocol tests and a diagnostic device simulator. The current mouse monitor is not that simulator.
-4. Connect normalized gun/coin/start state, add device selection, calibration and focus/disconnect release handling. Confirm boot, attract mode, credit, start, play and clean shutdown.
-5. Repeat for the next Linux titles; share only interfaces shown to be compatible.
-6. Add a Windows host backend and per-game Windows I/O adapter. On Linux, Super Cars now runs under Wine (see `supercars-startup.md`), with its I/O adapter as a freestanding Windows DLL (`game-compat/super-cars/hook`). A native Windows backend would reuse that DLL.
+Mount leases own the driver host, ownership lock and empty mountpoint. Stale cleanup removes only empty mountpoints with an available ownership lock; it never walks or deletes mounted content.
 
-## Platform support targets
+## Execution
 
-| Host | Frontend | Execution work |
-| --- | --- | --- |
-| Linux x86-64 | Initial target | 32-bit Linux ABI/userspace plus per-game adapters |
-| Windows x86-64 | Native workbench | Big Buck uses the Water ELF32 worker or WSL2/WSLg. Ford uses native Direct3D 9 with our adapter. Minecraft retains its WSL2 runner and its documented cabinet/asset limits. |
-| macOS (especially Apple Silicon) | Future desktop target | Linux/Windows ABI and x86 execution solution; graphics translation as needed |
-| Android (ARM64) | Big Buck Hunter app (`apps/android/`, see `android.md`) | box64/box32 in a proot Debian rootfs; Xvfb + llvmpipe; touch input and AudioTrack bridges |
+Windows uses Native for supported PE plans and Water for supported ELF plans. Linux uses Native/Bubblewrap or Wine. Water has generic x86 and x64 workers. Its versioned C adapter interface validates structure sizes and separates generic loading, graphics and audio from title behavior.
 
-Do not advertise game support on any platform until tested there. The current core avoids Unix-only APIs, but cross-compilation and device testing remain outstanding.
+Windows children start suspended, join a kill-on-close job, and resume after assignment. Linux children run in owned process groups; native guest isolation additionally uses Bubblewrap. Session handles expose events, cancellation, commands and exit status. Time-limited diagnostics report a timeout distinctly.
 
-Minecraft's supplied `gamedump.exec` is ELF64 x86-64. Its Windows guest runner,
-fingerprint, dependency staging and remaining blockers are documented in
-`minecraft-windows.md`. The Linux guest shim is excluded on Windows so the
-entire workspace builds without Linux GLUT linkage.
+Keyboard transport uses bounded, sequenced frames with focus state, held sources and edges. Receivers release held input after transport loss. Session actions use bounded structured messages. Game modules validate action payloads.
+
+## State and migration
+
+Configuration, durable overlays/dependencies, logs/captured records, and disposable caches use separate per-user directories. Resources are resolved from the package marker or development artifact catalog. Installed applications never fall back to a developer checkout for missing resources.
+
+Legacy imports are declared by each game. Captured state is imported before planning; saves are imported after the overlay opens. An import ledger makes retries idempotent. Conflicts retain both copies. Old staged images, extracted assets and toolchains are not imported or deleted.
+
+Desktop and shared backends are the current scope. Android UI/legacy runner migration and further Water game capabilities are separate work.

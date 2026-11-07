@@ -1,3 +1,5 @@
+> Android frontend and legacy runner migration are deferred. Desktop mount/session changes do not establish Android compatibility.
+
 # Android: Big Buck Hunter Pro
 
 Banana pepper has an Android app (`apps/android/`) that runs the supplied 2008 Linux build of Big Buck Hunter Pro on ARM64 phones. Gameplay was verified on a Samsung Galaxy S24 FE (SM-S721U, Exynos 2400, Android 17, ARM64 only with no 32-bit support): attract mode, game and mode menus, a Whitetail hunt with scored shots, and initials entry. Audio reaches an active Android AudioTrack. Audibility, long sessions and other devices are not yet verified.

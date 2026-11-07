@@ -81,7 +81,7 @@ impl Sandbox {
     }
     pub fn desktop(&mut self) -> Result<&mut Self, String> {
         let display = std::env::var("DISPLAY")
-            .map_err(|_| "No X11 display; a desktop/XWayland session or WSLg is required")?;
+            .map_err(|_| "No X11 display; a desktop/XWayland session is required")?;
         let sockets = Path::new("/tmp/.X11-unix")
             .canonicalize()
             .map_err(|e| format!("X11 sockets unavailable: {e}"))?;
@@ -94,11 +94,6 @@ impl Sandbox {
             self.bind(p, "/tmp/game.Xauthority", true)
                 .env("XAUTHORITY", "/tmp/game.Xauthority");
         }
-        for p in ["/mnt/wslg", "/usr/lib/wsl"] {
-            if Path::new(p).exists() {
-                self.bind(p, p, true);
-            }
-        }
         for key in ["PULSE_SERVER", "XDG_RUNTIME_DIR"] {
             if let Some(v) = std::env::var_os(key) {
                 self.env(key, v);
@@ -108,7 +103,6 @@ impl Sandbox {
     }
     pub fn gpu(&mut self) -> &mut Self {
         for p in [
-            "/dev/dxg",
             "/dev/dri",
             "/dev/nvidia0",
             "/dev/nvidiactl",
@@ -165,22 +159,6 @@ impl Sandbox {
                 .env("PULSE_COOKIE", "/tmp/arcade-pulse/cookie");
         }
         driver.into()
-    }
-    /// Cabinet display/host-management commands become inert ELF executables,
-    /// not generated shell scripts. The change is private to the sandbox.
-    pub fn inert_tools(&mut self, output: &Path, names: &[&str]) -> Result<(), String> {
-        fs::create_dir_all(output.join("bin")).map_err(|e| e.to_string())?;
-        let true_bin =
-            crate::find_program("true").ok_or("The standard 'true' executable is required")?;
-        for name in names {
-            let target = output.join("bin").join(name);
-            fs::copy(&true_bin, &target).map_err(|e| e.to_string())?;
-            if let Some(original) = crate::find_program(name) {
-                self.bind(&target, original, true);
-            }
-        }
-        self.env("PATH", "/work/bin:/usr/bin:/bin");
-        Ok(())
     }
 }
 fn home() -> Option<PathBuf> {

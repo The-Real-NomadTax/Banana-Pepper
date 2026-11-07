@@ -13,6 +13,8 @@ pub struct Prefix {
     pub env: BTreeMap<String, String>,
     wine: PathBuf,
     log: PathBuf,
+    server: PathBuf,
+    closed: bool,
 }
 impl Prefix {
     pub fn new(path: &Path, log: &Path, architecture: &str) -> Result<Self, String> {
@@ -21,7 +23,10 @@ impl Prefix {
             .map(PathBuf::from)
             .or_else(|| find("wine"))
             .ok_or("Wine is required; install it or set ARCADE_WINE")?;
+        let server = server_for(&wine).ok_or("wineserver is required for owned Wine sessions")?;
         let p = Self {
+            server,
+            closed: false,
             path: path.to_owned(),
             wine,
             log: log.to_owned(),
@@ -38,12 +43,7 @@ impl Prefix {
             if !p.run(&mut c)?.success() {
                 return Err("Wine prefix initialization failed".into());
             }
-            let local = p.wine.with_file_name("wineserver");
-            let mut c = Command::new(if local.is_file() {
-                local
-            } else {
-                PathBuf::from("wineserver")
-            });
+            let mut c = Command::new(&p.server);
             c.arg("-w").envs(&p.env);
             if !p.run(&mut c)?.success() {
                 return Err("Wine prefix setup did not complete".into());
@@ -54,6 +54,29 @@ impl Prefix {
             fs::remove_file(z).map_err(|e| e.to_string())?;
         }
         Ok(p)
+    }
+    fn close(&mut self) -> Result<(), String> {
+        if self.closed {
+            return Ok(());
+        }
+        let output = banana_api::process::utilities::bounded_output(
+            Command::new(&self.server)
+                .args(["-k", "-w"])
+                .envs(&self.env),
+            std::time::Duration::from_secs(5),
+            65536,
+        )?;
+        match output {
+            Some(output) if output.status.success() => {
+                self.closed = true;
+                Ok(())
+            }
+            Some(output) => Err(format!(
+                "Wine server cleanup failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )),
+            None => Err("Wine server cleanup timed out".into()),
+        }
     }
     pub fn command(&self) -> Command {
         let mut c = Command::new(&self.wine);
@@ -158,15 +181,116 @@ impl ExecutionBackend for Wine {
         &["PE"]
     }
     fn availability(&self) -> Availability {
-        if !cfg!(unix) {
+        if !cfg!(target_os = "linux") {
             return Availability::Unsupported;
         }
-        let found = std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join("wine").is_file()));
+        let found = std::env::var_os("ARCADE_WINE")
+            .map(PathBuf::from)
+            .or_else(|| find("wine"))
+            .is_some_and(|wine| wine.is_file() && server_for(&wine).is_some());
         if found {
             Availability::Available
         } else {
-            Availability::Missing("wine is not installed".into())
+            Availability::Missing("Wine and wineserver are required".into())
         }
+    }
+    fn check(&self, p: &banana_api::LaunchPlan) -> Result<(), banana_api::CapabilityError> {
+        banana_api::check_host(self, p)
+    }
+    fn launch(
+        &self,
+        s: banana_api::PreparedSession,
+    ) -> Result<Box<dyn banana_api::SessionHandle>, String> {
+        self.check(&s.plan).map_err(|e| e.to_string())?;
+        let mut prefix = Prefix::new(
+            &s.state.join("prefix"),
+            &s.state.join("game.log"),
+            if s.plan.binary.bits == 32 {
+                "win32"
+            } else {
+                "win64"
+            },
+        )?;
+        #[cfg(unix)]
+        if let Some(relative) = s.plan.guest_root.strip_prefix("C:/") {
+            let target = prefix.path.join("drive_c").join(relative);
+            if let Ok(m) = fs::symlink_metadata(&target) {
+                if !m.file_type().is_symlink() {
+                    return Err("Wine guest mapping conflicts with an existing directory".into());
+                }
+                fs::remove_file(&target).map_err(|e| e.to_string())?;
+            }
+            if let Some(p) = target.parent() {
+                fs::create_dir_all(p).map_err(|e| e.to_string())?;
+            }
+            std::os::unix::fs::symlink(&s.mount, &target).map_err(|e| e.to_string())?;
+        }
+        if let Some(resolution) = s.plan.env.get("ARCADE_RESOLUTION") {
+            prefix.desktop(
+                "BananaPepper",
+                resolution,
+                s.plan
+                    .env
+                    .get("ARCADE_FULLSCREEN")
+                    .is_some_and(|v| v == "1"),
+            )?;
+        }
+        let mut command = prefix.command();
+        command
+            .arg(s.mount.join(&s.plan.executable))
+            .args(&s.plan.args)
+            .current_dir(s.mount.join(&s.plan.cwd))
+            .envs(&s.plan.env);
+        let log = fs::File::create(s.state.join("game.log")).map_err(|e| e.to_string())?;
+        command
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log);
+        let process = banana_api::process::ProcessSession::spawn(&mut command, s.plan.timeout_ms)?;
+        Ok(Box::new(WineSession { process, prefix }))
+    }
+}
+
+fn server_for(wine: &Path) -> Option<PathBuf> {
+    std::env::var_os("ARCADE_WINESERVER")
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| {
+            let p = wine.with_file_name("wineserver");
+            p.is_file().then_some(p)
+        })
+        .or_else(|| find("wineserver"))
+}
+impl Drop for Prefix {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+struct WineSession {
+    process: Box<dyn banana_api::SessionHandle>,
+    prefix: Prefix,
+}
+impl banana_api::SessionHandle for WineSession {
+    fn next_event(&mut self) -> Result<Option<banana_api::SessionEvent>, String> {
+        self.process.next_event()
+    }
+    fn command(&mut self, a: banana_api::ActionRequest) -> Result<(), String> {
+        self.process.command(a)
+    }
+    fn cancel(&mut self) -> Result<(), String> {
+        let result = self.process.cancel();
+        self.prefix.close()?;
+        result
+    }
+    fn wait(&mut self) -> Result<i32, String> {
+        let code = self.process.wait()?;
+        self.prefix.close()?;
+        Ok(code)
+    }
+}
+impl Drop for WineSession {
+    fn drop(&mut self) {
+        let _ = self.process.cancel();
+        let _ = self.process.wait();
+        let _ = self.prefix.close();
     }
 }

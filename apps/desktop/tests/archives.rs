@@ -4,30 +4,62 @@ use std::{fs, path::Path, process::Command};
 
 #[test]
 fn relocated_distribution_scans_archives_without_using_checkout_paths() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp =
+        tempfile::tempdir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"))
+            .unwrap();
     let bundle = temp.path().join("Moved Banana Pepper [portable]");
     fs::create_dir(&bundle).unwrap();
     fs::write(bundle.join("banana-pepper.dist"), "v1").unwrap();
     let executable = bundle.join(format!("arcade-desktop{}", std::env::consts::EXE_SUFFIX));
     fs::copy(env!("CARGO_BIN_EXE_arcade-desktop"), &executable).unwrap();
-    let info = Command::new(&executable).arg("--runtime-info").current_dir(temp.path()).output().unwrap();
-    assert!(info.status.success(), "{}", String::from_utf8_lossy(&info.stderr));
+    let info = Command::new(&executable)
+        .env("LOCALAPPDATA", temp.path().join("user/local"))
+        .env("APPDATA", temp.path().join("user/config"))
+        .env("XDG_CONFIG_HOME", temp.path().join("user/config"))
+        .env("XDG_DATA_HOME", temp.path().join("user/data"))
+        .env("XDG_STATE_HOME", temp.path().join("user/state"))
+        .env("XDG_CACHE_HOME", temp.path().join("user/cache"))
+        .arg("--runtime-info")
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(
+        info.status.success(),
+        "{}",
+        String::from_utf8_lossy(&info.stderr)
+    );
     let info: Value = serde_json::from_slice(&info.stdout).unwrap();
     assert_eq!(info["distribution"], true);
-    assert_eq!(Path::new(info["root"].as_str().unwrap()), bundle.canonicalize().unwrap());
+    assert_eq!(
+        Path::new(info["resources"].as_str().unwrap()),
+        bundle.canonicalize().unwrap()
+    );
     let source = temp.path().join("game");
     fs::create_dir(&source).unwrap();
     fs::create_dir(source.join("data")).unwrap();
     fs::write(source.join("game"), elf(64)).unwrap();
     let archive = temp.path().join("game.zar");
     zarchive_rs::pack_dir(&source, &archive).unwrap();
-    let scan = Command::new(&executable).arg("--scan").arg(&archive)
-        .env_remove("ARCADE_ARCHIVE_CACHE").current_dir(temp.path()).output().unwrap();
-    assert!(scan.status.success(), "{}", String::from_utf8_lossy(&scan.stderr));
+    let scan = Command::new(&executable)
+        .env("LOCALAPPDATA", temp.path().join("user/local"))
+        .env("APPDATA", temp.path().join("user/config"))
+        .env("XDG_CONFIG_HOME", temp.path().join("user/config"))
+        .arg("--scan")
+        .arg(&archive)
+        .env_remove("ARCADE_ARCHIVE_CACHE")
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(
+        scan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&scan.stderr)
+    );
     let reports: Value = serde_json::from_slice(&scan.stdout).unwrap();
-    let extracted = Path::new(profile(&reports, "minecraft")["path"].as_str().unwrap()).canonicalize().unwrap();
-    assert!(extracted.starts_with(bundle.canonicalize().unwrap().join("runtime/archive-cache")));
+    assert_eq!(profile(&reports, "minecraft")["binary"]["bits"], 64);
+    assert!(!bundle.join("runtime").exists());
     assert!(!temp.path().join("runtime").exists());
+    assert!(!temp.path().join("archive-cache").exists());
 }
 
 fn elf(bits: u8) -> Vec<u8> {
@@ -52,10 +84,16 @@ fn elf(bits: u8) -> Vec<u8> {
     b
 }
 fn scan(source: &Path, cache: &Path) -> std::process::Output {
+    let user = cache.with_extension("user");
     Command::new(env!("CARGO_BIN_EXE_arcade-desktop"))
+        .env("LOCALAPPDATA", user.join("local"))
+        .env("APPDATA", user.join("config"))
+        .env("XDG_CONFIG_HOME", user.join("config"))
+        .env("XDG_DATA_HOME", user.join("data"))
+        .env("XDG_STATE_HOME", user.join("state"))
+        .env("XDG_CACHE_HOME", user.join("cache"))
         .arg("--scan")
         .arg(source)
-        .env("ARCADE_ARCHIVE_CACHE", cache)
         .output()
         .unwrap()
 }
@@ -70,7 +108,9 @@ fn profile<'a>(reports: &'a Value, id: &str) -> &'a Value {
 
 #[test]
 fn archived_library_inspects_the_same_games_as_its_original_folder() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp =
+        tempfile::tempdir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"))
+            .unwrap();
     let library = temp.path().join("library");
     for (name, bits) in [
         ("linux based/Big Bug Hunter Pro/game", 32),
@@ -102,13 +142,16 @@ fn archived_library_inspects_the_same_games_as_its_original_folder() {
             profile(&packed, id)["binary"]
         );
         assert!(profile(&packed, id)["binary"].is_object());
-        assert!(Path::new(profile(&packed, id)["path"].as_str().unwrap()).is_file());
+        assert!(Path::new(profile(&packed, id)["path"].as_str().unwrap()).starts_with(&archive));
+        assert!(!cache.exists());
     }
 }
 
 #[test]
 fn direct_minecraft_archive_does_not_depend_on_the_cache_or_archive_name() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp =
+        tempfile::tempdir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"))
+            .unwrap();
     let source = temp.path().join("source");
     fs::create_dir_all(source.join("data")).unwrap();
     // An original ELF64 named "game", no .hvc marker and no title in the path.
@@ -127,7 +170,9 @@ fn direct_minecraft_archive_does_not_depend_on_the_cache_or_archive_name() {
 
 #[test]
 fn invalid_archive_is_a_cli_failure_with_a_useful_error() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp =
+        tempfile::tempdir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"))
+            .unwrap();
     let archive = temp.path().join("broken.zar");
     fs::write(&archive, b"not a ZArchive").unwrap();
     let output = scan(&archive, &temp.path().join("cache"));

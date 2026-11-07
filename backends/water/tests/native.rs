@@ -109,12 +109,13 @@ fn temp() -> PathBuf {
 fn run(bytes: &[u8], timeout: u32) -> (std::process::Output, PathBuf) {
     let path = temp();
     fs::write(path.join("guest.elf"), bytes).unwrap();
-    let result = std::process::Command::new(env!("CARGO_BIN_EXE_water"))
-        .arg("run")
+    fs::create_dir_all(path.join("work")).unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_water-x64"))
+        .arg("--image")
         .arg(path.join("guest.elf"))
         .arg("--root")
         .arg(&path)
-        .arg("--work")
+        .arg("--state")
         .arg(path.join("work"))
         .arg("--timeout")
         .arg(timeout.to_string())

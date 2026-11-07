@@ -1,7 +1,7 @@
 # Desktop distributions carry the C/C++ runtime in their binaries, so a clean
 # Windows machine does not need a separate Visual C++ redistributable install.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/DELAYLOAD:winfsp-x64.dll", "-C", "link-arg=delayimp.lib"]
 
 # The Super Cars Wine hook is a freestanding 32-bit Windows DLL: no MSVC
 # toolchain or CRT is needed, only LLVM's lld-link.

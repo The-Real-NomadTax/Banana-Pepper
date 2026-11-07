@@ -1,4 +1,4 @@
-//! Big Buck Hunter crosshair (settings.cfg `crosshair`, via ARCADE_CROSSHAIR).
+//! Configurable guest crosshair (settings.cfg `crosshair`, via ARCADE_CROSSHAIR).
 //!
 //! The game's own `glutSwapBuffers` call is interposed: the crosshair is
 //! drawn over the finished frame at the current aim position (mouse or
@@ -88,7 +88,11 @@ fn style() -> Option<&'static [u8]> {
 fn player_style(player: usize) -> Option<&'static [u8]> {
     let id = std::env::var("ARCADE_CROSSHAIR").ok()?;
     crosshair::png(&id)?;
-    crosshair::png(if player == 0 { &id } else { crosshair::player_two(&id) })
+    crosshair::png(if player == 0 {
+        &id
+    } else {
+        crosshair::player_two(&id)
+    })
 }
 
 /// RGBA8 pixels, padded into a SIDE x SIDE square.
@@ -170,8 +174,7 @@ pub unsafe fn draw(player: usize, aim_x: c_int, aim_y: c_int, window_w: c_int, w
     let size = *SIZE.get_or_init(|| {
         crosshair::size_percent(std::env::var("ARCADE_CROSSHAIR_SIZE").ok().as_deref())
     });
-    let [left, top, right, bottom] =
-        crosshair::quad(aim_x, aim_y, w, h, size, window_w, window_h);
+    let [left, top, right, bottom] = crosshair::quad(aim_x, aim_y, w, h, size, window_w, window_h);
     let (s, t) = (w as f32 / SIDE as f32, h as f32 / SIDE as f32);
     unsafe {
         glPushAttrib(ALL_ATTRIB_BITS);

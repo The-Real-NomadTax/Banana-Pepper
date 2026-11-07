@@ -5,10 +5,7 @@
 //! [`ExecutionBackend`]. Shared crates and frontends only ever talk to games
 //! through these traits; they never name an individual game.
 use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    sync::OnceLock,
-};
+use std::{path::PathBuf, sync::OnceLock};
 
 pub use banana_input::controls::Game as ControlLayout;
 pub use banana_settings::Profile as SettingsProfile;
@@ -61,22 +58,28 @@ pub struct KnownBuild {
 /// [`GameCompat::extra_actions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Action {
-    /// Stable identifier passed back to [`GameCompat::run`].
+    /// Stable identifier passed back to [`GameCompat::plan`].
     pub id: &'static str,
     /// Button label.
     pub label: &'static str,
 }
 
 impl Action {
-    pub const LAUNCH: Action = Action { id: "launch", label: "Play game" };
-    pub const PROBE: Action = Action { id: "probe", label: "Startup diagnostics" };
+    pub const LAUNCH: Action = Action {
+        id: "launch",
+        label: "Play game",
+    };
+    pub const PROBE: Action = Action {
+        id: "probe",
+        label: "Startup diagnostics",
+    };
 }
 
 /// A command-line entry point, e.g. `--launch-aliens [games-root]`.
 #[derive(Debug, Clone, Copy)]
 pub struct CliCommand {
     pub flag: &'static str,
-    /// [`Action::id`] passed to [`GameCompat::run`].
+    /// [`Action::id`] passed to [`GameCompat::plan`].
     pub action: &'static str,
     /// Printed before the run starts (may be empty).
     pub banner: &'static str,
@@ -92,8 +95,6 @@ pub enum BackendKind {
     Wine,
     /// Linux executables translated to Windows by Water.
     Water,
-    /// Linux executables through Windows Subsystem for Linux.
-    Wsl,
 }
 
 /// Whether a backend can run on this host right now.
@@ -114,6 +115,8 @@ pub trait ExecutionBackend: Sync {
     /// Executable formats this backend can run (e.g. "ELF", "PE").
     fn formats(&self) -> &'static [&'static str];
     fn availability(&self) -> Availability;
+    fn check(&self, plan: &LaunchPlan) -> Result<(), CapabilityError>;
+    fn launch(&self, session: PreparedSession) -> Result<Box<dyn SessionHandle>, String>;
 }
 
 /// Everything unique to one supported title.
@@ -126,17 +129,6 @@ pub trait GameCompat: Sync {
     fn controls(&self) -> Controls;
     /// Executable path relative to a games library root.
     fn default_executable(&self) -> &'static str;
-    /// Find the executable below `root`, which may be a library root or the
-    /// game's own folder.
-    fn locate_executable(&self, root: &Path) -> PathBuf {
-        root.join(self.default_executable())
-    }
-    /// Whether [`locate_executable`](Self::locate_executable) finds the game
-    /// when `root` is the game's own folder. Otherwise frontends present a
-    /// chosen game folder through the conventional library layout.
-    fn finds_own_folder(&self) -> bool {
-        false
-    }
     /// Recognised executable builds.
     fn known_builds(&self) -> &'static [KnownBuild] {
         &[]
@@ -166,9 +158,40 @@ pub trait GameCompat: Sync {
     fn cli_commands(&self) -> &'static [CliCommand] {
         &[]
     }
-    /// Prepare and run `action` for the content below `root`. Blocks until
-    /// the session ends; returns a user-facing message.
-    fn run(&self, root: &Path, action: &str) -> Result<String, String>;
+    fn content_executable(&self) -> &'static str {
+        self.default_executable().rsplit('/').next().unwrap()
+    }
+    fn session_actions(&self) -> &'static [SessionAction] {
+        &[]
+    }
+    fn validate_session_action(&self, action: &ActionRequest) -> Result<(), String> {
+        if action.id == "cancel" {
+            Ok(())
+        } else {
+            Err(format!("Unsupported session action {}", action.id))
+        }
+    }
+    fn legacy_state(&self) -> &'static [LegacyImport] {
+        &[]
+    }
+    fn source_roots(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn executable_names(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn identify(
+        &self,
+        source: &dyn banana_content::ContentSource,
+    ) -> Result<IdentifiedBuild, String> {
+        identify(self, source)
+    }
+    fn plan(
+        &self,
+        build: &IdentifiedBuild,
+        context: &PlanContext,
+        action: &ActionRequest,
+    ) -> Result<LaunchPlan, String>;
 }
 
 static GAMES: OnceLock<Vec<&'static dyn GameCompat>> = OnceLock::new();
@@ -198,3 +221,7 @@ pub fn backends() -> &'static [&'static dyn ExecutionBackend] {
 pub fn backend(kind: BackendKind) -> Option<&'static dyn ExecutionBackend> {
     backends().iter().copied().find(|b| b.kind() == kind)
 }
+
+mod launch;
+pub use launch::*;
+pub mod process;

@@ -2,19 +2,14 @@
 //!
 //! Everything specific to this title lives in this crate: build
 //! fingerprints, preparation, cabinet controls, settings and launchers.
-pub mod runtime;
 pub mod controls;
+mod plan;
 pub mod settings;
 
 use banana_api::{BackendKind, CliCommand, Controls, GameCompat, Status, SupportLevel};
-use std::path::Path;
 
 pub struct SuperCars;
 pub static GAME: SuperCars = SuperCars;
-
-fn unsupported(action: &str) -> String {
-    format!("The Fast and the Furious Super Cars has no {action} action")
-}
 
 impl GameCompat for SuperCars {
     fn id(&self) -> &'static str {
@@ -32,8 +27,20 @@ impl GameCompat for SuperCars {
     fn default_executable(&self) -> &'static str {
         "windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars/sdaemon.exe"
     }
+    fn known_builds(&self) -> &'static [banana_api::KnownBuild] {
+        &[banana_api::KnownBuild {
+            name: "Cabinet build",
+            sha256: "0cddbdbf1d107d27dc668897d7851b6ac96b4349320551d800504b1c50b195ba",
+        }]
+    }
+    fn legacy_state(&self) -> &'static [banana_api::LegacyImport] {
+        &[]
+    }
     fn status(&self) -> Status {
-        Status { level: SupportLevel::Experimental, label: "Wine desktop gameplay" }
+        Status {
+            level: SupportLevel::Experimental,
+            label: "Wine desktop gameplay",
+        }
     }
     fn compatibility_notes(&self) -> Option<&'static [&'static str]> {
         Some(&[
@@ -55,14 +62,18 @@ impl GameCompat for SuperCars {
         Some(&controls::CONTROLS)
     }
     fn cli_commands(&self) -> &'static [CliCommand] {
-        &[
-            CliCommand { flag: "--launch-super-cars", action: "launch", banner: "Launching Super Cars under Wine. Arrows or an XInput controller (stick steers, triggers = gas/brake) drive, Enter = start, 5 = coin, Esc or Back+Start = exit; bindings come from controls.cfg." },
-        ]
+        &[CliCommand {
+            flag: "--launch-super-cars",
+            action: "launch",
+            banner: "Launching Super Cars under Wine. Arrows or an XInput controller (stick steers, triggers = gas/brake) drive, Enter = start, 5 = coin, Esc or Back+Start = exit; bindings come from controls.cfg.",
+        }]
     }
-    fn run(&self, root: &Path, action: &str) -> Result<String, String> {
-        match action {
-            "launch" => runtime::launch(root),
-            _ => Err(unsupported(action)),
-        }
+    fn plan(
+        &self,
+        build: &banana_api::IdentifiedBuild,
+        context: &banana_api::PlanContext,
+        action: &banana_api::ActionRequest,
+    ) -> Result<banana_api::LaunchPlan, String> {
+        plan::make(build, context, action)
     }
 }

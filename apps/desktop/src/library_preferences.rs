@@ -69,7 +69,10 @@ fn load_from(path: &Path) -> Result<Preferences, String> {
         games,
         added,
         theme: crate::appearance::Theme::from_id(
-            value.get("theme").and_then(|value| value.as_str()).unwrap_or_default(),
+            value
+                .get("theme")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default(),
         ),
     })
 }
@@ -100,17 +103,8 @@ fn normalize(folder: &str) -> Result<String, String> {
     }
     let folder = std::fs::canonicalize(folder)
         .map_err(|error| format!("Cannot open games folder: {error}"))?;
-    let archive = folder.is_file()
-        && folder
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| {
-                ["zar", "zarchive", "wua"]
-                    .iter()
-                    .any(|suffix| e.eq_ignore_ascii_case(suffix))
-            });
-    if !folder.is_dir() && !archive {
-        return Err("Choose a game directory or ZArchive (.zar).".into());
+    if !banana_content::supports(&folder) {
+        return Err("Choose a supported game folder or content file.".into());
     }
     let folder = folder
         .to_str()
@@ -119,22 +113,12 @@ fn normalize(folder: &str) -> Result<String, String> {
     Ok(folder)
 }
 
-/// Present a selected directory through the layout required by existing runtimes.
-/// Only links inside the desktop preference directory are created; game files stay put.
+/// Selected source is passed intact to provider inspection and session creation.
 pub fn runtime_root(game: &str, folder: &str) -> Result<PathBuf, String> {
-    let profile = banana_core::profiles()
-        .into_iter()
-        .find(|profile| profile.id == game)
-        .ok_or("Unknown game")?;
-    let folder = banana_runtime::content::resolve(Path::new(folder))?;
-    if banana_api::game(game).is_some_and(|g| g.finds_own_folder()) {
-        return Ok(folder);
+    if banana_api::game(game).is_none() {
+        return Err("Unknown game".into());
     }
-    let layouts = preference_path()?
-        .parent()
-        .ok_or("Missing configuration directory")?
-        .join("game-folders");
-    linked_root(&layouts, &profile, &folder)
+    normalize(folder).map(PathBuf::from)
 }
 
 pub struct LibraryScan {
@@ -145,28 +129,28 @@ pub struct LibraryScan {
 /// Run on the inspection worker: both extraction and preference links can do I/O.
 pub fn scan(root: &Path, games: &BTreeMap<String, String>) -> Result<LibraryScan, String> {
     let mut reports = banana_runtime::content::scan(root)?;
-    let game_roots: BTreeMap<_, _> = games
-        .iter()
-        .map(|(id, folder)| (id.clone(), runtime_root(id, folder)))
-        .collect();
-    for report in &mut reports {
-        if let Some(custom_root) = game_roots.get(&report.profile.id) {
-            match custom_root {
-                Ok(custom_root) => {
-                    if let Some(mut custom) = banana_core::scan(custom_root)
-                        .into_iter()
-                        .find(|r| r.profile.id == report.profile.id)
-                    {
-                        if let Ok(path) = custom.path.canonicalize() {
-                            custom.path = path;
-                        }
-                        *report = custom;
+    let mut game_roots = BTreeMap::new();
+    for (id, folder) in games {
+        let root = runtime_root(id, folder).and_then(|root| {
+            banana_content::open(&root)
+                .map(|source| (root, source))
+                .map_err(|e| e.to_string())
+        });
+        match root {
+            Ok((root, source)) => {
+                if let Some(game) = banana_api::game(id) {
+                    if let Some(report) = reports.iter_mut().find(|r| r.profile.id == *id) {
+                        *report = banana_core::report_source(game, &root, Ok(source.as_ref()));
                     }
                 }
-                Err(error) => {
+                game_roots.insert(id.clone(), Ok(root));
+            }
+            Err(error) => {
+                if let Some(report) = reports.iter_mut().find(|r| r.profile.id == *id) {
                     report.binary = None;
                     report.error = Some(error.clone());
                 }
+                game_roots.insert(id.clone(), Err(error));
             }
         }
     }
@@ -174,44 +158,6 @@ pub fn scan(root: &Path, games: &BTreeMap<String, String>) -> Result<LibraryScan
         reports,
         game_roots,
     })
-}
-
-fn linked_root(
-    layouts: &Path,
-    profile: &banana_core::GameProfile,
-    folder: &Path,
-) -> Result<PathBuf, String> {
-    use std::hash::{Hash, Hasher};
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    folder.hash(&mut hash);
-    let root = layouts.join(format!("{}-{:x}", profile.id, hash.finish()));
-    let relative = profile
-        .executable
-        .parent()
-        .ok_or("Missing game directory")?;
-    let link = root.join(relative);
-    std::fs::create_dir_all(link.parent().ok_or("Missing library directory")?)
-        .map_err(|e| e.to_string())?;
-    match std::fs::symlink_metadata(&link) {
-        Ok(_) => {
-            if link.canonicalize().map_err(|e| e.to_string())?
-                != folder.canonicalize().map_err(|e| e.to_string())?
-            {
-                return Err("The saved game folder link points to another directory.".into());
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(folder, &link)
-                .map_err(|e| format!("Cannot link game folder: {e}"))?;
-            #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(folder, &link).map_err(|e| {
-                format!("Cannot link game folder (enable Windows Developer Mode): {e}")
-            })?;
-        }
-        Err(error) => return Err(error.to_string()),
-    }
-    Ok(root)
 }
 
 #[cfg(test)]
@@ -225,7 +171,9 @@ mod tests {
         let config = temp.path().join("library.json");
         let mut prefs = load_from(&config).unwrap();
         assert!(prefs.added.is_empty());
-        prefs.games.insert("aliens".into(), "local game files".into());
+        prefs
+            .games
+            .insert("aliens".into(), "local game files".into());
         // Finding or configuring files does not add a game to a new collection.
         write_to(&config, &prefs).unwrap();
         assert!(load_from(&config).unwrap().added.is_empty());
@@ -241,7 +189,11 @@ mod tests {
         assert!(removed.added.is_empty());
         assert_eq!(removed.games["aliens"], "local game files");
         // Migrate only explicitly configured games from older preferences.
-        std::fs::write(&config, br#"{"root":"games","games":{"jurassic":"old folder"}}"#).unwrap();
+        std::fs::write(
+            &config,
+            br#"{"root":"games","games":{"jurassic":"old folder"}}"#,
+        )
+        .unwrap();
         let legacy = load_from(&config).unwrap();
         assert_eq!(legacy.added, BTreeSet::from(["jurassic".into()]));
     }
@@ -341,13 +293,13 @@ mod tests {
                 b"game data",
             )
             .unwrap();
-            let root = linked_root(&temp.join("layouts"), &profile, folder).unwrap();
+            let root = runtime_root(&profile.id, folder.to_str().unwrap()).unwrap();
             assert_eq!(
-                std::fs::read(root.join(&profile.executable)).unwrap(),
+                std::fs::read(root.join(profile.executable.file_name().unwrap())).unwrap(),
                 b"game data"
             );
             assert_eq!(
-                linked_root(&temp.join("layouts"), &profile, folder).unwrap(),
+                runtime_root(&profile.id, folder.to_str().unwrap()).unwrap(),
                 root
             );
         }
