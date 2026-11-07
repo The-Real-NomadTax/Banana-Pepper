@@ -55,9 +55,6 @@ impl GameCompat for BigBuckHunter {
             "Confirmed: the game fully loads into scored gameplay and high scores save correctly.",
         ])
     }
-    fn play_hint(&self) -> &'static str {
-        "Mouse or controller aims and fires; right click or LT pumps. Start and coin bindings are under Settings. Esc or Back+Start exits."
-    }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native, BackendKind::Water, BackendKind::Wsl]
     }

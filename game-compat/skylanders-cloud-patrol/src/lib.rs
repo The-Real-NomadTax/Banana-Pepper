@@ -49,9 +49,6 @@ impl GameCompat for SkylandersCloudPatrol {
             "The Kaboom coin/ticket board is emulated: the coin action inserts coins and tickets pay out instantly. The Matrix dongle is not emulated.",
         ])
     }
-    fn play_hint(&self) -> &'static str {
-        "Press 5 (or controller Back) four times to insert coins, then click (or Space / controller A) to touch and shoot; a controller's sticks move the cursor. Esc or Back+Start exits. Change bindings in Settings."
-    }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Wine, BackendKind::Native]
     }

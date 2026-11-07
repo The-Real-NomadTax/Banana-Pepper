@@ -54,9 +54,6 @@ impl GameCompat for MinecraftDungeons {
             "Supplied gamedump.exec is a pre-existing modified build; original game and cabinet boot scripts are never run.",
         ])
     }
-    fn play_hint(&self) -> &'static str {
-        "5 inserts a P1 coin; 1, Enter or Space starts. P1: arrows + Z/X/C. F1–F4 scan cards. Captured seeds and prepared libraries are required; HUD and gameplay issues remain."
-    }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native, BackendKind::Wsl]
     }

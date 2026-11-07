@@ -123,7 +123,7 @@ fn catalog(request: &Value) -> Result<Value, String> {
             Some(json!({"id":a.id,"label":a.label,"key": match *key {"Enter"=>"Return".into(),"Space"=>"space".into(),"Backspace"=>"BackSpace".into(),"PageUp"=>"Prior".into(),"PageDown"=>"Next".into(), other if other.len()==1=>other.to_lowercase(),other=>other.into()}}))
         }).collect();
         json!({"id":game.id(),"title":game.title(),"source":source,"found":source.is_some(),
-               "controls":controls,"kind":game.controls(),"hint":game.play_hint(),
+               "controls":controls,"kind":game.controls(),
                "status":profile.as_ref().map(|p|p.status).unwrap_or("Android unavailable"),
                "verified":profile.as_ref().is_some_and(|p|p.verified),"missing":missing,
                "ready":source.is_some() && missing.is_empty(),"executable":profile.map(|p|p.executable)})

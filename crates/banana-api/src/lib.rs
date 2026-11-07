@@ -147,8 +147,6 @@ pub trait GameCompat: Sync {
     fn compatibility_notes(&self) -> Option<&'static [&'static str]> {
         None
     }
-    /// One-line controls hint for the game page.
-    fn play_hint(&self) -> &'static str;
     /// Execution backends this game can use.
     fn backends(&self) -> &'static [BackendKind];
     /// Settings the game honours; `None` hides graphics/audio settings.

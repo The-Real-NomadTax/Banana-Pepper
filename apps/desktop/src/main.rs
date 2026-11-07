@@ -1908,7 +1908,6 @@ impl eframe::App for ArcadeApp {
                         self.set_library_membership(id, false);
                         return;
                     }
-                    ui.label(RichText::new(report.path.display().to_string()).small().color(palette.muted));
                     if let Some(error) = &report.error { ui.colored_label(Color32::LIGHT_RED, error); }
                     ui.add_space(10.0);
                     ui.horizontal_wrapped(|ui| {
@@ -1934,8 +1933,6 @@ impl eframe::App for ArcadeApp {
                     if let Some(profile) = compat.and_then(|g| g.settings_profile()) {
                         ui.label(RichText::new(self.settings.settings.game(profile.id).summary()).small().color(palette.muted));
                     }
-                    ui.add_space(6.0);
-                    ui.label(compat.map(|g| g.play_hint()).unwrap_or_default());
                     ui.add_space(10.0);
                     ui.separator();
                     ui.add_space(4.0);

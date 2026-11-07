@@ -107,8 +107,7 @@ class MainActivity : Activity() {
             append(game.getString("status")); append("\n\n")
             if(!game.getBoolean("found"))append("Import the folder containing ${game.getString("executable")}.\n\n")
             if(missing.length()>0)append("Missing runtime components:\n"+(0 until missing.length()).joinToString("\n") { missing.getString(it) }+"\n\n")
-            append(game.getString("hint"))
-        }
+        }.trimEnd()
         AlertDialog.Builder(this).setTitle(game.getString("title")).setMessage(message).setPositiveButton("OK",null).show()
     }
     private fun chooseImport() {

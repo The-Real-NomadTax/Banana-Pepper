@@ -52,9 +52,6 @@ impl GameCompat for SuperCars {
             "The game logs DONGLE MISSING periodically; races still run, but long sessions and audits are unverified.",
         ])
     }
-    fn play_hint(&self) -> &'static str {
-        "Arrow keys or a controller steer, accelerate and brake (stick and triggers are analog). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings."
-    }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Wine]
     }

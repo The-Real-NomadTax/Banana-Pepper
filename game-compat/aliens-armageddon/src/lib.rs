@@ -45,9 +45,6 @@ impl GameCompat for AliensArmageddon {
     fn status(&self) -> Status {
         Status { level: SupportLevel::Experimental, label: "Linux desktop gameplay" }
     }
-    fn play_hint(&self) -> &'static str {
-        "Mouse or controller sticks aim, RT fires. Start, coin and operator controls are under Settings. Esc or Back+Start exits."
-    }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native]
     }

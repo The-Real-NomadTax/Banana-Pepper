@@ -54,9 +54,6 @@ impl GameCompat for JurassicPark {
             "Confirmed: the game fully loads into scored gameplay and high scores save correctly.",
         ])
     }
-    fn play_hint(&self) -> &'static str {
-        "Mouse or controller sticks aim, RT fires. Start, coin and operator controls are under Settings. Esc or Back+Start exits."
-    }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native]
     }

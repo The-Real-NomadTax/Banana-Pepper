@@ -52,9 +52,6 @@ impl GameCompat for FordRacing {
             "Keyboard driving; physical wheels, force feedback and cabinet networking remain unimplemented.",
         ])
     }
-    fn play_hint(&self) -> &'static str {
-        "Arrow keys or an XInput controller drive (stick steers, triggers are analog gas/brake). Enter or Start begins, 5 inserts a coin, Esc or Back+Start exits. Change bindings in Settings."
-    }
     fn backends(&self) -> &'static [BackendKind] {
         &[BackendKind::Native, BackendKind::Wine]
     }
