@@ -71,7 +71,8 @@ pub fn prepare_view(
         source,
         root: build.source_root.clone(),
     });
-    let fingerprint = source.fingerprint().map_err(|e| e.to_string())?;
+    let location = source_path.canonicalize().map_err(|e| e.to_string())?;
+    let fingerprint = paths.fingerprint(&location, source.as_ref())?;
     let entry = paths.entry(game.id(), source_path, &fingerprint)?;
     let state = paths.state.join("entries").join(&entry);
     std::fs::create_dir_all(&state).map_err(|e| e.to_string())?;

@@ -26,8 +26,21 @@ pub trait ContentFile: Send + Sync {
     }
 }
 pub trait ContentSource: Send + Sync {
+    /// Content identity: every path, size and byte. Expensive; callers cache
+    /// it under [`stamp`](Self::stamp).
     fn fingerprint(&self) -> io::Result<String> {
         fingerprint(self)
+    }
+    /// Cheap change detector for the subtree at `root`: names, sizes and
+    /// modification times, never file contents. `None` when the source cannot
+    /// tell, in which case callers must hash it.
+    fn stamp(&self, _root: &str) -> io::Result<Option<String>> {
+        Ok(None)
+    }
+    /// Check integrity data stored with the source (archive checksums). Runs
+    /// with a fresh fingerprint rather than on every open.
+    fn verify(&self) -> io::Result<()> {
+        Ok(())
     }
     fn metadata(&self, path: &str) -> io::Result<Metadata>;
     fn read_dir(&self, path: &str) -> io::Result<Vec<Entry>>;
@@ -206,6 +219,59 @@ impl ContentSource for Folder {
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(entries)
     }
+    fn stamp(&self, root: &str) -> io::Result<Option<String>> {
+        path(root)?;
+        let mut hash = Sha256::new();
+        hash.update(b"folder-stamp-v1\0");
+        let mut stack = vec![(root.to_owned(), 0usize)];
+        let mut count = 0usize;
+        while let Some((directory, depth)) = stack.pop() {
+            if depth > 64 {
+                return Err(invalid("Source nesting exceeds 64 directories"));
+            }
+            let dir = if directory.is_empty() {
+                self.root.try_clone()?
+            } else {
+                self.root.open_dir(&directory)?
+            };
+            let mut entries = Vec::new();
+            for e in dir.entries()? {
+                let e = e?;
+                let name = e
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| invalid("Content names must be UTF-8"))?;
+                entries.push((name, e.metadata()?));
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            for (name, m) in entries {
+                count += 1;
+                if count > 1_000_000 {
+                    return Err(invalid("Source contains more than one million entries"));
+                }
+                let p = if directory.is_empty() {
+                    name
+                } else {
+                    format!("{directory}/{name}")
+                };
+                let modified = m
+                    .modified()?
+                    .into_std()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                hash.update((p.len() as u64).to_le_bytes());
+                hash.update(p.as_bytes());
+                hash.update([u8::from(m.is_dir())]);
+                hash.update(m.len().to_le_bytes());
+                hash.update(modified.to_le_bytes());
+                if m.is_dir() {
+                    stack.push((p, depth + 1));
+                }
+            }
+        }
+        Ok(Some(format!("{:x}", hash.finalize())))
+    }
     fn open(&self, p: &str) -> io::Result<Arc<dyn ContentFile>> {
         if self.metadata(p)?.directory {
             return Err(io::ErrorKind::IsADirectory.into());
@@ -236,11 +302,14 @@ impl ContentFile for HostFile {
         }
     }
 }
-struct Request {
-    path: String,
-    offset: u64,
-    len: usize,
-    reply: mpsc::SyncSender<io::Result<Vec<u8>>>,
+enum Request {
+    Read {
+        path: String,
+        offset: u64,
+        len: usize,
+        reply: mpsc::SyncSender<io::Result<Vec<u8>>>,
+    },
+    Verify(mpsc::SyncSender<io::Result<()>>),
 }
 struct ZarWorker {
     tx: Option<mpsc::Sender<Request>>,
@@ -257,7 +326,9 @@ impl Drop for ZarWorker {
 pub struct Zar {
     entries: BTreeMap<String, Metadata>,
     worker: Arc<ZarWorker>,
-    pub fingerprint: String,
+    /// Archive size and modification time (ns); an archive's contents do not
+    /// change without changing these.
+    archive: (u64, u128),
 }
 impl Zar {
     pub fn new(path: &Path) -> io::Result<Self> {
@@ -269,6 +340,14 @@ impl Zar {
             options.share_mode(1);
         }
         let file = options.open(path)?;
+        let m = file.metadata()?;
+        let archive = (
+            m.len(),
+            m.modified()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
         let (tx, rx) = mpsc::channel::<Request>();
         let (ready, result) = mpsc::sync_channel(1);
         // The native archive reader stays on its owning thread. No unsafe Send implementation.
@@ -276,15 +355,8 @@ impl Zar {
             .name("zarchive-reader".into())
             .spawn(move || {
                 let setup = (|| -> io::Result<_> {
-                    let mut file = file;
-                    let mut h = Sha256::new();
-                    io::copy(&mut file, &mut h)?;
-                    file.rewind()?;
                     let mut archive =
                         zarchive_rs::Archive::new(file).map_err(|e| invalid(e.to_string()))?;
-                    archive
-                        .verify_integrity()
-                        .map_err(|e| invalid(e.to_string()))?;
                     super::preflight(&mut archive).map_err(invalid)?;
                     let mut entries = BTreeMap::new();
                     entries.insert(
@@ -331,34 +403,50 @@ impl Zar {
                             );
                         }
                     }
-                    Ok((archive, entries, format!("{:x}", h.finalize())))
+                    Ok((archive, entries))
                 })();
-                let (mut archive, entries, fingerprint) = match setup {
+                let (mut archive, entries) = match setup {
                     Ok(v) => v,
                     Err(e) => {
                         let _ = ready.send(Err(e));
                         return;
                     }
                 };
-                if ready.send(Ok((entries, fingerprint))).is_err() {
+                if ready.send(Ok(entries)).is_err() {
                     return;
                 }
                 while let Ok(r) = rx.recv() {
-                    let answer = (|| {
-                        let mut f = archive
-                            .open_file(r.path.as_bytes())
-                            .map_err(|e| invalid(e.to_string()))?
-                            .ok_or(io::ErrorKind::NotFound)?;
-                        f.seek(SeekFrom::Start(r.offset))?;
-                        let mut bytes = vec![0; r.len];
-                        let n = f.read(&mut bytes)?;
-                        bytes.truncate(n);
-                        Ok(bytes)
-                    })();
-                    let _ = r.reply.send(answer);
+                    match r {
+                        Request::Read {
+                            path,
+                            offset,
+                            len,
+                            reply,
+                        } => {
+                            let answer = (|| {
+                                let mut f = archive
+                                    .open_file(path.as_bytes())
+                                    .map_err(|e| invalid(e.to_string()))?
+                                    .ok_or(io::ErrorKind::NotFound)?;
+                                f.seek(SeekFrom::Start(offset))?;
+                                let mut bytes = vec![0; len];
+                                let n = f.read(&mut bytes)?;
+                                bytes.truncate(n);
+                                Ok(bytes)
+                            })();
+                            let _ = reply.send(answer);
+                        }
+                        Request::Verify(reply) => {
+                            let _ = reply.send(
+                                archive
+                                    .verify_integrity()
+                                    .map_err(|e| invalid(e.to_string())),
+                            );
+                        }
+                    }
                 }
             })?;
-        let (entries, fingerprint) = result
+        let entries = result
             .recv()
             .map_err(|_| io::Error::other("Archive reader stopped"))??;
         Ok(Self {
@@ -367,11 +455,31 @@ impl Zar {
                 tx: Some(tx),
                 thread: Some(thread),
             }),
-            fingerprint,
+            archive,
         })
     }
 }
 impl ContentSource for Zar {
+    fn stamp(&self, root: &str) -> io::Result<Option<String>> {
+        path(root)?;
+        let mut hash = Sha256::new();
+        hash.update(b"zar-stamp-v1\0");
+        hash.update(self.archive.0.to_le_bytes());
+        hash.update(self.archive.1.to_le_bytes());
+        hash.update(root.as_bytes());
+        Ok(Some(format!("{:x}", hash.finalize())))
+    }
+    fn verify(&self) -> io::Result<()> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.worker
+            .tx
+            .as_ref()
+            .unwrap()
+            .send(Request::Verify(tx))
+            .map_err(|_| io::Error::other("Archive reader stopped"))?;
+        rx.recv()
+            .map_err(|_| io::Error::other("Archive reader stopped"))?
+    }
     fn metadata(&self, name: &str) -> io::Result<Metadata> {
         self.entries
             .get(path(name)?)
@@ -433,7 +541,7 @@ impl ContentFile for ZarFile {
             .tx
             .as_ref()
             .unwrap()
-            .send(Request {
+            .send(Request::Read {
                 path: self.path.clone(),
                 offset,
                 len: b.len().min((self.len - offset) as usize),
@@ -545,6 +653,12 @@ impl ContentSource for Subtree {
     }
     fn open(&self, p: &str) -> io::Result<Arc<dyn ContentFile>> {
         self.source.open(&self.child(p)?)
+    }
+    fn stamp(&self, root: &str) -> io::Result<Option<String>> {
+        self.source.stamp(&self.child(root)?)
+    }
+    fn verify(&self) -> io::Result<()> {
+        self.source.verify()
     }
 }
 

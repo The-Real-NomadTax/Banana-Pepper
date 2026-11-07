@@ -56,6 +56,26 @@ fn corrupt_archive_is_rejected_without_output() {
 }
 
 #[test]
+fn damaged_archive_data_fails_verification() {
+    let t = tempfile::tempdir().unwrap();
+    let game = t.path().join("game");
+    fs::create_dir(&game).unwrap();
+    fs::write(game.join("data.bin"), vec![7u8; 200_000]).unwrap();
+    let p = t.path().join("game.zar");
+    crate::pack::convert(&game, &p, &Default::default(), |_| {}).unwrap();
+    Zar::new(&p).unwrap().verify().unwrap();
+    let good = fs::read(&p).unwrap();
+    // Damage anywhere is caught by opening (headers, table of contents) or
+    // by the verification that accompanies every fresh fingerprint.
+    for at in [16, good.len() / 2, good.len() - 1] {
+        let mut bytes = good.clone();
+        bytes[at] ^= 0xff;
+        fs::write(&p, bytes).unwrap();
+        assert!(Zar::new(&p).and_then(|z| z.verify()).is_err(), "byte {at}");
+    }
+}
+
+#[test]
 fn fingerprints_bind_content_and_a_new_provider_needs_no_game_changes() {
     struct TestProvider;
     impl ContentProvider for TestProvider {

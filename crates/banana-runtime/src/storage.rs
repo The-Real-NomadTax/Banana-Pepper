@@ -49,6 +49,45 @@ impl Paths {
             })
         }
     }
+    /// The source's content fingerprint, hashed only when its stamp (names,
+    /// sizes, modification times) changed since the last launch from this
+    /// location. Archive integrity is verified together with each fresh hash.
+    pub fn fingerprint(
+        &self,
+        location: &Path,
+        source: &dyn banana_content::ContentSource,
+    ) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        let stamp = source.stamp("").map_err(|e| e.to_string())?;
+        let cached = stamp.as_ref().map(|stamp| {
+            let mut key = Sha256::new();
+            key.update(location.to_string_lossy().as_bytes());
+            key.update([0]);
+            key.update(stamp.as_bytes());
+            self.cache
+                .join("fingerprints")
+                .join(format!("{:x}", key.finalize()))
+        });
+        if let Some(text) = cached.as_ref().and_then(|p| fs::read_to_string(p).ok()) {
+            let text = text.trim();
+            if text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Ok(text.to_owned());
+            }
+        }
+        source.verify().map_err(|e| e.to_string())?;
+        let fingerprint = source.fingerprint().map_err(|e| e.to_string())?;
+        // Only remember it if nothing changed while hashing.
+        if let Some(path) = cached
+            && source.stamp("").map_err(|e| e.to_string())? == stamp
+        {
+            fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            let temp = path.with_extension("pending");
+            fs::write(&temp, &fingerprint)
+                .and_then(|()| fs::rename(&temp, &path))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(fingerprint)
+    }
     pub fn initialize(&self, resources: &Path) -> Result<(), String> {
         for p in [&self.config, &self.data, &self.cache, &self.state] {
             fs::create_dir_all(p).map_err(|e| e.to_string())?;
@@ -161,6 +200,73 @@ pub fn entries(paths: &Paths) -> Result<Vec<Entry>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use banana_content::{ContentFile, ContentSource, Entry, Metadata};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    /// Counts file opens to prove a cached fingerprint reads no content.
+    struct Counting(Arc<dyn ContentSource>, AtomicUsize);
+    impl ContentSource for Counting {
+        fn metadata(&self, p: &str) -> io::Result<Metadata> {
+            self.0.metadata(p)
+        }
+        fn read_dir(&self, p: &str) -> io::Result<Vec<Entry>> {
+            self.0.read_dir(p)
+        }
+        fn open(&self, p: &str) -> io::Result<Arc<dyn ContentFile>> {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            self.0.open(p)
+        }
+        fn stamp(&self, root: &str) -> io::Result<Option<String>> {
+            self.0.stamp(root)
+        }
+    }
+
+    #[test]
+    fn fingerprints_are_cached_until_the_source_changes() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            config: t.path().join("config"),
+            data: t.path().join("data"),
+            state: t.path().join("state"),
+            cache: t.path().join("cache"),
+        };
+        let game = t.path().join("game");
+        fs::create_dir_all(game.join("data")).unwrap();
+        fs::write(game.join("game.exe"), b"MZ...").unwrap();
+        fs::write(game.join("data/level.bin"), b"level one").unwrap();
+        let open = |game: &Path| {
+            Counting(
+                Arc::new(banana_content::Folder::new(game).unwrap()),
+                AtomicUsize::new(0),
+            )
+        };
+        let first = open(&game);
+        let expected = first.fingerprint().unwrap();
+        let reads = first.1.load(Ordering::Relaxed);
+        assert!(reads > 0);
+        assert_eq!(paths.fingerprint(&game, &first).unwrap(), expected);
+        let second = open(&game);
+        assert_eq!(paths.fingerprint(&game, &second).unwrap(), expected);
+        assert_eq!(second.1.load(Ordering::Relaxed), 0, "cached launch read content");
+
+        fs::write(game.join("data/level.bin"), b"level two, longer").unwrap();
+        let changed = open(&game);
+        let fresh = paths.fingerprint(&game, &changed).unwrap();
+        assert_ne!(fresh, expected);
+        assert_eq!(fresh, open(&game).fingerprint().unwrap());
+        assert!(changed.1.load(Ordering::Relaxed) > 0);
+
+        // Sources without a stamp are always hashed.
+        let memory = banana_content::MemorySource::default();
+        assert_eq!(
+            paths.fingerprint(&game, &memory).unwrap(),
+            memory.fingerprint().unwrap()
+        );
+    }
+
     #[test]
     fn entry_move_and_config_import_are_idempotent() {
         let t = tempfile::tempdir_in(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"))
