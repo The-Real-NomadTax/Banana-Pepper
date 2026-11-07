@@ -48,9 +48,6 @@ impl ExecutionBackend for Native {
         }
         Ok(())
     }
-    fn needs_mount(&self, _plan: &banana_api::LaunchPlan) -> bool {
-        false
-    }
     fn adapters(&self, _plan: &banana_api::LaunchPlan) -> Vec<banana_api::Adapter> {
         #[cfg(windows)]
         return vec![banana_api::Adapter {

@@ -1,6 +1,6 @@
 use super::*;
 use banana_content::{ContentSource, MemorySource};
-use std::{collections::BTreeMap, fs};
+use std::{collections::BTreeMap, fs, path::Path, sync::Arc};
 fn source() -> Arc<dyn ContentSource> {
     Arc::new(MemorySource {
         files: BTreeMap::from([
@@ -163,34 +163,6 @@ fn metadata_and_case_rules_are_shared_by_all_providers() {
     .unwrap();
     assert_eq!(v.attributes("Data/Save.INI").unwrap().mode, Some(0o600));
     assert_eq!(v.attributes("data/save.ini").unwrap().modified_ns, 10000000);
-}
-
-#[test]
-fn stale_mount_cleanup_respects_live_locks_and_nonempty_directories() {
-    let t =
-        tempfile::tempdir_in(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")).unwrap();
-    for name in ["dead", "live", "occupied"] {
-        fs::create_dir(t.path().join(name)).unwrap();
-        fs::write(
-            t.path().join(format!("{name}.banana-mount-lock")),
-            "banana-mount-v1\n",
-        )
-        .unwrap();
-    }
-    fs::write(t.path().join("occupied/keep"), b"never delete contents").unwrap();
-    let live = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(t.path().join("live.banana-mount-lock"))
-        .unwrap();
-    live.try_lock().unwrap();
-    cleanup_stale_mounts(t.path()).unwrap();
-    assert!(!t.path().join("dead").exists());
-    assert!(t.path().join("live").exists());
-    assert!(t.path().join("occupied/keep").exists());
-    drop(live);
-    cleanup_stale_mounts(t.path()).unwrap();
-    assert!(!t.path().join("live").exists());
 }
 
 #[test]

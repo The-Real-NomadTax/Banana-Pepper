@@ -43,49 +43,11 @@ impl ExecutionBackend for Android {
     fn check(&self, p: &LaunchPlan) -> Result<(), CapabilityError> {
         check_host(self, p)
     }
-    /// PRoot intercepts guest paths: map the planned root (and, for Wine, its
-    /// prefix drive), the generated cpuinfo and the plan's extra mounts.
-    fn prepare_namespace(
-        &self,
-        plan: &mut LaunchPlan,
-        ns: &dyn GuestNamespace,
-    ) -> Result<(), String> {
-        if plan.guest_root.starts_with('/') {
-            ns.map(&plan.guest_root, "", false)?;
-        }
-        if plan.binary.format == "PE" {
-            if let Some((drive, relative)) = plan.guest_root.split_once(":/") {
-                if drive.len() != 1 || !drive.as_bytes()[0].is_ascii_alphabetic() {
-                    return Err("Invalid planned Windows drive".into());
-                }
-                banana_content::path(relative).map_err(|e| e.to_string())?;
-                let guest = format!(
-                    "/work/prefix/drive_{}/{relative}",
-                    drive.to_ascii_lowercase()
-                );
-                ns.map(&guest, "", false)?;
-            }
-        }
-        ns.map("/proc/cpuinfo", ".banana/proc/cpuinfo", true)?;
-        for mapping in &plan.guest_mounts {
-            ns.map(&mapping.target, &mapping.source, mapping.readonly)?;
-        }
-        let endpoint = ns
-            .endpoint()
-            .ok_or("Android sessions need the PRoot filesystem endpoint")?;
-        plan.env.insert(
-            "BANANA_VFS_SOCKET".into(),
-            endpoint.to_string_lossy().into_owned(),
-        );
-        plan.env.insert(
-            "BANANA_VFS_EMPTY".into(),
-            ns.root().to_string_lossy().into_owned(),
-        );
-        Ok(())
-    }
-    fn launch(&self, s: PreparedSession) -> Result<Box<dyn SessionHandle>, String> {
+    fn launch(&self, mut s: PreparedSession) -> Result<Box<dyn SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
-        let mount = s.mount()?.to_path_buf();
+        // PRoot brokers the guest's file calls into the view; `mount` is the
+        // empty guest directory standing for the view's root.
+        let (mount, view) = expose(&mut s)?;
         let files = s
             .resources
             .parent()
@@ -152,6 +114,7 @@ impl ExecutionBackend for Android {
             support: Vec::new(),
             events: std::collections::VecDeque::new(),
             frame: run.join("frame.bin"),
+            view: Some(view),
         };
         owned.support.push(transport.spawn(
             "xvfb",
@@ -249,6 +212,54 @@ impl ExecutionBackend for Android {
         owned.game = Some(transport.spawn("game", &argv, s.plan.timeout_ms)?);
         Ok(Box::new(owned))
     }
+}
+/// Serve the view to PRoot: map the planned root (and, for Wine, its prefix
+/// drive), the generated cpuinfo and the plan's extra mounts, and publish
+/// the endpoint in the plan's environment.
+fn expose(s: &mut PreparedSession) -> Result<(PathBuf, Box<dyn TracedView>), String> {
+    let root = s.state.join("view");
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let socket = s.state.join("view.sock");
+    if std::fs::symlink_metadata(&socket).is_ok() {
+        std::fs::remove_file(&socket).map_err(|e| e.to_string())?;
+    }
+    let view = s
+        .view
+        .serve_traced(&socket, &root.to_string_lossy())
+        .map_err(|e| format!("Cannot serve the view to PRoot: {e}"))?;
+    let plan = &mut s.plan;
+    let map = |guest: &str, source: &str, readonly: bool| {
+        view.map(guest, source, readonly).map_err(|e| e.to_string())
+    };
+    if plan.guest_root.starts_with('/') {
+        map(&plan.guest_root, "", false)?;
+    }
+    if plan.binary.format == "PE" {
+        if let Some((drive, relative)) = plan.guest_root.split_once(":/") {
+            if drive.len() != 1 || !drive.as_bytes()[0].is_ascii_alphabetic() {
+                return Err("Invalid planned Windows drive".into());
+            }
+            banana_content::path(relative).map_err(|e| e.to_string())?;
+            let guest = format!(
+                "/work/prefix/drive_{}/{relative}",
+                drive.to_ascii_lowercase()
+            );
+            map(&guest, "", false)?;
+        }
+    }
+    map("/proc/cpuinfo", ".banana/proc/cpuinfo", true)?;
+    for mapping in &plan.guest_mounts {
+        map(&mapping.target, &mapping.source, mapping.readonly)?;
+    }
+    plan.env.insert(
+        "BANANA_VFS_SOCKET".into(),
+        socket.to_string_lossy().into_owned(),
+    );
+    plan.env.insert(
+        "BANANA_VFS_EMPTY".into(),
+        root.to_string_lossy().into_owned(),
+    );
+    Ok((root, view))
 }
 struct Transport {
     files: PathBuf,
@@ -377,6 +388,8 @@ struct AndroidSession {
     support: Vec<Box<dyn SessionHandle>>,
     events: std::collections::VecDeque<SessionEvent>,
     frame: PathBuf,
+    /// Serves the guest's files; dropped (and flushed) once the game exits.
+    view: Option<Box<dyn TracedView>>,
 }
 impl SessionHandle for AndroidSession {
     fn next_event(&mut self) -> Result<Option<SessionEvent>, String> {
@@ -424,6 +437,7 @@ impl SessionHandle for AndroidSession {
             let _ = p.cancel();
             let _ = p.wait();
         }
+        self.view.take();
         result
     }
 }
@@ -436,6 +450,7 @@ impl Drop for AndroidSession {
         for p in &mut self.support {
             let _ = p.wait();
         }
+        self.view.take();
         let _ = std::fs::remove_file(&self.frame);
     }
 }

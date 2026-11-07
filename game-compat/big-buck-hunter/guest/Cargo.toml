@@ -9,9 +9,9 @@ name="arcade_big_buck"
 crate-type=["cdylib"]
 [dependencies]
 banana-input.workspace=true
+png="0.18.1"
 [target.'cfg(target_os = "linux")'.dependencies]
 libc="0.2"
-png="0.18.1"
 [target.'cfg(windows)'.dependencies]
 banana-water.workspace=true
 windows-sys={version="0.61.2",features=["Win32_Foundation","Win32_UI_Input"]}

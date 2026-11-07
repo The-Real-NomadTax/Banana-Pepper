@@ -257,22 +257,12 @@ impl std::error::Error for CapabilityError {}
 pub struct PreparedSession {
     pub devices: Vec<PathBuf>,
     pub plan: LaunchPlan,
-    /// Host directory exposing the view, for backends whose guest opens
-    /// files by host path ([`ExecutionBackend::needs_mount`]).
-    pub mount: Option<PathBuf>,
-    /// The session's composed filesystem, reachable without a mount.
+    /// The session's composed filesystem. Each backend exposes it to its
+    /// guest in its own way; nothing is mounted on the host.
     pub view: Arc<dyn SessionView>,
     pub state: PathBuf,
     pub resources: PathBuf,
     pub dependencies: PathBuf,
-}
-impl PreparedSession {
-    /// The mount directory; an error for backends that run without one.
-    pub fn mount(&self) -> Result<&std::path::Path, String> {
-        self.mount
-            .as_deref()
-            .ok_or_else(|| "This session's view is not mounted".into())
-    }
 }
 
 /// A session's composed filesystem (source, generated files and overlay),
@@ -295,6 +285,22 @@ pub trait SessionView: Send + Sync {
     fn serve_fuse(&self, _device: std::fs::File) -> std::io::Result<()> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
+    /// Serve the PRoot interception protocol on Unix socket `socket`, with
+    /// the view's root at absolute guest path `root`, until the returned
+    /// server is dropped (which flushes the overlay). Android only.
+    fn serve_traced(
+        &self,
+        _socket: &std::path::Path,
+        _root: &str,
+    ) -> std::io::Result<Box<dyn TracedView>> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+
+/// A running PRoot interception server ([`SessionView::serve_traced`]).
+pub trait TracedView: Send {
+    /// Expose view path `source` ("" for the root) at absolute guest path `guest`.
+    fn map(&self, guest: &str, source: &str, readonly: bool) -> std::io::Result<()>;
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SessionEvent {

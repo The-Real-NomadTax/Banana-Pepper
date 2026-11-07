@@ -2,28 +2,36 @@
 //! platform (32-bit Linux) and built for every way the game runs:
 //!
 //! - Linux and Android: `libarcade_big_buck.so`, preloaded into the game
-//!   (`linux.rs`: GLUT window and callbacks, evdev controllers).
-//! - Windows: `arcade_big_buck.dll`, loaded by Water next to the game
-//!   (`water.rs`: Water's window and messages, XInput, DirectInput and Raw
-//!   Input).
+//!   (`linux.rs`: evdev controllers).
+//! - Windows: `arcade_big_buck.dll`, Water's preload adapter for the game
+//!   (`water.rs`: XInput, DirectInput and Raw Input).
 //!
-//! The game patch itself — the virtual JAMMA board, switch mapping, guns
-//! and controller aiming — is `jamma.rs`, shared by both.
+//! Everything else is shared: the virtual JAMMA board, switch mapping, guns
+//! and controller aiming (`jamma.rs`), and the GLUT window, input callbacks
+//! and crosshairs (`glut.rs`), which override the same GLUT functions on
+//! both platforms.
 #![allow(dead_code)]
 use banana_input::pad;
 mod inputs;
 mod jamma;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(any(target_os = "linux", windows), target_arch = "x86"))]
+mod glut;
+#[cfg(all(any(target_os = "linux", windows), target_arch = "x86"))]
+use banana_input::crosshair;
+#[cfg(all(any(target_os = "linux", windows), target_arch = "x86"))]
+#[path = "../../../../guest/linux-shim/src/crosshair_gl.rs"]
+mod crosshair_gl;
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
 mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
 use linux as platform;
 #[cfg(all(windows, target_arch = "x86"))]
 mod water;
 #[cfg(all(windows, target_arch = "x86"))]
 use water as platform;
-/// Hosts the game never runs on (unit tests of the shared patch).
-#[cfg(not(any(target_os = "linux", all(windows, target_arch = "x86"))))]
+/// Targets the game never runs on (unit tests of the shared patch).
+#[cfg(not(all(any(target_os = "linux", windows), target_arch = "x86")))]
 mod platform {
     use crate::pad;
     pub struct Devices;
@@ -38,21 +46,16 @@ mod platform {
 }
 
 // Linux guest-side services shared with the other Linux titles.
-#[cfg(target_os = "linux")]
-use banana_input::crosshair;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
 #[path = "../../../../guest/linux-shim/src/audio.rs"]
 mod audio;
-#[cfg(target_os = "linux")]
-#[path = "../../../../guest/linux-shim/src/crosshair_gl.rs"]
-mod crosshair_gl;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
 #[path = "../../../../guest/linux-shim/src/display.rs"]
 mod display;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
 #[path = "../../../../guest/linux-shim/src/evdev_pad.rs"]
 mod evdev_pad;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86"))]
 #[path = "../../../../guest/linux-shim/src/legacy_csv.rs"]
 mod legacy_csv;
 #[cfg(all(target_os = "linux", target_arch = "x86"))]

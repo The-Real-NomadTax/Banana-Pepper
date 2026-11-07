@@ -1,22 +1,44 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use super::HOST;
+//! Diagnostic probe (`probe` action): replays the measured Linux progression
+//! through the same JAMMA adapter from a GLUT timer and captures checkpoints.
+//! No OS input injection; ordinary sessions never run it.
 use crate::jamma;
-use std::ffi::CString;
+use std::ffi::{CString, c_int, c_uint};
+
 static mut STEP: usize = 0;
 static mut HUNT_TICK: u128 = u128::MAX;
 static mut MOUSE_RELEASE: Option<(u128, i32, i32, i32)> = None;
+static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+type TimerFunc = unsafe extern "C" fn(c_uint, extern "C" fn(c_int), c_int);
+
 unsafe fn capture(name: &str) {
-    if let Some(host) = HOST.get() {
-        if let Ok(name) = CString::new(name) {
-            (host.capture)(name.as_ptr());
-        }
+    if let Ok(name) = CString::new(name) {
+        super::capture(&name);
     }
 }
-pub unsafe extern "C" fn probe(elapsed: u64) {
-    let elapsed = elapsed as u128;
+fn timer() -> Option<TimerFunc> {
+    let address = super::next(c"glutTimerFunc");
+    (address != 0).then(|| unsafe { std::mem::transmute::<usize, TimerFunc>(address) })
+}
+/// Start the probe if this session asked for it.
+pub fn start() {
     if std::env::var_os("ARCADE_NATIVE_PROBE").is_none() {
         return;
     }
+    START.get_or_init(std::time::Instant::now);
+    if let Some(timer) = timer() {
+        unsafe { timer(10, tick, 0) };
+    }
+}
+extern "C" fn tick(_value: c_int) {
+    let elapsed = START.get().map_or(0, |s| s.elapsed().as_millis() as u64);
+    unsafe { probe(elapsed) };
+    if let Some(timer) = timer() {
+        unsafe { timer(10, tick, 0) };
+    }
+}
+unsafe fn probe(elapsed: u64) {
+    let elapsed = elapsed as u128;
     if let Some((time, button, x, y)) = MOUSE_RELEASE {
         if elapsed >= time {
             jamma::mouse(button, false, x, y);

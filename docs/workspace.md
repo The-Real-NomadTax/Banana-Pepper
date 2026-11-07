@@ -3,7 +3,7 @@
 - `crates/banana-content`: provider contracts, folder/ZAR/memory sources and archive conversion.
 - `crates/banana-api`: compatibility/backend/session contracts and common process ownership.
 - `crates/banana-core`: source-based executable inspection and reports.
-- `crates/banana-vfs`: composition, persistent overlays, the view protocol host, FUSE/Android adapters and mount leases.
+- `crates/banana-vfs`: composition, persistent overlays, the view protocol host, the FUSE connection server (Linux) and the PRoot server (Android).
 - `crates/banana-wire`: the dependency-free view protocol and its guest-side client.
 - `guest/view-shim`: `banana_view.dll`, which serves native Windows titles' file calls from the view.
 - `crates/banana-runtime`: game-agnostic orchestration, storage, dependency preparation and migration mechanisms.

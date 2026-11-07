@@ -78,11 +78,19 @@ unsafe extern "C" fn start_main(
     _end: usize,
 ) -> ! {
     eprintln!("[water] Linux CRT main={main:#x}, argc={argc}");
+    // Older C libraries pass the program's initializer (__libc_csu_init);
+    // newer ones leave running DT_INIT/INIT_ARRAY to the dynamic linker.
+    let program = super::linker::program_initializers();
     if init != 0 {
         eprintln!("[water] calling ELF init {init:#x}");
         let f: unsafe extern "C" fn() = std::mem::transmute(init);
         f();
         eprintln!("[water] ELF init returned");
+    } else {
+        for f in program {
+            let f: unsafe extern "C" fn() = std::mem::transmute(f);
+            f();
+        }
     }
     let f: unsafe extern "C" fn(i32, *const *const i8, *const *const i8) -> i32 =
         std::mem::transmute(main);

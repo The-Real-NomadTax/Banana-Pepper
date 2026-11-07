@@ -1,34 +1,46 @@
-//! Versioned C ABI between a generic Water worker and a title-owned adapter.
+//! Versioned C ABI between the generic Water worker and an optional preload
+//! adapter: Water's `LD_PRELOAD`. Water runs a Linux program by itself; an
+//! adapter only changes it, exactly as a preloaded library would on Linux:
+//! it may replace any library function the program imports (and call
+//! Water's own implementation through [`HostServicesV2::next`]), patch the
+//! program's code once it is loaded, and observe the window's messages.
+//!
+//! The adapter exports `banana_water_adapter_v2`, returning [`AdapterV2`].
 use std::ffi::c_char;
+
+/// Services Water offers an adapter. Sizes are checked before use.
 #[repr(C)]
-pub struct HostServicesV1 {
+pub struct HostServicesV2 {
     pub size: u32,
+    /// Water's implementation of a library function (the next definition,
+    /// like `dlsym(RTLD_NEXT, name)`), or 0 when Water has none.
+    pub next: unsafe extern "C" fn(*const c_char) -> usize,
+    /// Save the current frame as a PNG named `name` in the session state.
     pub capture: unsafe extern "C" fn(*const c_char),
+    /// The program's window (`HWND`), or 0 before it has one.
+    pub window: unsafe extern "C" fn() -> isize,
+    /// Observe every message of the program's window before Water handles
+    /// it (`hwnd, message, wparam, lparam`); a nonzero result consumes it.
+    pub message_hook: unsafe extern "C" fn(MessageHook),
 }
+pub type MessageHook = unsafe extern "C" fn(isize, u32, usize, isize) -> i32;
+
+/// An adapter. Every entry is required; return 0 for "nothing to do".
 #[repr(C)]
-pub struct DisplayV1 {
-    pub size: u32,
-    pub width: i32,
-    pub height: i32,
-    pub title: unsafe extern "C" fn() -> *const c_char,
-    pub players: unsafe extern "C" fn() -> usize,
-    pub aim_position: unsafe extern "C" fn(usize, *mut i32, *mut i32),
-    pub release: unsafe extern "C" fn(),
-    pub key: unsafe extern "C" fn(u8, bool),
-    pub aim: unsafe extern "C" fn(i32, i32, bool),
-    pub mouse: unsafe extern "C" fn(i32, bool, i32, i32),
-    pub controller_frame: unsafe extern "C" fn(bool),
-    pub register_raw: unsafe extern "C" fn(usize),
-    pub raw_input: unsafe extern "C" fn(isize),
-    pub probe: unsafe extern "C" fn(u64),
-}
-#[repr(C)]
-pub struct AdapterV1 {
+pub struct AdapterV2 {
     pub version: u32,
     pub size: u32,
+    /// Before the program is loaded: the guest root (e.g. `/game`), the
+    /// session state directory and Water's services. Nonzero fails the launch.
     pub initialize:
-        unsafe extern "C" fn(*const c_char, *const c_char, *const HostServicesV1) -> i32,
-    pub install: unsafe extern "C" fn() -> i32,
+        unsafe extern "C" fn(*const c_char, *const c_char, *const HostServicesV2) -> i32,
+    /// The adapter's replacement for an imported function, or 0 to keep
+    /// Water's. Asked first for every import, like a preloaded library.
     pub resolve: unsafe extern "C" fn(*const c_char) -> usize,
-    pub display: unsafe extern "C" fn() -> *const DisplayV1,
+    /// After the program is mapped and relocated, before it runs: code
+    /// patches go here. Nonzero fails the launch.
+    pub install: unsafe extern "C" fn() -> i32,
 }
+pub const ADAPTER_VERSION: u32 = 2;
+/// The adapter DLL's exported factory.
+pub const ADAPTER_ENTRY: &str = "banana_water_adapter_v2";

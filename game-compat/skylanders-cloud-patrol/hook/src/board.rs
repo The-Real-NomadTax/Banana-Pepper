@@ -101,7 +101,7 @@ unsafe fn write16(out: *mut u16, value: u16) {
 pub unsafe extern "C" fn GetCurrentCoinCount(coins: *mut u16, other: *mut u16) -> u8 {
     let raise = !RESET.swap(false, SeqCst)
         && PENDING
-            .fetch_update(SeqCst, SeqCst, |p| p.checked_sub(1))
+            .try_update(SeqCst, SeqCst, |p| p.checked_sub(1))
             .is_ok();
     let count = if raise {
         SHOWN.fetch_add(1, SeqCst).wrapping_add(1)

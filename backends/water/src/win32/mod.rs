@@ -1,11 +1,14 @@
-//! Measured ELF32 API translation for the fixed-address ELF32 programs.
+//! ELF32 API translation: the program's imports are bound to Water's own
+//! Win32 implementations of the Linux libraries it uses (C library, files,
+//! GLUT/OpenGL, OSS audio), optionally overridden by a preload adapter.
 //! Guest instructions run directly in a separate 32-bit Windows process.
 #![allow(unsafe_op_in_unsafe_fn)]
 mod crt;
 mod display;
 mod files;
-mod hooks;
+mod linker;
 mod sound;
+use crate::extension::{ADAPTER_VERSION, AdapterV2, HostServicesV2};
 use goblin::elf::{Elf, program_header::PT_LOAD};
 use std::{
     ffi::{CStr, CString, c_void},
@@ -18,6 +21,8 @@ use windows_sys::Win32::System::{
 };
 
 pub static WORK: OnceLock<PathBuf> = OnceLock::new();
+/// The program's command line, `argv[0]` being its guest path.
+static ARGV: OnceLock<Vec<String>> = OnceLock::new();
 static TRACES: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
 
 unsafe extern "C" fn trace(index: usize) {
@@ -47,63 +52,65 @@ unsafe fn traced(name: &str, target: usize) -> Result<usize, String> {
     executable(&code)
 }
 
-static DISPLAY_EXTENSION: OnceLock<&'static crate::extension::DisplayV1> = OnceLock::new();
-fn display_config() -> &'static crate::extension::DisplayV1 {
-    DISPLAY_EXTENSION
-        .get()
-        .expect("Validated display extension")
+static EXTENSION: OnceLock<&'static AdapterV2> = OnceLock::new();
+static SERVICES: HostServicesV2 = HostServicesV2 {
+    size: std::mem::size_of::<HostServicesV2>() as u32,
+    next: next_service,
+    capture: display::capture_service,
+    window: display::window_service,
+    message_hook: display::message_hook_service,
+};
+unsafe extern "C" fn next_service(name: *const i8) -> usize {
+    if name.is_null() {
+        return 0;
+    }
+    builtin(text(name)).ok().flatten().unwrap_or(0)
 }
-static EXTENSION: OnceLock<&'static crate::extension::AdapterV1> = OnceLock::new();
-pub fn launch(image: &[u8], state: &Path, adapter: &Path) -> Result<(), String> {
+
+/// Run `image`, with the optional preload `adapter` loaded first.
+pub fn launch(
+    image: &[u8],
+    argv: Vec<String>,
+    state: &Path,
+    adapter: Option<&Path>,
+) -> Result<(), String> {
     WORK.set(state.to_path_buf())
         .map_err(|_| "State already set")?;
-    unsafe {
-        use std::os::windows::ffi::OsStrExt;
-        let dll: Vec<u16> = adapter.as_os_str().encode_wide().chain(Some(0)).collect();
-        let module = LoadLibraryW(dll.as_ptr());
-        if module.is_null() {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let factory = GetProcAddress(module, c"banana_water_adapter_v1".as_ptr().cast())
-            .ok_or("Missing adapter entry point")?;
-        let factory: unsafe extern "C" fn() -> *const crate::extension::AdapterV1 =
-            std::mem::transmute(factory);
-        let extension = factory().as_ref().ok_or("Null Water adapter")?;
-        if extension.version != 1
-            || extension.size != std::mem::size_of::<crate::extension::AdapterV1>() as u32
-        {
-            return Err("Unsupported Water adapter ABI".into());
-        }
-        let display = (extension.display)()
-            .as_ref()
-            .ok_or("Missing display configuration")?;
-        if display.size != std::mem::size_of::<crate::extension::DisplayV1>() as u32
-            || display.width <= 0
-            || display.height <= 0
-        {
-            return Err("Invalid display adapter ABI".into());
-        }
-        DISPLAY_EXTENSION
-            .set(display)
-            .map_err(|_| "Display already installed")?;
-        // Adapters see the guest's root path, not a host directory.
-        let root = CString::new(
-            std::env::var("BANANA_GUEST_ROOT").unwrap_or_else(|_| "/game".into()),
-        )
-        .map_err(|e| e.to_string())?;
-        let state = cpath(state);
-        static SERVICES: crate::extension::HostServicesV1 = crate::extension::HostServicesV1 {
-            size: std::mem::size_of::<crate::extension::HostServicesV1>() as u32,
-            capture: display::capture_service,
-        };
-        if (extension.initialize)(root.as_ptr(), state.as_ptr(), &SERVICES) != 0 {
-            return Err("Compatibility adapter initialization failed".into());
-        }
-        EXTENSION
-            .set(extension)
-            .map_err(|_| "Adapter already installed")?;
-        load(image)
+    ARGV.set(argv).map_err(|_| "Arguments already set")?;
+    if let Some(adapter) = adapter {
+        unsafe { load_adapter(adapter, state)? };
     }
+    unsafe { load(image) }
+}
+
+unsafe fn load_adapter(adapter: &Path, state: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    let dll: Vec<u16> = adapter.as_os_str().encode_wide().chain(Some(0)).collect();
+    let module = LoadLibraryW(dll.as_ptr());
+    if module.is_null() {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let entry = CString::new(crate::extension::ADAPTER_ENTRY).unwrap();
+    let factory = GetProcAddress(module, entry.as_ptr().cast())
+        .ok_or("The Water adapter has no banana_water_adapter_v2 entry point")?;
+    let factory: unsafe extern "C" fn() -> *const AdapterV2 = std::mem::transmute(factory);
+    let extension = factory().as_ref().ok_or("Null Water adapter")?;
+    if extension.version != ADAPTER_VERSION
+        || extension.size != std::mem::size_of::<AdapterV2>() as u32
+    {
+        return Err("Unsupported Water adapter ABI".into());
+    }
+    // Adapters see the guest's root path, not a host directory.
+    let root = CString::new(std::env::var("BANANA_GUEST_ROOT").unwrap_or_else(|_| "/game".into()))
+        .map_err(|e| e.to_string())?;
+    let state = cpath(state);
+    if (extension.initialize)(root.as_ptr(), state.as_ptr(), &SERVICES) != 0 {
+        return Err("Water adapter initialization failed".into());
+    }
+    EXTENSION
+        .set(extension)
+        .map_err(|_| "Adapter already installed")?;
+    Ok(())
 }
 
 pub unsafe fn proc(module: *mut c_void, name: &str) -> usize {
@@ -184,115 +191,17 @@ unsafe extern "system" fn fault(info: *mut EXCEPTION_POINTERS) -> i32 {
 }
 
 unsafe fn load(bytes: &[u8]) -> Result<(), String> {
-    let elf = Elf::parse(bytes).map_err(|e| e.to_string())?;
-    if elf.is_64 || elf.header.e_machine != 3 || elf.header.e_type != 2 {
-        return Err("Expected fixed-address ELF32/i386".into());
-    }
-    let loads: Vec<_> = elf
-        .program_headers
-        .iter()
-        .filter(|p| p.p_type == PT_LOAD)
-        .collect();
-    let start = loads
-        .iter()
-        .map(|p| p.p_vaddr & !65535)
-        .min()
-        .ok_or("No LOAD segments")?;
-    let end = loads
-        .iter()
-        .map(|p| p.p_vaddr.checked_add(p.p_memsz).ok_or("LOAD overflow"))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .max()
-        .unwrap();
-    if end - start > 256 * 1024 * 1024 || end > 0x80000000 {
-        return Err("Unsupported ELF memory extent".into());
-    }
-    let memory = VirtualAlloc(
-        start as *const c_void,
-        (end - start) as usize,
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_READWRITE,
-    );
-    if memory as usize != start as usize {
-        return Err(format!(
-            "Cannot map ELF at {start:#x}: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    for p in &loads {
-        let data = bytes
-            .get(p.p_offset as usize..(p.p_offset + p.p_filesz) as usize)
-            .ok_or("LOAD exceeds file")?;
-        if p.p_filesz > p.p_memsz {
-            return Err("Invalid LOAD sizes".into());
+    let program = ARGV.get().and_then(|a| a.first()).cloned().unwrap_or_default();
+    linker::ARGV_PROGRAM.set(program.clone()).ok();
+    let (entry, start, end) = linker::load_program(bytes, &program)?;
+    if let Some(adapter) = EXTENSION.get() {
+        if (adapter.install)() != 0 {
+            return Err("Water adapter patch installation failed".into());
         }
-        ptr::copy_nonoverlapping(data.as_ptr(), p.p_vaddr as *mut u8, data.len());
     }
-    let mut unresolved = Vec::new();
-    let mut count = 0;
-    for reloc in elf.dynrels.iter().chain(elf.pltrelocs.iter()) {
-        let symbol = elf
-            .dynsyms
-            .get(reloc.r_sym)
-            .ok_or("Bad relocation symbol")?;
-        let name = elf
-            .dynstrtab
-            .get_at(symbol.st_name)
-            .ok_or("Bad symbol name")?;
-        let address = if symbol.st_shndx != 0 {
-            symbol.st_value as usize
-        } else {
-            let target = resolve(name)?;
-            traced(name, target)?
-        };
-        if address == 0 && symbol.st_bind() != 2 {
-            unresolved.push(name.to_owned());
-            continue;
-        }
-        if !loads
-            .iter()
-            .any(|p| reloc.r_offset >= p.p_vaddr && reloc.r_offset + 4 <= p.p_vaddr + p.p_memsz)
-        {
-            return Err("Relocation outside guest mapping".into());
-        }
-        let at = reloc.r_offset as *mut u32;
-        match reloc.r_type {
-            1 => *at = (*at).wrapping_add(address as u32),
-            2 => {
-                *at = (*at)
-                    .wrapping_add(address as u32)
-                    .wrapping_sub(reloc.r_offset as u32)
-            }
-            6 | 7 => *at = address as u32,
-            8 => {} // Fixed ET_EXEC has zero load bias.
-            other => return Err(format!("Unsupported ELF32 relocation {other} for {name}")),
-        }
-        count += 1;
-    }
-    if !unresolved.is_empty() {
-        return Err(format!("Unimplemented imports: {}", unresolved.join(", ")));
-    }
-    if (EXTENSION.get().ok_or("Missing adapter")?.install)() != 0 {
-        return Err("Compatibility patch installation failed".into());
-    }
-    // This verified legacy build has writable executable segments. The worker
-    // is explicitly a compatibility boundary, not an untrusted-code sandbox.
-    let mut old = 0;
-    if VirtualProtect(
-        memory,
-        (end - start) as usize,
-        PAGE_EXECUTE_READWRITE,
-        &mut old,
-    ) == 0
-    {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    FlushInstructionCache(GetCurrentProcess(), memory, (end - start) as usize);
+    FlushInstructionCache(GetCurrentProcess(), ptr::null(), 0);
     AddVectoredExceptionHandler(1, Some(fault));
-    eprintln!(
-        "[water] mapped ELF32 {start:#x}..{end:#x}; resolved {count} relocations; Windows APIs only"
-    );
+    eprintln!("[water] mapped ELF32 program {start:#x}..{end:#x}; Windows APIs only");
     if ConvertThreadToFiber(ptr::null()).is_null() {
         return Err("Cannot create host fiber".into());
     }
@@ -301,7 +210,7 @@ unsafe fn load(bytes: &[u8]) -> Result<(), String> {
         8 * 1024 * 1024,
         0,
         Some(fiber),
-        elf.entry as *mut c_void,
+        entry as *mut c_void,
     );
     if guest.is_null() {
         return Err("Cannot allocate guest fiber".into());
@@ -311,10 +220,18 @@ unsafe fn load(bytes: &[u8]) -> Result<(), String> {
 }
 
 unsafe extern "system" fn fiber(entry: *mut c_void) {
+    // Shipped libraries initialize first, dependencies before dependents.
+    linker::initialize_libraries();
     let current: usize;
     core::arch::asm!("mov {},esp",out(reg)current,options(nostack,readonly));
-    let argv0 = CString::new("/game/game").unwrap().into_raw() as u32;
-    let initial = [1u32, argv0, 0, 0, 6, 4096, 0, 0];
+    // argc, argv[], NULL, envp[] (empty: the C library reads Windows'
+    // environment), NULL, then the auxiliary vector (AT_PAGESZ, AT_NULL).
+    let argv = ARGV.get().map(Vec::as_slice).unwrap_or(&[]);
+    let mut initial = vec![argv.len() as u32];
+    for arg in argv {
+        initial.push(CString::new(arg.as_str()).unwrap_or_default().into_raw() as u32);
+    }
+    initial.extend([0, 0, 6, 4096, 0, 0]);
     let sp = (current - 65536) & !15;
     ptr::copy_nonoverlapping(initial.as_ptr(), sp as *mut u32, initial.len());
     enter(entry as u32, sp as u32)
@@ -332,29 +249,28 @@ unsafe extern "C" fn enter(_entry: u32, _stack: u32) -> ! {
     );
 }
 
-unsafe fn resolve(name: &str) -> Result<usize, String> {
+/// Water's own implementation of a Linux library function.
+unsafe fn builtin(name: &str) -> Result<Option<usize>, String> {
     if let Some(address) = files::resolve(name) {
-        return Ok(address);
+        return Ok(Some(address));
     }
     if let Some(address) = crt::resolve(name) {
-        return Ok(address);
+        return Ok(Some(address));
     }
-    let symbol = CString::new(name).map_err(|e| e.to_string())?;
-    let address = (EXTENSION.get().ok_or("Missing adapter")?.resolve)(symbol.as_ptr());
-    if address != 0 {
-        return Ok(address);
+    if let Some(address) = linker::resolve(name) {
+        return Ok(Some(address));
     }
     if let Some(address) = display::resolve(name)? {
-        return Ok(address);
+        return Ok(Some(address));
     }
     if let Some(address) = sound::resolve(name) {
-        return Ok(address);
+        return Ok(Some(address));
     }
     if name == "__gmon_start__" || name == "_Jv_RegisterClasses" {
-        return Ok(0);
+        return Ok(None);
     }
     let library = LoadLibraryA(c"msvcrt.dll".as_ptr().cast());
-    Ok(proc(library, name))
+    Ok(Some(proc(library, name)).filter(|&a| a != 0))
 }
 
 pub unsafe fn text<'a>(p: *const i8) -> &'a str {

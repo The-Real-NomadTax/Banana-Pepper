@@ -9,13 +9,13 @@
 //! but not the mouse (player two on controllers, or player one while player
 //! two has the keyboard and mouse) gets a stick-driven aim of its own, which
 //! `jurassic_controls.rs` feeds to the game as that player's gun.
-use crate::evdev_pad::{Edges, Reader, bindings};
+use crate::evdev_pad::Reader;
 use crate::pad::Cursor;
+use banana_input::session::Players;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::Instant;
 
 /// controls.cfg's default controller buttons for Jurassic Park.
 pub const DEFAULT_PAD: &str = "371:16,379:32,383:1,384:2,385:4096,386:8192,333:131072,334:65536";
@@ -39,21 +39,15 @@ static GUN_AIM: [[AtomicI32; 2]; crate::pad::MAX_PLAYERS] = [
 
 struct State {
     reader: Reader,
-    inputs: crate::pad::Inputs,
-    /// Per player; player two's are empty in one-player sessions.
-    bindings: [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS],
+    players: Players,
     /// (target, keysym) for each bound action.
     sources: Vec<(u32, i32)>,
-    edges: Edges,
     cursor: Cursor,
     /// Controller-only aim per player (see [`GUN_AIM`]).
     guns: [Option<Cursor>; crate::pad::MAX_PLAYERS],
-    /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
-    moves: [crate::pad::Movement; crate::pad::MAX_PLAYERS],
     /// The controller moved the pointer more recently than the mouse.
     aiming: bool,
     last_real: (i32, i32),
-    last: Instant,
     queue: VecDeque<[u8; EVENT_SIZE]>,
 }
 
@@ -75,19 +69,14 @@ pub fn inputs() -> crate::pad::Inputs {
     crate::evdev_pad::inputs()
 }
 
-/// Each player's controller bindings.
-fn player_bindings() -> [Vec<(u32, u32)>; crate::pad::MAX_PLAYERS] {
-    let p2 = if inputs().players > 1 {
-        crate::evdev_pad::bindings_p2(DEFAULT_PAD_P2)
-    } else {
-        Vec::new()
-    };
-    [bindings(DEFAULT_PAD), p2]
+/// The session's players with Jurassic's default controller buttons.
+fn players() -> Players {
+    Players::new(DEFAULT_PAD, DEFAULT_PAD_P2)
 }
 
 /// Every player's bindings together (one private keysym per target).
 pub fn configured_bindings() -> Vec<(u32, u32)> {
-    player_bindings().concat()
+    players().bindings.concat()
 }
 
 /// A player's controller-only aim in window pixels, once a window exists.
@@ -100,8 +89,8 @@ pub fn gun_aim(player: usize) -> Option<(f32, f32)> {
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let state = guard.get_or_insert_with(|| {
-        let bindings = player_bindings();
-        let inputs = inputs();
+        let players = players();
+        let inputs = &players.inputs;
         if inputs.players > 1 {
             eprintln!(
                 "[jurassic] two players ({}, {}); the system mouse aims for {}",
@@ -114,19 +103,15 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
         }
         State {
             reader: Reader::new(),
-            inputs,
-            sources: sources(&bindings.concat()),
-            bindings,
-            edges: Edges::default(),
+            sources: sources(&players.bindings.concat()),
+            players,
             cursor: Cursor::new(
                 WIDTH.load(Ordering::Relaxed) / 2,
                 HEIGHT.load(Ordering::Relaxed) / 2,
             ),
             guns: [None; crate::pad::MAX_PLAYERS],
-            moves: [0, 1].map(|p| crate::evdev_pad::movement(p, crate::pad::Movement::STICKS)),
             aiming: false,
             last_real: (-1, -1),
-            last: Instant::now(),
             queue: VecDeque::new(),
         }
     });
@@ -154,34 +139,20 @@ fn motion_event(x: i32, y: i32, dx: i32, dy: i32) -> [u8; EVENT_SIZE] {
 /// Once per frame (start of the engine's event drain): read controllers.
 pub fn frame() {
     with(|s| {
-        let states = s.reader.read_players(&s.inputs);
-        if states
-            .iter()
-            .any(|p| p.held(crate::pad::BACK) && p.held(crate::pad::START))
-        {
+        let states = s.reader.read_players(&s.players.inputs);
+        if Players::quit(&states) {
             eprintln!("[jurassic] Back + Start: exiting");
             std::process::exit(0);
         }
-        // The controller moves the mouse pointer only for a player who also
-        // has the mouse (one player, or player one with both on controllers).
-        let (pointer, pointer_moves) = s.inputs.mouse().map_or(
-            (crate::pad::Pad::default(), crate::pad::Movement::STICKS),
-            |m| (states[m], s.moves[m]),
-        );
         let mut changes = Vec::new();
-        let players: Vec<(crate::pad::Pad, &[(u32, u32)])> = (0..s.inputs.players)
-            .map(|p| (states[p], s.bindings[p].as_slice()))
-            .collect();
-        s.edges
-            .update_players(&players, |target, down| changes.push((target, down)));
-        drop(players);
+        s.players
+            .edges(&states, |target, down| changes.push((target, down)));
         for (target, down) in changes {
             if let Some(&(_, keysym)) = s.sources.iter().find(|x| x.0 == target) {
                 s.queue.push_back(key_event(keysym, down));
             }
         }
-        let elapsed = s.last.elapsed().as_millis() as u32;
-        s.last = Instant::now();
+        let elapsed = s.players.tick();
         let (width, height) = (
             WIDTH.load(Ordering::Relaxed),
             HEIGHT.load(Ordering::Relaxed),
@@ -189,32 +160,33 @@ pub fn frame() {
         if width <= 0 || height <= 0 {
             return;
         }
-        for player in 0..s.inputs.players {
-            if !s.inputs.own_aim(player) {
+        let inputs = s.players.inputs;
+        for player in 0..inputs.players {
+            if !inputs.own_aim(player) {
                 continue;
             }
             let gun = s.guns[player].get_or_insert_with(|| Cursor::new(width / 2, height / 2));
-            // A mouse or light gun of the player's own points directly.
-            match states[player].pointer_moved(&s.moves[player], width, height) {
-                Some((x, y)) => *gun = Cursor::new(x, y),
-                None => {
-                    let aim = states[player].movement(&s.moves[player]);
-                    gun.step_mode(
-                        crate::evdev_pad::aim_mode(player),
-                        aim,
-                        elapsed,
-                        width * SPEED_PER_WIDTH,
-                        width,
-                        height,
-                    );
-                }
-            }
+            s.players.aim(
+                player,
+                &states[player],
+                gun,
+                elapsed,
+                width * SPEED_PER_WIDTH,
+                width,
+                height,
+            );
             GUN_AIM[player][0].store(gun.x.clamp(0, width - 1), Ordering::Relaxed);
             GUN_AIM[player][1].store(gun.y.clamp(0, height - 1), Ordering::Relaxed);
         }
+        // The controller moves the mouse pointer only for a player who also
+        // has the mouse (one player, or player one with both on controllers).
+        let (pointer, pointer_moves) = inputs.mouse().map_or(
+            (crate::pad::Pad::default(), crate::pad::Movement::STICKS),
+            |m| (states[m], s.players.moves[m]),
+        );
         let (old_x, old_y) = (s.cursor.x, s.cursor.y);
         if s.cursor.step_mode(
-            s.inputs
+            inputs
                 .mouse()
                 .map_or(crate::pad::AimMode::Cursor, crate::evdev_pad::aim_mode),
             pointer.movement(&pointer_moves),
@@ -273,7 +245,7 @@ mod tests {
 
     #[test]
     fn each_target_gets_one_private_keysym() {
-        let b = crate::evdev_pad::bindings(DEFAULT_PAD);
+        let b = banana_input::session::bindings(DEFAULT_PAD);
         let s = sources(&b);
         assert_eq!(s.len(), 8);
         assert_eq!(s[0], (371, 160));

@@ -1,5 +1,6 @@
 //! Configurable guest crosshair (settings.cfg `crosshair`, via ARCADE_CROSSHAIR).
 //!
+//! Shared by the Linux preloads and Water adapters (any GL 1.1 context).
 //! The game's own `glutSwapBuffers` call is interposed: the crosshair is
 //! drawn over the finished frame at the current aim position (mouse or
 //! controller), then the real swap runs. Every piece of GL state touched is
@@ -8,8 +9,13 @@ use crate::crosshair;
 use std::ffi::{c_int, c_void};
 use std::sync::OnceLock;
 
-#[link(name = "GL")]
-unsafe extern "C" {
+// OpenGL 1.1: libGL on Linux, opengl32.dll (stdcall) on Windows.
+#[cfg_attr(not(windows), link(name = "GL"))]
+#[cfg_attr(
+    windows,
+    link(name = "opengl32", kind = "raw-dylib", import_name_type = "undecorated")
+)]
+unsafe extern "system" {
     fn glPushAttrib(mask: u32);
     fn glPopAttrib();
     fn glPushClientAttrib(mask: u32);

@@ -238,13 +238,7 @@ const CROSSHAIR_SPEED: i32 = 700;
 
 struct Controller {
     devices: crate::platform::Devices,
-    inputs: pad::Inputs,
-    /// Each player's controller buttons (controls.cfg; `[big_buck.p2]`).
-    bindings: [Vec<(u32, u32)>; pad::MAX_PLAYERS],
-    /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
-    moves: [pad::Movement; pad::MAX_PLAYERS],
-    edges: session::Edges,
-    last: std::time::Instant,
+    players: session::Players,
 }
 static CONTROLLER: Mutex<Option<Controller>> = Mutex::new(None);
 
@@ -264,7 +258,8 @@ pub fn players() -> usize {
 pub fn controller_frame(focused: bool) {
     let mut guard = CONTROLLER.lock().unwrap_or_else(|e| e.into_inner());
     let c = guard.get_or_insert_with(|| {
-        let inputs = inputs();
+        let players = session::Players::new(DEFAULT_PAD, DEFAULT_PAD_P2);
+        let inputs = &players.inputs;
         if inputs.players > 1 {
             eprintln!(
                 "[arcade] two players ({}, {}); the system mouse aims {}",
@@ -276,47 +271,31 @@ pub fn controller_frame(focused: bool) {
             );
         }
         Controller {
-            devices: crate::platform::Devices::new(&inputs),
-            inputs,
-            bindings: [
-                session::bindings(DEFAULT_PAD),
-                session::bindings_p2(DEFAULT_PAD_P2),
-            ],
-            moves: [0, 1].map(|p| session::movement(p, pad::Movement::STICKS)),
-            edges: Default::default(),
-            last: std::time::Instant::now(),
+            devices: crate::platform::Devices::new(inputs),
+            players,
         }
     });
     let states = if focused {
-        c.devices.read_players(&c.inputs)
+        c.devices.read_players(&c.players.inputs)
     } else {
         [pad::Pad::default(); pad::MAX_PLAYERS]
     };
-    if states
-        .iter()
-        .any(|s| s.held(pad::BACK) && s.held(pad::START))
-    {
+    if session::Players::quit(&states) {
         drop(guard);
         release();
         eprintln!("[arcade] Back + Start: exiting");
         std::process::exit(0);
     }
-    let elapsed = c.last.elapsed().as_millis() as u32;
-    c.last = std::time::Instant::now();
+    let elapsed = c.players.tick();
     let mut cursors = [(0, 0); pad::MAX_PLAYERS];
     let mut aims = Vec::new();
-    for gun in 0..c.inputs.players {
+    for gun in 0..c.players.inputs.players {
         let (x, y) = aim_position(gun);
         let mut cursor = pad::Cursor::new(x, y);
-        // A mouse or light gun of the player's own points directly.
-        if let Some((px, py)) = states[gun].pointer_moved(&c.moves[gun], 640, 480) {
-            if (px, py) != (x, y) {
-                cursor = pad::Cursor::new(px, py);
-                aims.push((gun, px, py));
-            }
-        } else if cursor.step_mode(
-            session::aim_mode(gun),
-            states[gun].movement(&c.moves[gun]),
+        if c.players.aim(
+            gun,
+            &states[gun],
+            &mut cursor,
             elapsed,
             CROSSHAIR_SPEED,
             640,
@@ -326,13 +305,9 @@ pub fn controller_frame(focused: bool) {
         }
         cursors[gun] = (cursor.x, cursor.y);
     }
-    let players: Vec<(pad::Pad, &[(u32, u32)])> = (0..c.inputs.players)
-        .map(|p| (states[p], c.bindings[p].as_slice()))
-        .collect();
     let mut changes = Vec::new();
-    c.edges
-        .update_players(&players, |target, down| changes.push((target, down)));
-    drop(players);
+    c.players
+        .edges(&states, |target, down| changes.push((target, down)));
     // The game's callback runs without the controller lock held.
     drop(guard);
     for (gun, x, y) in aims {

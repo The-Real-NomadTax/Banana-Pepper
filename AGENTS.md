@@ -11,7 +11,8 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
 - **Everything title-specific lives in `game-compat/<game>/`:** offsets, hashes, transforms, controls, settings, adapters, docs and probes. Shared crates, backends, the orchestrator and frontends never name a game. The only exception is the registry in `crates/banana-compat`.
 - **Write each patch once, for the game's own OS.**
   - **Windows games:** `hook/` DLLs run natively on Windows and unchanged under Wine on Linux and Android.
-  - **Linux games:** the `guest/` crate is preloaded on Linux and Android, and the same crate is built as the Water adapter on Windows. Keep game logic shared and only window/input glue per platform (see `game-compat/big-buck-hunter/guest/src/{jamma,linux,water}.rs`).
+  - **Linux games:** the `guest/` crate is preloaded on Linux and Android, and the same crate is built as Water's optional preload adapter on Windows. Override the same library functions on both, and keep only device reading per platform (see `game-compat/big-buck-hunter/guest/src/{jamma,glut,linux,water}.rs`). Per-frame controller work goes through `banana_input::session::Players`.
+- **Water grows like Wine:** add missing Linux functions or libraries to Water as generic builtins, never as title code (see `backends/water/README.md`).
 - **Plans reference artifacts by `name`, never by path.** Declare each artifact in its crate's `Cargo.toml` under `[[package.metadata.banana.artifacts]]` (`name, kind, target, hosts, destination`). A name must equal the library/binary filename and be unique per host.
 - **No interpreted launchers.** No Python or shell launch scripts. Dev-only probes go in `game-compat/<game>/tools/` or `scripts/`, and are never shipped.
 - **Unsupported means an error.** Unsupported combinations fail with a clear session error, never a silent fallback.
@@ -29,7 +30,7 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
 | `crates/banana-compat` | The only place listing games and backends |
 | `backends/native` | Windows PE (staging, PE import injection), Linux `banana-sandbox` |
 | `backends/wine` | Wine prefix in a held session namespace |
-| `backends/water` | ELF-on-Windows translator: generic `water-x86`/`water-x64` workers plus the `AdapterV1` C ABI |
+| `backends/water` | Linux-on-Windows runtime, like Wine in reverse: `water-x86` (ELF32 dynamic linker plus builtin libc/GLUT/GL/OSS) and `water-x64` (static ELF64); optional preload adapters (`AdapterV2`) |
 | `backends/android` | Box64 / Wine / PRoot plumbing |
 | `guest/view-shim` | `banana_view.dll`: hooks Win32 file APIs to read the served view |
 | `guest/linux-shim`, `guest/win32` | Reusable in-guest services, included by game crates via `#[path]` |
@@ -46,10 +47,11 @@ Game crate layout: `src/` (metadata in `lib.rs`, `plan.rs`, `prepare.rs`, `setti
 ```bash
 just build                                   # every artifact for this host -> target/dist/banana-pepper-<os>-<arch>/
 just run                                     # build, then launch the packaged app
-cargo test --workspace --locked              # Windows: the full suite
+cargo test --workspace --locked              # the full suite (Windows and 64-bit Linux)
 cargo build --release --locked -p <crate> --target i686-pc-windows-msvc    # hooks / Water adapters
 cargo build --release --locked -p <crate> --target i686-unknown-linux-gnu  # Linux guest libraries (build on Linux/WSL)
 cargo test -p banana-native --test namespace # Linux: real FUSE + namespace end-to-end
+cargo test -p banana-water --test elf32      # Windows: a real ELF32 program through Water's linker
 ```
 
 Real-game check: run `target/dist/<pkg>/arcade-desktop --action <game> probe "<source folder or .zar>"`. The session's `game.log` and captures land in the path it prints (`…/BananaPepper/state/entries/<id>/`). Other useful flags: `--runtime-info`, `--entries`, `--scan SRC`, `--reset-overlay ENTRY [PATH]`.
@@ -62,7 +64,8 @@ Debugging:
 
 - Builds use `--locked`. After changing dependencies or crates, run a plain `cargo` command once so `Cargo.lock` updates, and commit the lock.
 - i686 Windows uses `lld-link` with `panic=abort` and a static CRT (`.cargo/config.toml`). Hooks are freestanding and use `raw-dylib`, with no CRT or MSVC needed.
-- Linux guest crates contain 32-bit x86 asm and do not build for an x86_64 host. Test them with `--target i686-unknown-linux-gnu`.
+- Linux game guests are 32-bit: their crates are empty on other targets. Test them with `--target i686-unknown-linux-gnu`.
+- 32-bit Windows code can't run tests under `cargo test` (`panic=abort`). Test it through a real worker, as `tests/elf32.rs` does.
 - `#[path]` in a non-`mod.rs` file resolves relative to that file's directory. Shared `guest/win32/*.rs` expects sibling `pad`, `xinput` and `dinput` modules.
 - Running `rustfmt` on a file also reformats `#[path]`-included shared files. Revert any changes to those files.
 - PE views are case-insensitive and ELF views case-sensitive. A bare INI name such as `SYSTEM.INI` resolves to the Windows directory, not the game directory.

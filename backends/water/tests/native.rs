@@ -1,3 +1,6 @@
+//! Water's ELF64 image checks everywhere; its x86-64 worker on Windows x86-64.
+// Code-building helpers serve the worker tests, which only run on Windows.
+#![cfg_attr(not(all(windows, target_arch = "x86_64")), allow(dead_code))]
 use banana_water::elf::Image;
 use std::{
     fs,
@@ -128,7 +131,14 @@ impl banana_api::SessionView for Served {
     }
 }
 #[cfg(all(windows, target_arch = "x86_64"))]
-fn run(bytes: &[u8], timeout: u32) -> (std::process::Output, PathBuf, std::sync::Arc<banana_vfs::View>) {
+fn run(
+    bytes: &[u8],
+    timeout: u32,
+) -> (
+    std::process::Output,
+    PathBuf,
+    std::sync::Arc<banana_vfs::View>,
+) {
     let path = temp();
     let game = path.join("game");
     fs::create_dir_all(game.join("work")).unwrap();
@@ -155,7 +165,9 @@ fn run(bytes: &[u8], timeout: u32) -> (std::process::Output, PathBuf, std::sync:
         .arg("--timeout")
         .arg(timeout.to_string());
     let result = pipes
-        .spawn(std::sync::Arc::new(Served(view.clone())), || command.output())
+        .spawn(std::sync::Arc::new(Served(view.clone())), || {
+            command.output()
+        })
         .unwrap()
         .unwrap();
     // The host's serving thread lets go of the view once the worker's pipe closes.
@@ -336,7 +348,10 @@ fn guest_file_round_trip_is_confined_to_work_mount() {
     assert_eq!(result.stdout, message);
     // The write lands in the view's overlay; the source folder is untouched.
     let mut written = vec![0; message.len()];
-    assert_eq!(view.read("work/test.txt", 0, &mut written).unwrap(), message.len());
+    assert_eq!(
+        view.read("work/test.txt", 0, &mut written).unwrap(),
+        message.len()
+    );
     assert_eq!(written, message);
     assert!(!path.join("game/work/test.txt").exists());
     drop(view);

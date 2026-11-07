@@ -22,7 +22,7 @@ Windows needs nothing installed: Water and native Windows titles are served the 
 | Linux x86-64 | Supported Windows PE builds | Wine |
 | Android ARM64 (unrooted) | Experimental Linux / Windows plans | Box64 / Wine with the shared virtual filesystem |
 
-Water support is evaluated for the selected build. Its ELF64 loader currently rejects dynamic linking, PIE relocation and TLS requirements. Extending Water is incremental; unsupported combinations remain disabled. The mounted architecture still requires gameplay validation for each title/build/backend combination.
+Water runs Linux programs on Windows the way Wine runs Windows programs on Linux: its own dynamic linker plus builtin Linux libraries. It grows incrementally, and anything a program needs that Water lacks is reported by name (see [Water](backends/water/README.md)). The mounted architecture still requires gameplay validation for each title/build/backend combination.
 
 ## Storage
 

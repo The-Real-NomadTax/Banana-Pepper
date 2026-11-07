@@ -165,6 +165,10 @@ pub unsafe extern "C" fn open(_path: *const c_char, _flags: c_int) -> c_int {
 pub unsafe extern "C" fn ioctl(_fd: c_int, _request: u32) -> c_int {
     core::arch::naked_asm!("jmp arcade_oss_ioctl_bridge");
 }
+// The bridges hand the C arguments, including the optional variadic one, to
+// Rust as an array: from the i386 caller's stack, or from the x86-64
+// argument registers.
+#[cfg(target_arch = "x86")]
 core::arch::global_asm!(
     r#"
 .hidden arcade_oss_open
@@ -192,6 +196,32 @@ arcade_oss_ioctl_bridge:
     call arcade_oss_ioctl
     mov esp,ebp
     pop ebp
+    ret
+"#
+);
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    r#"
+.hidden arcade_oss_open
+.hidden arcade_oss_ioctl
+.hidden arcade_oss_open_bridge
+.hidden arcade_oss_ioctl_bridge
+arcade_oss_open_bridge:
+    lea rax,[rip+arcade_oss_open]
+    jmp arcade_oss_bridge
+arcade_oss_ioctl_bridge:
+    lea rax,[rip+arcade_oss_ioctl]
+arcade_oss_bridge:
+    push rbp
+    mov rbp,rsp
+    sub rsp,32
+    mov [rsp],rdi
+    mov [rsp+8],rsi
+    mov [rsp+16],rdx
+    mov rdi,rsp
+    call rax
+    mov rsp,rbp
+    pop rbp
     ret
 "#
 );
@@ -503,8 +533,10 @@ fn connect_audio(name: &[u8], rate: u32, channels: u8) -> c_int {
     fd
 }
 
+/// # Safety
+/// C close(); `fd` may be any descriptor.
 #[unsafe(no_mangle)]
-pub extern "C" fn close(fd: c_int) -> c_int {
+pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     if fd >= 0
         && FD
             .compare_exchange(fd, -1, Ordering::Relaxed, Ordering::Relaxed)
@@ -558,7 +590,7 @@ mod tests {
         );
         assert_eq!(unsafe { *libc::__errno_location() }, libc::EFAULT);
         assert_eq!(unsafe { abi_ioctl(fd, 0x1234, 0usize) }, -1);
-        assert_eq!(close(fd), 0);
+        assert_eq!(unsafe { close(fd) }, 0);
         // Ordinary file I/O must continue working through the exported hooks.
         let path = std::ffi::CString::new(format!("/tmp/arcade-audio-abi-{}", std::process::id()))
             .unwrap();
@@ -571,7 +603,7 @@ mod tests {
         };
         assert!(normal >= 0);
         assert_eq!(unsafe { write(normal, b"test".as_ptr().cast(), 4) }, 4);
-        assert_eq!(close(normal), 0);
+        assert_eq!(unsafe { close(normal) }, 0);
         assert_eq!(std::fs::read(path.to_str().unwrap()).unwrap(), b"test");
         std::fs::remove_file(path.to_str().unwrap()).unwrap();
     }

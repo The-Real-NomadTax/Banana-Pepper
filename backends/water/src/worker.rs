@@ -50,10 +50,11 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("Cannot read {image}: {e}"))?;
     #[cfg(all(windows, target_arch = "x86"))]
     {
-        let _ = guest;
         let state = options.get("--state").ok_or("--state required")?;
-        let adapter = options.get("--adapter").ok_or("--adapter required")?;
-        banana_water::win32::launch(&bytes, state, adapter)
+        let root = std::env::var("BANANA_GUEST_ROOT").unwrap_or_else(|_| "/game".into());
+        let mut argv = vec![format!("{}/{image}", root.trim_end_matches('/'))];
+        argv.extend(guest);
+        banana_water::win32::launch(&bytes, argv, state, options.get("--adapter").map(|p| p.as_path()))
     }
     #[cfg(not(all(windows, target_arch = "x86")))]
     {

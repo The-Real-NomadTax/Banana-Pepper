@@ -1,10 +1,15 @@
-//! Water frontend: the versioned Water adapter (`AdapterV1`). Water owns the
-//! window and forwards its keyboard, mouse and Raw Input messages here;
-//! controllers are read through XInput and DirectInput.
+//! Water frontend: the game's preload adapter for Water (`AdapterV2`). Water
+//! runs the game and supplies GLUT; like the Linux preload, this adapter
+//! only overrides the shared GLUT functions (`glut.rs`) and patches the
+//! JAMMA board in. Controllers are read through XInput and DirectInput,
+//! mice and light guns through Raw Input on Water's window.
 #![allow(unsafe_op_in_unsafe_fn)]
-use crate::{jamma, pad};
-use banana_water::extension::{AdapterV1, DisplayV1, HostServicesV1};
-use std::{ffi::c_void, sync::OnceLock};
+use crate::{glut, jamma, pad};
+use banana_water::extension::{ADAPTER_VERSION, AdapterV2, HostServicesV2};
+use std::{
+    ffi::{CStr, c_char, c_void},
+    sync::OnceLock,
+};
 #[path = "../../../../guest/win32/controllers.rs"]
 #[allow(dead_code)]
 mod controllers;
@@ -40,19 +45,67 @@ impl Devices {
     }
 }
 
-static HOST: OnceLock<&'static HostServicesV1> = OnceLock::new();
+static HOST: OnceLock<&'static HostServicesV2> = OnceLock::new();
+fn host() -> &'static HostServicesV2 {
+    HOST.get().expect("Water initialized the adapter")
+}
+
+/// Water's own implementation of a library function (the real GLUT).
+pub fn next(name: &CStr) -> usize {
+    unsafe { (host().next)(name.as_ptr()) }
+}
+
+/// Controllers are idle while another window has the keyboard.
+pub fn focused() -> bool {
+    let window = unsafe { (host().window)() };
+    window != 0
+        && unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() } as isize
+            == window
+}
+
+/// Raw Input on the new window, and the diagnostic probe when asked for.
+pub fn window_created() {
+    unsafe {
+        (host().message_hook)(message);
+        rawinput::register((host().window)() as *mut c_void);
+    }
+    probe::start();
+}
+
+/// Save the current frame in the session state.
+pub fn capture(name: &CStr) {
+    unsafe { (host().capture)(name.as_ptr()) }
+}
+
+pub fn install() {}
+
+unsafe extern "C" fn message(_window: isize, message: u32, _w: usize, l: isize) -> i32 {
+    if message == windows_sys::Win32::UI::WindowsAndMessaging::WM_INPUT {
+        rawinput::input(l);
+    }
+    0
+}
+
 unsafe extern "C" fn initialize(
-    _root: *const i8,
-    _state: *const i8,
-    host: *const HostServicesV1,
+    _root: *const c_char,
+    _state: *const c_char,
+    host: *const HostServicesV2,
 ) -> i32 {
     let Some(host) = host.as_ref() else { return -1 };
-    if host.size != std::mem::size_of::<HostServicesV1>() as u32 || HOST.set(host).is_err() {
+    if host.size != std::mem::size_of::<HostServicesV2>() as u32 || HOST.set(host).is_err() {
         return -1;
     }
     0
 }
-unsafe extern "C" fn install() -> i32 {
+unsafe extern "C" fn resolve(name: *const c_char) -> usize {
+    match CStr::from_ptr(name).to_bytes() {
+        b"glutEnterGameMode" => glut::enter_game_mode as *const () as usize,
+        b"glutLeaveGameMode" => glut::leave_game_mode as *const () as usize,
+        b"glutSwapBuffers" => glut::swap_buffers as *const () as usize,
+        _ => 0,
+    }
+}
+unsafe extern "C" fn patch() -> i32 {
     match jamma::install() {
         Ok(()) => 0,
         Err(e) => {
@@ -61,69 +114,14 @@ unsafe extern "C" fn install() -> i32 {
         }
     }
 }
-unsafe extern "C" fn resolve(_name: *const i8) -> usize {
-    0
-}
-unsafe extern "C" fn title() -> *const i8 {
-    c"Banana pepper - Big Buck Hunter Pro".as_ptr()
-}
-unsafe extern "C" fn players() -> usize {
-    jamma::players()
-}
-unsafe extern "C" fn aim_position(p: usize, x: *mut i32, y: *mut i32) {
-    let (a, b) = jamma::aim_position(p);
-    *x = a;
-    *y = b;
-}
-unsafe extern "C" fn release() {
-    jamma::release();
-}
-unsafe extern "C" fn key(k: u8, d: bool) {
-    jamma::key(k, d);
-}
-unsafe extern "C" fn aim(x: i32, y: i32, s: bool) {
-    jamma::aim(x, y, s);
-}
-unsafe extern "C" fn mouse(b: i32, d: bool, x: i32, y: i32) {
-    jamma::mouse(b, d, x, y);
-}
-unsafe extern "C" fn controller_frame(f: bool) {
-    jamma::controller_frame(f);
-}
-unsafe extern "C" fn register_raw(w: usize) {
-    rawinput::register(w as *mut c_void);
-}
-unsafe extern "C" fn raw_input(l: isize) {
-    rawinput::input(l);
-}
-static DISPLAY: DisplayV1 = DisplayV1 {
-    size: std::mem::size_of::<DisplayV1>() as u32,
-    width: 640,
-    height: 480,
-    title,
-    players,
-    aim_position,
-    release,
-    key,
-    aim,
-    mouse,
-    controller_frame,
-    register_raw,
-    raw_input,
-    probe: probe::probe,
-};
-unsafe extern "C" fn display() -> *const DisplayV1 {
-    &DISPLAY
-}
-static ADAPTER: AdapterV1 = AdapterV1 {
-    version: 1,
-    size: std::mem::size_of::<AdapterV1>() as u32,
+static ADAPTER: AdapterV2 = AdapterV2 {
+    version: ADAPTER_VERSION,
+    size: std::mem::size_of::<AdapterV2>() as u32,
     initialize,
-    install,
     resolve,
-    display,
+    install: patch,
 };
 #[unsafe(no_mangle)]
-pub extern "C" fn banana_water_adapter_v1() -> *const AdapterV1 {
+pub extern "C" fn banana_water_adapter_v2() -> *const AdapterV2 {
     &ADAPTER
 }

@@ -7,7 +7,7 @@
 //! app reads XInput controllers; DirectInput and Raw Input buttons are picked
 //! from the list there.
 use banana_input::controls::{self, PAD_BUTTONS};
-use banana_input::pad::{self, Axis, Method, Pad};
+use banana_input::pad::{Axis, Method, Pad};
 use std::time::{Duration, Instant};
 
 /// How long a capture waits for input.
@@ -157,6 +157,7 @@ impl Devices {
         method.device()?;
         #[cfg(target_os = "linux")]
         {
+            use banana_input::pad;
             let inputs = pad::Inputs {
                 players: 1,
                 methods: [method; pad::MAX_PLAYERS],
@@ -221,6 +222,7 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use banana_input::pad;
 
     #[test]
     fn buttons_are_captured_on_a_new_press() {

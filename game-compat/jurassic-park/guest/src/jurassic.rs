@@ -236,6 +236,7 @@ fn rebind() -> Result<(), String> {
         if bytes[..2] != [0xff, 0x25] || got != binding.got {
             return Err(format!("incompatible PLT at {:#x}", binding.plt));
         }
+        #[cfg_attr(not(target_arch = "x86"), allow(unused_mut))]
         let mut function = if binding.plt == 0x0813b770 {
             poll_event as *const () as *mut c_void
         } else if binding.plt == 0x0813a450 {
@@ -247,6 +248,8 @@ fn rebind() -> Result<(), String> {
         } else {
             unsafe { dlsym((-1isize) as *mut c_void, binding.symbol.as_ptr()) }
         };
+        // Box32 on Android lacks some 32-bit libraries; the shim supplies them.
+        #[cfg(target_arch = "x86")]
         if function.is_null() && std::env::var_os("ARCADE_ANDROID").is_some() {
             function = crate::box32_abi::resolve(binding.symbol);
         }

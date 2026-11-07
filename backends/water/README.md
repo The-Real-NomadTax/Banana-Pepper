@@ -1,11 +1,31 @@
 # Water
 
-Water Adapts The ELF Runtime translates Linux guest interfaces into Windows APIs. It executes guest x86 code in a dedicated process and provides reusable ELF loading, C-library, graphics, audio and filesystem mechanisms.
+Water Adapts The ELF Runtime runs Linux programs on Windows, the way Wine runs Windows programs on Linux. Guest code runs directly in a dedicated worker process. Water supplies everything the code would get from Linux: the dynamic linker, the libraries it uses and, where code makes them directly, system calls. Nothing is installed and no CPU emulation is involved.
 
-`water-x86.exe` and `water-x64.exe` are generic architecture-specific workers. The x86 worker loads a compatibility DLL through the versioned `AdapterV1` interface. Size/version checks run before guest loading. Title-specific patches, input mappings, cabinet devices and diagnostic input sequences live under `game-compat/`.
+## Structure
 
-The filesystem is the same composed view used by Native and Wine. Water has no separate root/work write policy and creates no game copies. Its path translator confines guest paths to the mounted namespace; game writes reach the persistent overlay.
+| Piece | Linux counterpart |
+| --- | --- |
+| `win32/linker.rs` | `ld.so`: maps the program and the ELF32 shared libraries the game ships, binds symbols (preload adapter, program, libraries in load order, then builtins), runs initializers, and provides `dlopen`/`dlsym`/`dlerror` |
+| `win32/crt.rs`, `files.rs` | libc, libpthread, librt: start-up, files (served from the session view), time, threads, `setjmp` |
+| `win32/display.rs` | GLUT and OpenGL on a Win32 window and WGL, with the program's own keyboard, mouse, timer, idle, reshape and display callbacks |
+| `win32/sound.rs` | OSS audio on Windows audio |
+| `windows.rs` | Static ELF64 programs with their system calls trapped (`water-x64`) |
+| `extension.rs` | The preload adapter ABI (`AdapterV2`), Water's `LD_PRELOAD` |
 
-The ELF64 implementation supports a constrained static ABI. Dynamic linking, PIE relocation, TLS, broader threading and graphics requirements are reported as missing capabilities. Support grows per game and build; selecting Water does not imply arbitrary Linux compatibility.
+Libraries Water implements itself are its *builtins* (`libc.so.6`, `libm.so.6`, `libpthread.so.0`, `libdl.so.2`, `librt.so.1`, `libGL.so.1`, `libGLU.so.1`, `libglut.so.3`). Any other library a program needs is loaded from the game's own files if the game ships it. A function Water lacks is reported by name before the program runs, never skipped.
 
-Build through `just build`. Worker executables and adapter DLLs are selected from crate-owned artifact declarations. Normal launches use the shared session API, which owns process lifetimes and timeouts. `cargo test -p banana-water` runs synthetic ELF64 loader and execution checks.
+## Adapters are optional
+
+A program runs with no adapter at all. A game patch is the same code as on Linux, built once more as a Water adapter DLL. It may replace any imported function, and it reaches Water's own implementation through `HostServicesV2::next`, like `dlsym(RTLD_NEXT)`. It can also patch the program's code after loading and observe window messages (for Raw Input). Big Buck's patch (`game-compat/big-buck-hunter/guest`) overrides the same three GLUT functions on Linux and in Water.
+
+## Growing Water
+
+Water grows the way Wine did: builtin library by builtin library, each one checked against real programs. The next steps, roughly in the order games need them:
+
+1. **Thread-local storage.** i386 code reads TLS through `%gs`, which 32-bit Windows cannot point anywhere useful, so `gs:`-prefixed accesses have to be rewritten at load time. Shipped libraries using TLS relocations are rejected with a clear error until then.
+2. **SDL 1.2 as a builtin** (window, OpenGL context, events, joystick, audio) on the same Win32 layer as GLUT. Jurassic Park needs this.
+3. **X11 and XCB subsets** for programs that talk to the display directly (Aliens Armageddon's statically linked SDL).
+4. **ELF64 dynamic programs**: the same linker for x86-64, with `%fs` TLS rewriting and glibc's start-up. Minecraft Dungeons needs this, plus libstdc++ and FMOD loaded as shipped libraries.
+
+Build through `just build`. `cargo test -p banana-water` runs the ELF64 loader and execution checks, and on Windows `tests/elf32.rs`: a real 32-bit Linux program (built by `tests/elf32/build.sh`) runs with a library it ships and a plugin it dlopens.

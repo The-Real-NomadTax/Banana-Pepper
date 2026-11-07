@@ -1,4 +1,5 @@
-#![cfg(target_os = "linux")]
+// The game is 32-bit Linux; on other targets this crate is empty.
+#![cfg(all(target_os = "linux", target_arch = "x86"))]
 #![allow(dead_code)]
 use banana_input::pad;
 #[path = "../../../../guest/linux-shim/src/audio.rs"]

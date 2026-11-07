@@ -512,8 +512,6 @@ version = "0.1.0"
 dependencies = [
  "banana-api",
  "banana-content",
- "banana-input",
- "banana-settings",
  "banana-vfs",
  "banana-wire",
  "goblin 0.10.7",

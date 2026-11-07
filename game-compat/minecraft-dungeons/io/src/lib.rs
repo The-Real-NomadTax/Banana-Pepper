@@ -1,4 +1,9 @@
 //! Build-specific desktop cabinet I/O. No card assets or dongle data live here.
+// The helpers below serve the 64-bit Linux game only (and the tests).
+#![cfg_attr(
+    not(all(target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 
 fn parse_scan(line: &[u8]) -> Option<(usize, [u8; 8])> {
     if line.len() != 10 || !(b'1'..=b'4').contains(&line[0]) || line[1] != b' ' {

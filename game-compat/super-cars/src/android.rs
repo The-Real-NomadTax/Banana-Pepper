@@ -19,6 +19,8 @@ pub fn profile() -> AndroidProfile {
 }
 
 /// Disable the cabinet Ethernet link without changing other operator settings.
+/// Only the Android plan applies it (desktop Wine has no cabinet network).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn cabinet_preferences(bytes: &[u8]) -> Result<banana_api::BinaryConfig, String> {
     if bytes.get(..4) != Some(b"320P") || (bytes.len() - 4) % 128 != 0 {
         return Err("Unsupported Super Cars preferences format".into());

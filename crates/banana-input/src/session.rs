@@ -4,7 +4,7 @@
 //! pad-bound targets. Platform-neutral: the same adapter code reads these on
 //! Linux (evdev) and Windows (XInput, DirectInput, Raw Input).
 use crate::pad::{self, Pad};
-use std::sync::OnceLock;
+use std::{sync::OnceLock, time::Instant};
 
 /// Who plays with which device (settings.cfg `players`, `p1_input`,
 /// `p2_input`, via `ARCADE_PLAYERS` and `ARCADE_INPUTS`).
@@ -95,9 +95,115 @@ impl Edges {
     }
 }
 
+/// The per-frame controller work every game adapter shares: who plays with
+/// what, each player's bindings and aim axes, press/release edges of bound
+/// targets, frame timing, the Back + Start exit chord and pointer-or-stick
+/// aiming. Adapters read the states from their platform's devices and turn
+/// the results into the game's own input (switches, events, keys).
+pub struct Players {
+    pub inputs: pad::Inputs,
+    /// Each player's controller buttons; player two's are empty in
+    /// one-player sessions.
+    pub bindings: [Vec<(u32, u32)>; pad::MAX_PLAYERS],
+    /// Each player's aim axes (controls.cfg `move_x` / `move_y`).
+    pub moves: [pad::Movement; pad::MAX_PLAYERS],
+    edges: Edges,
+    last: Instant,
+}
+
+impl Players {
+    /// The session's players, with these default bindings for controllers
+    /// that controls.cfg leaves unset.
+    pub fn new(default_pad: &str, default_pad_p2: &str) -> Self {
+        let inputs = inputs();
+        Self {
+            bindings: [
+                bindings(default_pad),
+                if inputs.players > 1 {
+                    bindings_p2(default_pad_p2)
+                } else {
+                    Vec::new()
+                },
+            ],
+            inputs,
+            moves: [0, 1].map(|p| movement(p, pad::Movement::STICKS)),
+            edges: Edges::default(),
+            last: Instant::now(),
+        }
+    }
+
+    /// Milliseconds since the previous frame.
+    pub fn tick(&mut self) -> u32 {
+        let elapsed = self.last.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+        self.last = Instant::now();
+        elapsed
+    }
+
+    /// Back + Start held together on any player's controller: leave the game.
+    pub fn quit(states: &[Pad]) -> bool {
+        states
+            .iter()
+            .any(|s| s.held(pad::BACK) && s.held(pad::START))
+    }
+
+    /// Press/release edges of every player's bound targets.
+    pub fn edges(&mut self, states: &[Pad; pad::MAX_PLAYERS], changed: impl FnMut(u32, bool)) {
+        let players: Vec<(Pad, &[(u32, u32)])> = (0..self.inputs.players)
+            .map(|p| (states[p], self.bindings[p].as_slice()))
+            .collect();
+        self.edges.update_players(&players, changed);
+    }
+
+    /// Move `player`'s aim `cursor`: a mouse or light gun of the player's own
+    /// points directly; otherwise the stick steps it (aim mode, `speed`
+    /// pixels per second at full deflection). True when it moved.
+    #[allow(clippy::too_many_arguments)]
+    pub fn aim(
+        &self,
+        player: usize,
+        state: &Pad,
+        cursor: &mut pad::Cursor,
+        elapsed: u32,
+        speed: i32,
+        width: i32,
+        height: i32,
+    ) -> bool {
+        let player = player.min(pad::MAX_PLAYERS - 1);
+        match state.pointer_moved(&self.moves[player], width, height) {
+            Some((x, y)) if (x, y) != (cursor.x, cursor.y) => {
+                *cursor = pad::Cursor::new(x, y);
+                true
+            }
+            Some(_) => false,
+            None => cursor.step_mode(
+                aim_mode(player),
+                state.movement(&self.moves[player]),
+                elapsed,
+                speed,
+                width,
+                height,
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn back_and_start_together_quit() {
+        let both = Pad {
+            buttons: pad::BACK | pad::START,
+            ..Pad::default()
+        };
+        let back = Pad {
+            buttons: pad::BACK,
+            ..Pad::default()
+        };
+        assert!(Players::quit(&[Pad::default(), both]));
+        assert!(!Players::quit(&[back, Pad::default()]));
+    }
 
     #[test]
     fn edges_report_changes_once() {

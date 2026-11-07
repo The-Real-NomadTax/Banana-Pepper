@@ -228,10 +228,6 @@ impl ExecutionBackend for Wine {
     fn check(&self, p: &banana_api::LaunchPlan) -> Result<(), banana_api::CapabilityError> {
         banana_api::check_host(self, p)
     }
-    /// The view is served into the session's own namespace instead.
-    fn needs_mount(&self, _plan: &banana_api::LaunchPlan) -> bool {
-        false
-    }
     fn launch(
         &self,
         s: banana_api::PreparedSession,

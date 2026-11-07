@@ -1,9 +1,15 @@
-//! Water Adapts The ELF Runtime: Linux ABI translation on Windows.
+//! Water Adapts The ELF Runtime: runs Linux programs on Windows, as Wine runs
+//! Windows programs on Linux. Guest code runs directly in a dedicated worker
+//! process; Water supplies the Linux libraries and system calls it uses.
 //!
-//! Native execution currently supports a constrained static ELF64 ABI. Dynamic
-//! linking, TLS, graphics and Linux threads are explicitly rejected. Guest code
-//! runs in a dedicated process; this is a compatibility runtime, not a security
-//! sandbox for untrusted executables.
+//! - `water-x86`: ELF32 programs, their imports bound to Water's own Win32
+//!   implementations of the Linux libraries (C library, files, GLUT/OpenGL,
+//!   OSS audio). An optional preload adapter ([`extension`]) may override
+//!   any import, like `LD_PRELOAD`.
+//! - `water-x64`: static ELF64 programs with their system calls trapped.
+//!
+//! Each missing capability is reported, never silently skipped. This is a
+//! compatibility runtime, not a security sandbox for untrusted executables.
 use banana_api::{Availability, BackendKind, ExecutionBackend};
 
 pub mod elf;
@@ -25,6 +31,9 @@ pub fn run_worker(image: &[u8], argv: &[String]) -> Result<(), String> {
     }
 }
 
+/// Where a plan places Water's optional preload adapter in the view.
+pub const ADAPTER: &str = ".banana/water-adapter.dll";
+
 /// Water as a registered execution backend.
 pub struct Water;
 pub static BACKEND: Water = Water;
@@ -45,10 +54,6 @@ impl ExecutionBackend for Water {
         } else {
             Availability::Unsupported
         }
-    }
-    /// Water implements the guest's file calls itself and is served the view.
-    fn needs_mount(&self, _plan: &banana_api::LaunchPlan) -> bool {
-        false
     }
     fn check(&self, p: &banana_api::LaunchPlan) -> Result<(), banana_api::CapabilityError> {
         banana_api::check_host(self, p)?;
@@ -74,14 +79,6 @@ impl ExecutionBackend for Water {
                     "ELF64 dynamic linking, PIE relocation, and TLS are not implemented".into(),
                 );
             }
-        }
-        if p.binary.bits == 32
-            && !p
-                .adapters
-                .iter()
-                .any(|a| a.destination == ".banana/water-adapter.dll")
-        {
-            missing.push("A versioned ELF32 compatibility adapter is required".into());
         }
         if missing.is_empty() {
             Ok(())
@@ -114,13 +111,14 @@ impl ExecutionBackend for Water {
             .arg(&s.plan.executable)
             .arg("--state")
             .arg(&s.state);
-        if s.plan.binary.bits == 32 {
-            // Windows loads DLLs from files: stage the title adapter (our own
-            // build artifact, not game content) in the session state.
+        if s.plan.binary.bits == 32 && s.plan.adapters.iter().any(|a| a.destination == ADAPTER) {
+            // An optional preload adapter. Windows loads DLLs from files:
+            // stage it (our own build artifact, not game content) in the
+            // session state.
             let adapter = s.state.join("water-adapter.dll");
             let bytes = s
                 .view
-                .read(".banana/water-adapter.dll", 64 * 1024 * 1024)
+                .read(ADAPTER, 64 * 1024 * 1024)
                 .map_err(|e| format!("Missing Water adapter: {e}"))?;
             std::fs::write(&adapter, bytes).map_err(|e| e.to_string())?;
             c.arg("--adapter").arg(adapter);

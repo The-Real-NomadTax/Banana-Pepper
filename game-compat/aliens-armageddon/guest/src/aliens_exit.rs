@@ -788,11 +788,7 @@ impl Controller {
             return;
         }
         let focused = !watcher.windows.is_empty() && watcher.focused_game();
-        if focused
-            && states
-                .iter()
-                .any(|s| s.held(crate::pad::BACK) && s.held(crate::pad::START))
-        {
+        if focused && banana_input::session::Players::quit(&states) {
             eprintln!("[aliens] Back + Start pressed; exiting");
             unsafe {
                 libc::fflush(std::ptr::null_mut());

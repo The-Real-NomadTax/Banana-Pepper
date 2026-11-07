@@ -10,9 +10,7 @@ pub struct Session {
     game: &'static dyn GameCompat,
     state: PathBuf,
     handle: Box<dyn SessionHandle>,
-    mount: Option<banana_vfs::MountLease>,
     view: Option<Arc<banana_vfs::View>>,
-    point: PathBuf,
 }
 impl Session {
     pub fn command(&mut self, a: ActionRequest) -> Result<(), String> {
@@ -25,9 +23,6 @@ impl Session {
     pub fn wait(&mut self) -> Result<i32, String> {
         let code = self.handle.wait()?;
         self.release_view();
-        if let Some(mount) = &self.mount {
-            mount.flush().map_err(|e| e.to_string())?;
-        }
         Ok(code)
     }
     pub fn next_event(&mut self) -> Result<Option<SessionEvent>, String> {
@@ -38,8 +33,7 @@ impl Session {
     /// Wait (briefly) for backend threads serving the view to let go of it
     /// after the guest exits, so the overlay is free for the next session.
     fn release_view(&self) {
-        // A mount keeps its own reference for the whole session.
-        let (Some(view), None) = (&self.view, &self.mount) else {
+        let Some(view) = &self.view else {
             return;
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -53,11 +47,9 @@ impl Drop for Session {
         let _ = self.handle.cancel();
         let _ = self.handle.wait();
         self.release_view();
-        self.mount.take();
         if let Some(v) = &self.view {
             let _ = v.flush();
         }
-        let _ = std::fs::remove_dir(&self.point);
     }
 }
 pub struct PreparedView {
@@ -335,22 +327,11 @@ pub fn start_with_env(
             game,
             state,
             handle: Box::new(Completed),
-            mount: None,
             view: None,
-            point: PathBuf::new(),
         });
     }
     let selected = banana_api::backend(backend.ok_or("Missing prepared backend")?)
         .ok_or("Execution backend is no longer registered")?;
-    let point = paths.cache.join("mounts").join(format!(
-        "{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(point.parent().unwrap()).map_err(|e| e.to_string())?;
     #[cfg(target_os = "linux")]
     let devices = crate::pad_devices(
         &banana_settings::Settings::load(&paths.config.join("settings.cfg"))?
@@ -369,19 +350,9 @@ pub fn start_with_env(
                 .join(":"),
         );
     }
-    // Only backends whose guest opens files by host path get an OS mount;
-    // the others are served the view directly.
-    let mount = if selected.needs_mount(&plan) {
-        let mount = banana_vfs::mount(view.clone(), &point).map_err(|e| e.to_string())?;
-        selected.prepare_namespace(&mut plan, &Namespace(&mount))?;
-        Some(mount)
-    } else {
-        None
-    };
     let handle = selected.launch(PreparedSession {
         devices,
         plan,
-        mount: mount.as_ref().map(|m| m.path.clone()),
         view: Arc::new(ServedView(view.clone())),
         state: state.clone(),
         resources,
@@ -392,9 +363,7 @@ pub fn start_with_env(
         game,
         state,
         handle,
-        mount,
         view: Some(view),
-        point,
     })
 }
 #[derive(Debug)]
@@ -500,20 +469,22 @@ impl SessionView for ServedView {
     fn serve_fuse(&self, device: std::fs::File) -> std::io::Result<()> {
         banana_vfs::serve_fuse(self.0.clone(), device.into())
     }
+    #[cfg(target_os = "android")]
+    fn serve_traced(&self, socket: &Path, root: &str) -> std::io::Result<Box<dyn TracedView>> {
+        Ok(Box::new(Traced(banana_vfs::rootless::Server::start(
+            self.0.clone(),
+            socket,
+            root,
+        )?)))
+    }
 }
 
-struct Namespace<'a>(&'a banana_vfs::MountLease);
-impl GuestNamespace for Namespace<'_> {
-    fn root(&self) -> &Path {
-        &self.0.path
-    }
-    fn map(&self, guest: &str, source: &str, readonly: bool) -> Result<(), String> {
-        self.0
-            .map_namespace(guest, source, readonly)
-            .map_err(|e| e.to_string())
-    }
-    fn endpoint(&self) -> Option<&Path> {
-        self.0.namespace_endpoint()
+#[cfg(target_os = "android")]
+struct Traced(banana_vfs::rootless::Server);
+#[cfg(target_os = "android")]
+impl TracedView for Traced {
+    fn map(&self, guest: &str, source: &str, readonly: bool) -> std::io::Result<()> {
+        self.0.map(guest, source, readonly)
     }
 }
 
