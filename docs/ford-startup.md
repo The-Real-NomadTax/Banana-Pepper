@@ -16,7 +16,7 @@ cargo run -p banana-desktop -- --launch-ford "C:\path\to\Ford Racing"
 
 LLVM `lld-link` must be on PATH. Select **Ford Racing Full Blown → Play Ford
 Racing** in the workbench. Inspection accepts the game folder, a Downloads-like
-parent, or a library with `windows based/Ford Racing/`.
+parent, or a library with `Ford Racing/` (or the older `windows based/Ford Racing/`).
 
 Controls default to Left/Right steering, Up gas/menu confirm, Down brake,
 Enter/1 Start, V view, Space/X shift up/down, 5 credit, and Escape exit.

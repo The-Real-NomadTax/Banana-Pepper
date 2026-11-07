@@ -25,7 +25,7 @@ Before the first launch, capture `runtime/minecraft/seeds.json` as described in 
 
 ```sh
 cargo build -p banana-minecraft-io --offline
-python3 scripts/minecraft-seeded.py 'games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
+python3 scripts/minecraft-seeded.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
 ```
 
 F1–F4 scan the selected card for P1–P4 while the Minecraft window has focus. The default card is Sun's Grace (`a0000000`); choose another with `--card CODE`. Scanning is useful at the game's card-selection prompt. The game retains its own enabled-card, player-state, duplicate-card and loadout validation.
@@ -61,7 +61,7 @@ cargo run -p banana-desktop -- --setup-minecraft-libs games
 cargo run -p banana-desktop -- --probe-minecraft games
 ```
 
-Named folders such as `games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]` are discovered automatically. Linux uses the native ELF64 guest inside Bubblewrap; Windows uses WSL2. The separate Windows translation-engine prototype is not used or changed here.
+Named folders such as `games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]` are discovered automatically (the older `games/linux based/...` layout still works). Linux uses the native ELF64 guest inside Bubblewrap; Windows uses WSL2. The separate Windows translation-engine prototype is not used or changed here.
 
 Library setup supports apt/dpkg hosts and Arch/CachyOS hosts with pacman. On Arch it stages `libiw.so.30` from the host package database's HTTPS URL and SHA256 metadata, extracts only that named library, and records provenance in `runtime/minecraft/wireless-source.json`. Other dependencies use existing host libraries. The existing hash-pinned FMOD SDK setup stages the required x86-64 FMOD 1.10 pair locally. No packages are installed system-wide. Libraries, package archives, originals and generated runtime files remain outside Git.
 
@@ -80,7 +80,7 @@ The branch's earlier isolated bypass experiments already reached archive/localiz
 ```sh
 python3 scripts/test-minecraft-run.py
 python3 scripts/test-minecraft-seeded.py
-python3 scripts/test-minecraft-prepare.py 'games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]/gamedump.exec'
+python3 scripts/test-minecraft-prepare.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]/gamedump.exec'
 cargo test --workspace
 ```
 
@@ -89,7 +89,7 @@ The runner tests verify that corrupt downloads preserve an existing library and 
 ## Explicit decoder experiment
 
 ```sh
-python3 scripts/minecraft-asset-probe.py 'games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
+python3 scripts/minecraft-asset-probe.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
 ```
 
 This separate, 35-second-bounded debugger probe skips the cabinet login/ID block in memory while retaining all five file-reader configuration pointers. It uses a separate runtime/save directory, the desktop display, read-only originals and inert cabinet NVIDIA/XRandR/reboot/shutdown helpers. It verifies the original snapshot hash before using any native addresses. The normal launcher/runtime image is not patched by this experiment.
@@ -121,7 +121,7 @@ The only routes past the asset blocker are a physical HASP key or response data 
 The two plaintext seed tables were captured from TeknoParrot on Windows with `scripts/minecraft-capture-seeds.ps1` and stored locally as `runtime/minecraft/seeds.json` (not in Git). With them, `fileMap000` decrypts to a valid file map and the PROGRAM/SCENE archives open.
 
 ```sh
-python3 scripts/minecraft-seeded.py 'games/linux based/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
+python3 scripts/minecraft-seeded.py 'games/Minecraft Dungeons Arcade (3.07)(2021)[Raw Thrills][TP]'
 ```
 
 The runner builds `runtime/minecraft-seeded/game.seeded` from the import-repaired dump, changing only that runtime copy:

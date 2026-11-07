@@ -14,6 +14,7 @@ pub fn games() -> Vec<&'static dyn GameCompat> {
         &banana_game_super_cars::GAME,
         &banana_game_minecraft_dungeons::GAME,
         &banana_game_ford_racing::GAME,
+        &banana_game_skylanders_cloud_patrol::GAME,
     ]
 }
 

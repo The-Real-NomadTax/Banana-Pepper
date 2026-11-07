@@ -16,7 +16,8 @@ cargo run -p banana-desktop -- --launch-big-buck "C:\path\to\Big Bug Hunter Pro"
 ```
 
 The game's folder spelling is preserved. Direct game folders, Downloads-like
-parents and the old `linux based/Big Bug Hunter Pro/` library layout all work.
+parents, a library with `Big Bug Hunter Pro/`, and the older
+`linux based/Big Bug Hunter Pro/` library layout all work.
 The executable must match the existing SHA256-verified Big Buck build. No source
 file is altered; saves and logs are under `runtime/big-buck-native/`.
 

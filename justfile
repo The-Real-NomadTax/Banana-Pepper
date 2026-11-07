@@ -6,6 +6,7 @@ build:
     cargo build -p banana-minecraft-io --locked
     cargo build -p banana-linux-shim --target i686-unknown-linux-gnu --locked
     cargo build -p banana-super-cars-hook --target i686-pc-windows-msvc --release --locked
+    cargo build -p banana-skylanders-touch --target i686-pc-windows-msvc --release --locked
     bash scripts/setup-desktop-runtime.sh
 
 # Prepare runtime libraries and Xvfb without rebuilding the app.

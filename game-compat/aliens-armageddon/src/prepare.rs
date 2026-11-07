@@ -75,6 +75,15 @@ fn sources(inputs: &banana_input::pad::Inputs, modes: &[banana_input::pad::AimMo
 /// `inputs` (settings.cfg `players`, `p1_input`, `p2_input`) routes each
 /// player's aim and fire ([`sources`]); one player on the system mouse
 /// leaves the engine's own desktop maps unchanged.
+/// The game folder for a library root (`Aliens Armageddon/`, or the older
+/// `linux based/Aliens Armageddon/`) or the game's own folder.
+pub fn directory(root: &Path) -> std::path::PathBuf {
+    [root.join("Aliens Armageddon"), root.join("linux based/Aliens Armageddon"), root.to_path_buf()]
+        .into_iter()
+        .find(|p| p.join("game").is_file())
+        .unwrap_or_else(|| root.join("Aliens Armageddon"))
+}
+
 pub fn prepare(
     source: &Path,
     destination: &Path,

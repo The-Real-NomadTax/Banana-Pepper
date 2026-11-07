@@ -29,7 +29,10 @@ import subprocess
 
 from arcade_settings import resolution
 
-GAME_DIR = 'windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars'
+# Below the games root (newest layout first), or the game folder itself.
+GAME_DIRS = ['The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars',
+             'windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars',
+             'The_Fast_and_the_Furious_SuperCars', '.']
 GAME_SHA256 = '0cddbdbf1d107d27dc668897d7851b6ac96b4349320551d800504b1c50b195ba'
 # The game's own -resN options (decoded from its option parser).
 RES_OPTIONS = {
@@ -89,7 +92,8 @@ def main():
     parser.add_argument('--games-root', type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    game = (args.games_root / GAME_DIR).resolve()
+    game = next((args.games_root / d for d in GAME_DIRS if (args.games_root / d / 'sdaemon.exe').is_file()),
+                args.games_root / GAME_DIRS[0]).resolve()
     exe = game / 'sdaemon.exe'
     if not exe.is_file() or hashlib.sha256(exe.read_bytes()).hexdigest() != GAME_SHA256:
         raise SystemExit('Unsupported or missing Super Cars sdaemon.exe build')

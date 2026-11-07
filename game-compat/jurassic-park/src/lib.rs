@@ -8,7 +8,7 @@ pub mod controls;
 pub mod settings;
 
 use banana_api::{BackendKind, CliCommand, Controls, GameCompat, KnownBuild, Status, SupportLevel};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use prepare::Build;
 
 pub struct JurassicPark;
@@ -32,7 +32,10 @@ impl GameCompat for JurassicPark {
         Controls::LightGuns
     }
     fn default_executable(&self) -> &'static str {
-        "linux based/Jurassic Park 2015/game_original"
+        "Jurassic Park 2015/game_original"
+    }
+    fn locate_executable(&self, root: &Path) -> PathBuf {
+        prepare::directory(root).join("game_original")
     }
     fn known_builds(&self) -> &'static [KnownBuild] {
         &[

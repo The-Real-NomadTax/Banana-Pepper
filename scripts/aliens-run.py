@@ -21,7 +21,9 @@ def main():
     parser.add_argument('--plaintext-assets', action='store_true', help='diagnostic substitution of supplied readable definition copies')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    game = args.games_root.resolve() / 'linux based/Aliens Armageddon'
+    games = args.games_root.resolve()
+    game = next((games / d for d in ['Aliens Armageddon', 'linux based/Aliens Armageddon', '.']
+                 if (games / d / 'game').is_file()), games / 'Aliens Armageddon').resolve()
     output = root / 'runtime/aliens'
     output.mkdir(parents=True, exist_ok=True)
     if hashlib.sha256((game / 'game').read_bytes()).hexdigest() != '297c07db82b531e276d4ea7ceb4a11c9ce3aacb436f63526c179c2fd4de3e4db':

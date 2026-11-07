@@ -184,6 +184,7 @@ dependencies = [
  "banana-game-ford-racing",
  "banana-game-jurassic-park",
  "banana-game-minecraft-dungeons",
+ "banana-game-skylanders-cloud-patrol",
  "banana-game-super-cars",
  "banana-input",
  "banana-native",
@@ -320,6 +321,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "banana-game-skylanders-cloud-patrol"
+version = "0.1.0"
+dependencies = [
+ "banana-api",
+ "banana-core",
+ "banana-input",
+ "banana-runtime",
+ "banana-settings",
+ "sha2",
+]
+
+[[package]]
 name = "banana-game-super-cars"
 version = "0.1.0"
 dependencies = [
@@ -378,6 +391,10 @@ version = "0.1.0"
 dependencies = [
  "banana-input",
 ]
+
+[[package]]
+name = "banana-skylanders-touch"
+version = "0.1.0"
 
 [[package]]
 name = "banana-super-cars-hook"

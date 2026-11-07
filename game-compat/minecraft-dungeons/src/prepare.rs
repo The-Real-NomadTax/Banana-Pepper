@@ -6,7 +6,9 @@ use std::{
 };
 
 pub const DUMP_SHA256: &str = "663b147927e7b9d60cef7bd41cf49d3fd64058619880391083ea1ba872d6be3b";
-pub const RELATIVE_DIRECTORY: &str = "linux based/Minecraft Dungeons Arcade";
+pub const RELATIVE_DIRECTORY: &str = "Minecraft Dungeons Arcade";
+/// The library layout used before games moved into one folder.
+const LEGACY_DIRECTORY: &str = "linux based/Minecraft Dungeons Arcade";
 
 /// Accept a game directory, the conventional library layout, or a named download.
 /// Discovery is deliberately limited to two directory levels.
@@ -33,7 +35,7 @@ pub fn directory(root: &Path) -> PathBuf {
             && p.join("data").is_dir()
             && (p.join("gamedump.exec").is_file() || p.join("game").is_file())
     };
-    for candidate in [root.to_path_buf(), root.join(RELATIVE_DIRECTORY)] {
+    for candidate in [root.to_path_buf(), root.join(RELATIVE_DIRECTORY), root.join(LEGACY_DIRECTORY)] {
         if valid(&candidate) {
             return candidate;
         }

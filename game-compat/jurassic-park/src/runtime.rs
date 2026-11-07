@@ -14,7 +14,7 @@ pub fn launch(root: &Path) -> Result<String, String> {
     let output = project.join("runtime/jurassic");
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
     crate::prepare::prepare_desktop(
-        &root.join("linux based/Jurassic Park 2015/game_legacy_patched"),
+        &crate::prepare::directory(&root).join("game_legacy_patched"),
         &output.join("game-desktop"),
     )?;
     let controls = banana_input::controls::Bindings::load(&project.join("controls.cfg"))?;
@@ -61,8 +61,7 @@ pub fn probe(root: &Path, build: Build) -> Result<String, String> {
         fs,
         process::{Command, Stdio},
     };
-    let game = root
-        .join("linux based/Jurassic Park 2015")
+    let game = crate::prepare::directory(root)
         .canonicalize()
         .map_err(|e| e.to_string())?;
     let output = Path::new("runtime/jurassic");

@@ -7,13 +7,13 @@ use std::{
 pub const SOURCE_SHA256: &str = "ef7011d4c59bcf68cbbe8a3efd31443638089a96ac2dc1747d9aa3d912b41e76";
 pub fn directory(root: &Path) -> PathBuf {
     [
-        root.join("windows based/Ford Racing"),
         root.join("Ford Racing"),
+        root.join("windows based/Ford Racing"),
         root.to_path_buf(),
     ]
     .into_iter()
     .find(|p| p.join("FordRacing/fordracing.exe").is_file())
-    .unwrap_or_else(|| root.join("windows based/Ford Racing"))
+    .unwrap_or_else(|| root.join("Ford Racing"))
 }
 pub fn verify(root: &Path) -> Result<(), String> {
     let data = fs::read(root.join("FordRacing/fordracing.exe")).map_err(|e| e.to_string())?;

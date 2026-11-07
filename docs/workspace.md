@@ -21,6 +21,7 @@ apps/
 game-compat/
   aliens-armageddon  big-buck-hunter  jurassic-park
   super-cars (+hook)  ford-racing (+hook)  minecraft-dungeons (+io)
+  skylanders-cloud-patrol (+hook)
 backends/
   native  wine  water  wsl
 guest/

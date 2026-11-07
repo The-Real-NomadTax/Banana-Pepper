@@ -1,0 +1,15 @@
+[package]
+name = "banana-skylanders-touch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 32-bit Windows guest library loaded by the game as its PQMTClient.dll
+# (the PQ Labs MultiTouch client) and KaboomComDll.dll (the coin/ticket
+# board). It reports the game window as the touch screen, turns the mouse,
+# keyboard and controllers into touches, and inserts coins.
+# Build: cargo build -p banana-skylanders-touch --target i686-pc-windows-msvc --release
+# (linker and panic settings live in .cargo/config.toml).
+[lib]
+name = "PQMTClient"
+crate-type = ["cdylib"]

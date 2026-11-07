@@ -76,7 +76,10 @@ def main():
     if not 10 <= options.seconds <= 600 or options.seconds % 10:
         parser.error("--seconds must be 10–600 in steps of 10")
     root = Path(__file__).resolve().parents[1]
-    game = (options.games_root or root / "games") / "linux based/Jurassic Park 2015"
+    games = options.games_root or root / "games"
+    game = next((games / d for d in ["Jurassic Park 2015", "linux based/Jurassic Park 2015", "."]
+                 if (games / d / "game_original").is_file() or (games / d / "game_legacy_patched").is_file()),
+                games / "Jurassic Park 2015")
     runtime = root / "runtime/jurassic"
     image = runtime / ("game-desktop" if options.launch else "game-native")
     expected = "3cdb20b56f3a881232e81aa7dc16c0476060489acd7d3b838d5cc6c1ba6aa3ef"

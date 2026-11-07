@@ -1,6 +1,23 @@
 //! Fast and Furious Super Cars: Windows build run under Wine + DXVK by
 //! scripts/supercars-run.py, with the Super Cars hook (game-compat/super-cars/hook) input adapter.
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Game folders below a library root, newest layout first.
+const FOLDERS: &[&str] = &[
+    "The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars",
+    "windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars",
+    "The_Fast_and_the_Furious_SuperCars",
+];
+
+/// The folder holding sdaemon.exe for a library root or the game's own folder.
+pub fn directory(root: &Path) -> PathBuf {
+    FOLDERS
+        .iter()
+        .map(|f| root.join(f))
+        .chain(std::iter::once(root.to_path_buf()))
+        .find(|p| p.join("sdaemon.exe").is_file())
+        .unwrap_or_else(|| root.join(FOLDERS[0]))
+}
 
 #[cfg(target_os = "linux")]
 pub fn launch(root: &Path) -> Result<String, String> {

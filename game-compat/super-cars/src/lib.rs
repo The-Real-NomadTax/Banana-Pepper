@@ -7,7 +7,7 @@ pub mod controls;
 pub mod settings;
 
 use banana_api::{BackendKind, CliCommand, Controls, GameCompat, Status, SupportLevel};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct SuperCars;
 pub static GAME: SuperCars = SuperCars;
@@ -30,7 +30,13 @@ impl GameCompat for SuperCars {
         Controls::Driving
     }
     fn default_executable(&self) -> &'static str {
-        "windows based/The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars/sdaemon.exe"
+        "The_Fast_and_the_Furious_SuperCars/The_Fast_and_the_Furious_SuperCars/sdaemon.exe"
+    }
+    fn locate_executable(&self, root: &Path) -> PathBuf {
+        runtime::directory(root).join("sdaemon.exe")
+    }
+    fn finds_own_folder(&self) -> bool {
+        true
     }
     fn status(&self) -> Status {
         Status { level: SupportLevel::Experimental, label: "Wine desktop gameplay" }

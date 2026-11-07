@@ -29,7 +29,7 @@ impl GameCompat for MinecraftDungeons {
         Controls::Joysticks
     }
     fn default_executable(&self) -> &'static str {
-        "linux based/Minecraft Dungeons Arcade/gamedump.exec"
+        "Minecraft Dungeons Arcade/gamedump.exec"
     }
     fn locate_executable(&self, root: &Path) -> PathBuf {
         prepare::executable(root)

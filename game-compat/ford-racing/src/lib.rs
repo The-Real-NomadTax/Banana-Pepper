@@ -32,7 +32,7 @@ impl GameCompat for FordRacing {
         Controls::Driving
     }
     fn default_executable(&self) -> &'static str {
-        "windows based/Ford Racing/FordRacing/fordracing.exe"
+        "Ford Racing/FordRacing/fordracing.exe"
     }
     fn locate_executable(&self, root: &Path) -> PathBuf {
         prepare::directory(root).join("FordRacing/fordracing.exe")

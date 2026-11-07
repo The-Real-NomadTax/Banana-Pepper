@@ -36,7 +36,7 @@ cargo build -p banana-desktop
 ```
 
 Pass either the actual game directory or a library root containing
-`linux based/Minecraft Dungeons Arcade`. Named download folders containing
+`Minecraft Dungeons Arcade` (or the older `linux based/Minecraft Dungeons Arcade`). Named download folders containing
 Minecraft and Dungeons are also discovered one directory level below the root.
 
 ```powershell

@@ -33,7 +33,7 @@ impl GameCompat for BigBuckHunter {
         Controls::LightGuns
     }
     fn default_executable(&self) -> &'static str {
-        "linux based/Big Bug Hunter Pro/game"
+        "Big Bug Hunter Pro/game"
     }
     fn locate_executable(&self, root: &Path) -> PathBuf {
         prepare::directory(root).join("game")

@@ -15,7 +15,7 @@ pub fn run(root: &Path, launch: bool) -> Result<String, String> {
     // Fullscreen is applied by the guest shim (single monitor), not the image.
     let settings = banana_runtime::game_settings(&project, "aliens")?;
     let prepared = crate::prepare::prepare(
-        &root.join("linux based/Aliens Armageddon/game"),
+        &crate::prepare::directory(&root).join("game"),
         &output.join("game-native"),
         &controls.codes("aliens")?,
         &settings.input_assignment(),

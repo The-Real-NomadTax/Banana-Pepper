@@ -8,7 +8,7 @@ pub mod controls;
 pub mod settings;
 
 use banana_api::{BackendKind, CliCommand, Controls, GameCompat, KnownBuild, Status, SupportLevel};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct AliensArmageddon;
 pub static GAME: AliensArmageddon = AliensArmageddon;
@@ -31,7 +31,10 @@ impl GameCompat for AliensArmageddon {
         Controls::LightGuns
     }
     fn default_executable(&self) -> &'static str {
-        "linux based/Aliens Armageddon/game"
+        "Aliens Armageddon/game"
+    }
+    fn locate_executable(&self, root: &Path) -> PathBuf {
+        prepare::directory(root).join("game")
     }
     fn known_builds(&self) -> &'static [KnownBuild] {
         &[

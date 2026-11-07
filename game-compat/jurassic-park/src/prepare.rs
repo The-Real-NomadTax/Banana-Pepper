@@ -2,6 +2,15 @@
 use sha2::{Digest, Sha256};
 use std::{fs, io::Write, path::Path};
 
+/// The game folder for a library root (`Jurassic Park 2015/`, or the older
+/// `linux based/Jurassic Park 2015/`) or the game's own folder.
+pub fn directory(root: &Path) -> std::path::PathBuf {
+    [root.join("Jurassic Park 2015"), root.join("linux based/Jurassic Park 2015"), root.to_path_buf()]
+        .into_iter()
+        .find(|p| p.join("game_original").is_file() || p.join("game_legacy_patched").is_file())
+        .unwrap_or_else(|| root.join("Jurassic Park 2015"))
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Build {
     Original,
