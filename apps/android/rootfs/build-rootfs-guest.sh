@@ -27,7 +27,10 @@ apt-get autoremove -y --purge
 mkdir -p /opt/arcade
 # Trim the image.
 apt-get clean
-rm -rf /var/lib/apt/lists/* /var/cache/* /usr/share/doc/* /usr/share/man/* \
+# Keep each package's copyright file: the image is redistributed in the APK.
+find /usr/share/doc -mindepth 1 ! -name copyright ! -type d -delete
+find /usr/share/doc -mindepth 1 -type d -empty -delete
+rm -rf /var/lib/apt/lists/* /var/cache/* /usr/share/man/* \
        /usr/share/info/* /usr/share/lintian /usr/share/locale/* /tmp/* /root/box64
 /bin/bash /af/trim-rootfs-guest.sh
 echo ROOTFS_READY

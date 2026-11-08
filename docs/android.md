@@ -46,6 +46,20 @@ apps/android/fetch-proot.sh
 apps/android/build-apk.sh
 ```
 
+No phone is needed to build. On an x86-64 Linux host (WSL works), with `qemu-user` and a `proot` binary:
+
+```sh
+apps/android/rootfs/make-rootfs-qemu.sh   # Debian arm64 under PRoot + QEMU: build/rootfs.tar.gz, build/box64
+apps/android/fetch-wine.sh                 # Windows titles: pinned Wine WoW64 build
+apps/android/prepare-x64-libs.sh           # Debian x86-64 libstdc++/libgcc_s for Box64
+apps/android/fetch-proot.sh                # Termux talloc/shmem and headers
+apps/android/build-proot.sh                # patched PRoot (any NDK: a non-Linux NDK is used through host clang + LLD_DIR)
+cargo run --release -p banana-dist --locked -- android-resources
+cargo run --release -p banana-runtime --bin banana-session -- --setup-legacy32
+```
+
+`build-apk.sh` then runs on Linux, or on Windows in Git Bash with the Windows SDK, NDK and a JDK; it downloads nothing but expects the Kotlin compiler in `build/kotlin-2.2.21`. The APK is signed with the local debug key (`apps/android/debug.keystore`): install it by allowing installs from unknown sources.
+
 The APK build compiles the ARM64 JNI library, asks `banana-dist android-resources`
 for crate-declared title artifacts, and builds pinned PRoot with the namespace
 extension. The JNI library retains 16 KiB load alignment. Stock PRoot is rejected
