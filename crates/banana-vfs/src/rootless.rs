@@ -25,7 +25,7 @@ use std::{
 };
 const BLOCK: u64 = 65536;
 const LIMIT: u64 = 256 * 1024 * 1024;
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 struct Object {
     handle: FileHandle,
     path: String,
@@ -64,6 +64,7 @@ struct Reply {
     accessed: u64,
     created: u64,
     body: Vec<u8>,
+    fd: Option<File>,
 }
 fn error(e: io::Error) -> i32 {
     e.raw_os_error().unwrap_or(match e.kind() {
@@ -260,6 +261,13 @@ impl State {
                 ..Default::default()
             });
         }
+        if op == 17 {
+            let object = self.objects.get(&id).ok_or(err(libc::EBADF))?;
+            return Ok(Reply {
+                fd: Some(object.cache.try_clone()?),
+                ..Default::default()
+            });
+        }
         self.sync(0)?;
         let path = if p.is_empty() {
             String::new()
@@ -315,6 +323,9 @@ impl State {
                     }
                     let cache = unsafe { File::from_raw_fd(fd) };
                     cache.set_len(m.len)?;
+                    // Android SELinux denies chmod on memfds. Guest permissions
+                    // come from View metadata; this fd is only a transient cache.
+                    #[cfg(not(target_os = "android"))]
                     {
                         use std::os::unix::fs::PermissionsExt;
                         cache.set_permissions(fs::Permissions::from_mode(if m.executable {
@@ -703,7 +714,42 @@ fn send(s: &mut UnixStream, r: &Reply) -> io::Result<()> {
     out.extend(r.accessed.to_le_bytes());
     out.extend(r.created.to_le_bytes());
     out.extend(&r.body);
-    s.write_all(&out)
+    s.write_all(&out)?;
+    if let Some(fd) = &r.fd {
+        send_fd(s, fd)?;
+    }
+    Ok(())
+}
+
+// A separate one-byte message keeps ancillary data out of framed RPC reads.
+fn send_fd(stream: &UnixStream, file: &File) -> io::Result<()> {
+    unsafe {
+        let mut byte = 0u8;
+        let mut vector = libc::iovec {
+            iov_base: (&mut byte as *mut u8).cast(),
+            iov_len: 1,
+        };
+        let mut control = [0usize; 8];
+        let mut message: libc::msghdr = std::mem::zeroed();
+        message.msg_iov = &mut vector;
+        message.msg_iovlen = 1;
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<i32>() as _) as _;
+        let header = libc::CMSG_FIRSTHDR(&message);
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<i32>() as _) as _;
+        libc::CMSG_DATA(header)
+            .cast::<i32>()
+            .write(file.as_raw_fd());
+        loop {
+            match libc::sendmsg(stream.as_raw_fd(), &message, libc::MSG_NOSIGNAL) {
+                1 => return Ok(()),
+                -1 if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => continue,
+                _ => return Err(io::Error::last_os_error()),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

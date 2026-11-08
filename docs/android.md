@@ -60,6 +60,13 @@ cargo run --release -p banana-runtime --bin banana-session -- --setup-legacy32
 
 `build-apk.sh` then runs on Linux, or on Windows in Git Bash with the Windows SDK, NDK and a JDK; it downloads nothing but expects the Kotlin compiler in `build/kotlin-2.2.21`. The APK is signed with the local debug key (`apps/android/debug.keystore`): install it by allowing installs from unknown sources.
 
+For the earlier `com.arcadefoundry` installation, build with
+`APP_ID=com.arcadefoundry` and retain its signing key. Back up app data before
+updating a development device, and install with
+`adb install --no-incremental -r apps/android/build/BananaPepper.apk`.
+On the SM-S721U, an incremental update reported success before Android removed
+the package and its data; the streamed installation succeeded.
+
 The APK build compiles the ARM64 JNI library, asks `banana-dist android-resources`
 for crate-declared title artifacts, and builds pinned PRoot with the namespace
 extension. The JNI library retains 16 KiB load alignment. Stock PRoot is rejected
@@ -88,3 +95,32 @@ The previous Android runner had verified Big Buck gameplay on a Galaxy S24 FE;
 that result does not certify this new namespace path. All migrated Android profiles
 are experimental until the rebuilt APK is tested on real devices. Rootfs/Box64/Wine
 runtime inputs and a physical-device run are required for end-to-end APK validation.
+
+### SM-S721U device follow-up (2026-11-07)
+
+The rebuilt APK installs through a streamed update and recognizes all five game
+folders. Device testing exposed and repaired the missing packaged artifact catalog,
+PRoot cross-build path/tool selection, omitted hard-link emulation, game preload
+leaking into support processes, and host paths being passed instead of virtual
+guest paths. Xvfb and the frame bridge start after those fixes.
+
+The new namespace path still cannot load Big Buck on this phone. A native probe
+under the app UID confirms that `memfd_create` and `ftruncate` succeed, while
+`fchmod` and reopening either `/proc/self/fd/<memfd>` or a parent's memfd return
+`EACCES`. Android therefore skips cache chmod (guest permissions come from view
+metadata), and view protocol 2 replaces procfs reopening with descriptor transfer:
+the Rust server sends the file's memfd to the tracer over `SCM_RIGHTS`, and the
+tracer passes it into the tracee through a private abstract socket whose peer
+credentials it checks. Because a transferred descriptor shares one kernel offset,
+the tracer keeps each open description's offset, mode and close-on-exec state
+itself (across `dup`, `fcntl`, `fork` and `exec`). `copy_file_range` and `sendfile`
+on view files return `EXDEV`/`EOPNOTSUPP` so libc falls back to ordinary reads
+and writes. No extracted game fallback was added. Protocol 2 has not yet run on
+the device, and gameplay remains unverified for the new session path.
+
+The targeted `banana-ffi`, `banana-compat`, `banana-vfs`, and `banana-android` host
+suite passes 41 tests with local socket access enabled. The ARM64 JNI library and
+signed/aligned APK build successfully. All five source game folders were restored
+after the incremental-install data loss; Jurassic's desktop launcher symlink and
+dangling `pmuser` symlink were omitted on Android external storage. Phone-only saves
+from the removed installation have not been recovered.

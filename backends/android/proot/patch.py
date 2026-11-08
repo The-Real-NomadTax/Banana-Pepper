@@ -6,6 +6,7 @@ root = Path(sys.argv[1])
 extension = Path(__file__).with_name("banana_vfs.c")
 target = root / "src/extension/banana_vfs.c"
 target.write_bytes(extension.read_bytes())
+(root / "src/extension/banana_fd.h").write_bytes(extension.with_name("banana_fd.h").read_bytes())
 p = root / "src/GNUmakefile"
 s = p.read_text()
 if "extension/banana_vfs.o" not in s:

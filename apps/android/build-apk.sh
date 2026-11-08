@@ -36,7 +36,7 @@ for f in "$B/rootfs.tar.gz" "$B/proot/proot" "$B/proot/loader" "$B/proot/libtall
     "$B/proot/libandroid-shmem.so" "$resources/banana-pepper.dist" "$KOTLIN/lib/kotlin-compiler.jar"; do
     [[ -f $f ]] || { echo "missing $f (see docs/android.md: Build)"; exit 1; }
 done
-grep -q BANANA_VFS_PROTOCOL_1 "$B/proot/proot" || { echo "build/proot/proot lacks the view protocol; run build-proot.sh"; exit 1; }
+grep -q BANANA_VFS_PROTOCOL_2 "$B/proot/proot" || { echo "build/proot/proot lacks the view protocol; run build-proot.sh"; exit 1; }
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TC/aarch64-linux-android26-clang$cmd"
 export CC_aarch64_linux_android="$TC/aarch64-linux-android26-clang$cmd"
 export CXX_aarch64_linux_android="$TC/aarch64-linux-android26-clang++$cmd"
@@ -48,7 +48,7 @@ mkdir -p "$B/kotlin-apk/"{assets/runtime/tools,gen,src/com/bananapepper,classes,
 A="$B/kotlin-apk/assets/runtime"
 cp "$B/proot/"{proot,loader,libtalloc.so.2,libandroid-shmem.so} "$A/"
 cp -R "$resources/games" "$A/tools/"
-cp "$resources/"{banana-pepper.dist,THIRD-PARTY-NOTICES.txt} "$A/tools/"
+cp "$resources/"{banana-pepper.dist,artifacts.json,THIRD-PARTY-NOTICES.txt} "$A/tools/"
 if [[ -f "$B/box64" ]]; then cp "$B/box64" "$A/tools/box64"; fi
 if [[ -d "$B/wine" ]]; then cp -rL "$B/wine" "$A/tools/wine"; fi
 if [[ -d "$B/x64-libs" ]]; then cp -rL "$B/x64-libs" "$A/tools/"; fi

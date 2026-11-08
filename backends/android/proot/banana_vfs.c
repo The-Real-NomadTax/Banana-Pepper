@@ -26,7 +26,7 @@
 #include <time.h>
 #include <unistd.h>
 
-const char banana_vfs_protocol[] = "BANANA_VFS_PROTOCOL_1";
+const char banana_vfs_protocol[] = "BANANA_VFS_PROTOCOL_2";
 struct __attribute__((packed)) Request {
   uint32_t op, flags;
   uint64_t id, offset, length;
@@ -48,6 +48,12 @@ struct State {
   int pending;
   long result;
   uint64_t sync;
+  struct FileTable *files;
+  int stage, listener, transfer_fd, socket_fd, open_mode;
+  int dup_source, fd_operation;
+  socklen_t address_size;
+  word_t scratch;
+  uint64_t open_id;
 };
 static int full(int fd, void *p, size_t n, int writing) {
   while (n) {
@@ -89,7 +95,11 @@ static int rpc(struct State *s, unsigned op, unsigned flags, uint64_t id,
       op, flags, id, offset, len, p ? strlen(p) : 0, q ? strlen(q) : 0};
   return exchange(s, &h, p, q, r, body, capacity);
 }
-static unsigned descriptor_flags(Tracee *t, int fd) {
+static int finish(struct State *s, Tracee *t, long result);
+#include "banana_fd.h"
+static unsigned descriptor_flags(struct State *s, Tracee *t, int fd) {
+  struct FileEntry *entry=file_entry(s,fd);
+  if(entry) return entry->file->mode;
   char path[80], line[256];
   unsigned flags = O_PATH;
   snprintf(path, sizeof(path), "/proc/%d/fdinfo/%d", t->pid, fd);
@@ -103,18 +113,21 @@ static unsigned descriptor_flags(Tracee *t, int fd) {
   return flags;
 }
 static uint64_t descriptor(struct State *s, Tracee *t, int fd) {
+  struct FileEntry *entry=file_entry(s,fd);
   char p[80], v[256], prefix[128];
   snprintf(p, sizeof(p), "/proc/%d/fd/%d", t->pid, fd);
   ssize_t n = readlink(p, v, sizeof(v) - 1);
-  if (n < 0)
-    return 0;
+  if (n < 0) { forget_file(s,fd); return 0; }
   v[n] = 0;
   snprintf(prefix, sizeof(prefix), "/memfd:banana-vfs-%s-", s->broker->tag);
-  if (strncmp(v, prefix, strlen(prefix)))
-    return 0;
-  return strtoull(v + strlen(prefix), NULL, 10);
+  if (strncmp(v, prefix, strlen(prefix))) { forget_file(s,fd); return 0; }
+  uint64_t id=strtoull(v+strlen(prefix),NULL,10);
+  if(entry && entry->file->id!=id) forget_file(s,fd);
+  return id;
 }
-static uint64_t position(Tracee *t, int fd) {
+static uint64_t position(struct State *s, Tracee *t, int fd) {
+  struct FileEntry *entry=file_entry(s,fd);
+  if(entry) return entry->file->offset;
   char p[80], line[256];
   snprintf(p, sizeof(p), "/proc/%d/fdinfo/%d", t->pid, fd);
   FILE *f = fopen(p, "r");
@@ -238,6 +251,29 @@ static int enter(struct State *s, Tracee *t) {
   unsigned flags = 0;
   s->pending = 0;
   s->sync = 0;
+  s->fd_operation=0;
+  if(nr==PR_dup || nr==PR_dup2 || nr==PR_dup3 ||
+     ((nr==PR_fcntl || nr==PR_fcntl64) && (b==F_DUPFD || b==F_DUPFD_CLOEXEC))) {
+    descriptor(s,t,(int)a); // Discard stale entries after exec or close_range.
+    s->dup_source=a; s->fd_operation=1;
+    s->result=(nr==PR_dup3 && (c&O_CLOEXEC)) ||
+              ((nr==PR_fcntl || nr==PR_fcntl64) && b==F_DUPFD_CLOEXEC);
+    return 0;
+  }
+  if((nr==PR_fcntl || nr==PR_fcntl64) && descriptor(s,t,(int)a)) {
+    struct FileEntry *entry=file_entry(s,(int)a);
+    if(!entry) return finish(s,t,-EBADF);
+    if(b==F_GETFL) return finish(s,t,entry->file->mode);
+    if(b==F_SETFL) {
+      unsigned mask=O_APPEND|O_NONBLOCK|O_ASYNC|O_DIRECT|O_NOATIME;
+      entry->file->mode=(entry->file->mode&~mask)|(c&mask);
+      return finish(s,t,0);
+    }
+    if(b==F_SETFD) {
+      s->dup_source=a; s->fd_operation=3; s->result=!!(c&FD_CLOEXEC);
+    }
+    return 0;
+  }
   if (nr == PR_mremap) {
     char file[80], line[PATH_MAX + 256], prefix[128];
     snprintf(file, sizeof(file), "/proc/%d/maps", t->pid);
@@ -268,35 +304,9 @@ static int enter(struct State *s, Tracee *t) {
              target = descriptor(s, t, target_fd);
     if (!source && !target)
       return 0;
-    uint64_t source_offset = position(t, source_fd),
-             target_offset = position(t, target_fd);
-    word_t source_pointer = nr == PR_copy_file_range ? b : c;
-    if (source_pointer &&
-        read_data(t, &source_offset, source_pointer, sizeof(source_offset)) < 0)
-      return -EFAULT;
-    if (nr == PR_copy_file_range && d &&
-        read_data(t, &target_offset, d, sizeof(target_offset)) < 0)
-      return -EFAULT;
-    uint64_t length = nr == PR_copy_file_range ? e : d;
-    if (length > 65536)
-      length = 65536;
-    if (source) {
-      status =
-          rpc(s, 3, 0, source, source_offset, length, NULL, NULL, &r, NULL, 0);
-      if (status)
-        return finish(s, t, status);
-    }
-    if (target) {
-      status =
-          rpc(s, 3, 1, target, target_offset, length, NULL, NULL, &r, NULL, 0);
-      if (status)
-        return finish(s, t, status);
-      s->sync = target;
-      t->sysexit_pending = true;
-      t->restart_how = PTRACE_SYSCALL;
-    }
-    poke_reg(t, nr == PR_copy_file_range ? SYSARG_5 : SYSARG_4, length);
-    return 0;
+    // A shared transferred cache descriptor has no kernel-side per-open offset.
+    // Let libc's copy loop fall back to the ordinary virtual read/write path.
+    return finish(s,t,nr==PR_copy_file_range ? -EXDEV : -EOPNOTSUPP);
   }
   if (nr == PR_splice) {
     if (descriptor(s, t, (int)a) || descriptor(s, t, (int)c))
@@ -384,18 +394,8 @@ static int enter(struct State *s, Tracee *t) {
     status = rpc(s, 2, flags, 0, 0, 0, p, NULL, &r, body, sizeof(body));
     if (status)
       return finish(s, t, status);
-    status = set_sysarg_path(t, body, arg);
-    if (status < 0)
-      return status;
-    mode &= ~(O_CREAT | O_EXCL | O_TRUNC | O_DIRECTORY | O_NOFOLLOW);
-    poke_reg(t, nr == PR_open ? SYSARG_2 : SYSARG_3, mode);
-    if (nr == PR_creat) {
-      set_sysnum(t, PR_open);
-      poke_reg(t, SYSARG_2, mode);
-    }
-    t->sysexit_pending = true;
-    t->restart_how = PTRACE_SYSCALL;
-    return 1;
+    status = begin_transfer(s,t,r.id,mode);
+    return status<0 ? finish(s,t,status) : status;
   }
   case PR_openat2:
     return finish(s, t, -ENOTSUP);
@@ -511,13 +511,13 @@ descriptor_call:
   case PR_fstat:
     return metadata(s, t, NULL, id, b, 0);
   case PR_ftruncate:
-    if ((descriptor_flags(t, (int)a) & (O_ACCMODE | O_PATH)) == O_RDONLY ||
-        (descriptor_flags(t, (int)a) & O_PATH))
+    if ((descriptor_flags(s, t, (int)a) & (O_ACCMODE | O_PATH)) == O_RDONLY ||
+        (descriptor_flags(s, t, (int)a) & O_PATH))
       return finish(s, t, -EBADF);
     status = rpc(s, 5, 0, id, 0, b, NULL, NULL, &r, NULL, 0);
     return finish(s, t, status);
   case PR_fchmod:
-    if ((descriptor_flags(t, (int)a) & O_ACCMODE) == O_RDONLY)
+    if ((descriptor_flags(s, t, (int)a) & O_ACCMODE) == O_RDONLY)
       return finish(s, t, -EROFS);
     status = rpc(s, 9, 0x80000000 | b, id, UINT64_MAX, UINT64_MAX, NULL, NULL,
                  &r, NULL, 0);
@@ -535,21 +535,17 @@ descriptor_call:
     }
     return finish(s, t, status);
   case PR_getdents64: {
-    uint64_t off = position(t, (int)a);
+    uint64_t off = position(s, t, (int)a);
     status = rpc(s, 12, 0, id, off, c, NULL, NULL, &r, body, sizeof(body));
     if (status)
       return finish(s, t, status);
     status = write_data(t, b, body, r.size);
     if (status < 0)
       return status;
-    s->pending = 1;
-    s->result = r.size;
-    set_sysnum(t, PR_lseek);
-    poke_reg(t, SYSARG_2, r.length);
-    poke_reg(t, SYSARG_3, SEEK_SET);
-    t->sysexit_pending = true;
-    t->restart_how = PTRACE_SYSCALL;
-    return 1;
+    struct FileEntry *entry=file_entry(s,(int)a);
+    if(!entry) return finish(s,t,-EBADF);
+    entry->file->offset=r.length;
+    return finish(s,t,r.size);
   }
   case PR_fallocate:
     return finish(s, t, -EOPNOTSUPP);
@@ -561,11 +557,29 @@ descriptor_call:
     status = rpc(s, 4, 0, id, 0, 0, NULL, NULL, &r, NULL, 0);
     if (status)
       return finish(s, t, status);
+    s->fd_operation=2; s->dup_source=a;
     return 0;
-  case PR_lseek:
-    return 0;
+  case PR_lseek: {
+    struct FileEntry *entry=file_entry(s,(int)a);
+    if(!entry || (entry->file->mode&O_PATH)) return finish(s,t,-EBADF);
+    int64_t base=0, next;
+    if(c==SEEK_CUR) base=entry->file->offset;
+    else if(c==SEEK_END) {
+      status=rpc(s,1,0,id,0,0,NULL,NULL,&r,NULL,0);
+      if(status) return finish(s,t,status);
+      base=r.length;
+    } else if(c!=SEEK_SET) return finish(s,t,-EINVAL);
+    if(__builtin_add_overflow(base,(int64_t)b,&next) || next<0)
+      return finish(s,t,-EINVAL);
+    entry->file->offset=next;
+    return finish(s,t,next);
+  }
   default: {
     if (nr == PR_mmap || nr == PR_mmap2) {
+      unsigned mode=descriptor_flags(s,t,(int)e);
+      if((mode&O_PATH) || (mode&O_ACCMODE)==O_WRONLY ||
+         ((d&MAP_SHARED) && (c&PROT_WRITE) && (mode&O_ACCMODE)==O_RDONLY))
+        return finish(s,t,-EACCES);
       status = rpc(s, 3, (d & MAP_SHARED) ? 2 : 0, id,
                    nr == PR_mmap2 ? f * 4096 : f, b, NULL, NULL, &r, NULL, 0);
       if (status)
@@ -575,12 +589,12 @@ descriptor_call:
       return 0;
     }
     unsigned writing = nr == PR_write || nr == PR_pwrite64 || nr == PR_writev;
-    unsigned mode = descriptor_flags(t, (int)a);
+    unsigned mode = descriptor_flags(s, t, (int)a);
     if ((mode & O_PATH) || (writing ? (mode & O_ACCMODE) == O_RDONLY
                                     : (mode & O_ACCMODE) == O_WRONLY))
       return finish(s, t, -EBADF);
     uint64_t offset =
-        nr == PR_pread64 || nr == PR_pwrite64 ? d : position(t, (int)a);
+        nr == PR_pread64 || nr == PR_pwrite64 ? d : position(s, t, (int)a);
     if (writing && (mode & O_APPEND) && nr != PR_pwrite64) {
       status = rpc(s, 1, 0, id, 0, 0, NULL, NULL, &r, NULL, 0);
       if (status)
@@ -642,14 +656,10 @@ descriptor_call:
       return finish(s, t, status);
     if (nr == PR_pread64 || nr == PR_pwrite64)
       return finish(s, t, r.length);
-    s->pending = 1;
-    s->result = r.length;
-    set_sysnum(t, PR_lseek);
-    poke_reg(t, SYSARG_2, offset + r.length);
-    poke_reg(t, SYSARG_3, SEEK_SET);
-    t->sysexit_pending = true;
-    t->restart_how = PTRACE_SYSCALL;
-    return 1;
+    struct FileEntry *entry=file_entry(s,(int)a);
+    if(!entry) return finish(s,t,-EBADF);
+    entry->file->offset=offset+r.length;
+    return finish(s,t,r.length);
   }
   }
 }
@@ -664,6 +674,10 @@ int banana_vfs_callback(Extension *x, ExtensionEvent event, intptr_t d1,
       return -EINVAL;
     s = talloc_zero(x, struct State);
     x->config = s;
+    s->listener=s->transfer_fd=s->socket_fd=-1;
+    talloc_set_destructor(s,transfer_cleanup);
+    s->files=talloc_zero(s,struct FileTable);
+    if(!s->files) return -ENOMEM;
     s->broker = talloc_zero(s, struct Broker);
     s->broker->fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (s->broker->fd < 0)
@@ -678,9 +692,12 @@ int banana_vfs_callback(Extension *x, ExtensionEvent event, intptr_t d1,
     struct Reply r;
     int e = rpc(s, 11, 0, 0, 0, 0, NULL, NULL, &r, s->broker->tag,
                 sizeof(s->broker->tag));
-    if (e || r.length != 1)
+    if (e || r.length != 2)
       return e ? e : -EPROTO;
     static const FilteredSysnum calls[] = {
+        {PR_dup, FILTER_SYSEXIT}, {PR_dup2, FILTER_SYSEXIT},
+        {PR_dup3, FILTER_SYSEXIT}, {PR_fcntl, FILTER_SYSEXIT},
+        {PR_fcntl64, FILTER_SYSEXIT},
         {PR_mremap, FILTER_SYSEXIT},     {PR_munmap, FILTER_SYSEXIT},
         {PR_msync, FILTER_SYSEXIT},      {PR_copy_file_range, FILTER_SYSEXIT},
         {PR_sendfile, FILTER_SYSEXIT},   {PR_sendfile64, FILTER_SYSEXIT},
@@ -721,12 +738,35 @@ int banana_vfs_callback(Extension *x, ExtensionEvent event, intptr_t d1,
     struct State *parent = ((Extension *)d1)->config;
     s = talloc_zero(x, struct State);
     s->broker = talloc_reference(s, parent->broker);
+    s->listener=s->transfer_fd=s->socket_fd=-1;
+    talloc_set_destructor(s,transfer_cleanup);
+    s->files=(d2 & CLONE_FILES) ? talloc_reference(s,parent->files)
+                              : copy_files(s,parent->files,0);
+    if(!s->files) return -ENOMEM;
     x->config = s;
     return 0;
   }
   case SYSCALL_ENTER_START:
     return enter(s, t);
+  case SYSCALL_CHAINED_EXIT:
+    return s->stage ? transfer_step(s,t) : 0;
   case SYSCALL_EXIT_START:
+    if(s->stage) return transfer_step(s,t);
+    if(s->fd_operation) {
+      long result=(long)peek_reg(t,CURRENT,SYSARG_RESULT);
+      int operation=s->fd_operation;
+      s->fd_operation=0;
+      if(result>=0) {
+        struct FileEntry *entry=file_entry(s,s->dup_source);
+        if(operation==1) {
+          if(entry && result!=s->dup_source) {
+            int e=remember_file(s,result,entry->file,s->result);
+            if(e) return e;
+          } else if(!entry) forget_file(s,result);
+        } else if(operation==2) forget_file(s,s->dup_source);
+        else if(operation==3 && entry) entry->cloexec=s->result;
+      }
+    }
     if (s->pending) {
       poke_reg(t, SYSARG_RESULT, s->result);
       s->pending = 0;
@@ -741,6 +781,10 @@ int banana_vfs_callback(Extension *x, ExtensionEvent event, intptr_t d1,
     }
     return 0;
   case EXECVE_PROC_EXE: {
+    struct FileTable *old=s->files;
+    s->files=copy_files(s,old,1);
+    if(!s->files) { s->files=old; return -ENOMEM; }
+    talloc_unlink(s,old);
     struct execve_proc_exe_state *info = (void *)d1;
     char name[256], prefix[128], guest[PATH_MAX];
     struct Reply r;

@@ -12,7 +12,7 @@ TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 if [[ -x "$TC/aarch64-linux-android26-clang" ]]; then
     CC="$TC/aarch64-linux-android26-clang"
     STRIP="$TC/llvm-strip"
-    tools=()
+    tools=(STRIP="$STRIP" OBJCOPY="$TC/llvm-objcopy" OBJDUMP="$TC/llvm-objdump")
 else
     # An NDK for another host (e.g. the Windows NDK seen from WSL): its sysroot
     # and compiler runtime are host-independent, so the host's clang and lld
@@ -33,8 +33,8 @@ python3 "$root/backends/android/proot/patch.py" "$source"
 [[ -f "$out/include/talloc.h" ]] || { echo 'Run fetch-proot.sh first'; exit 1; }
 make -C "$source/src" -j"$(nproc)" \
     CC="$CC" \
-    CPPFLAGS="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I$source/src -I$out/include" \
-    LDFLAGS="-L$out -l:libtalloc.so.2 -landroid-shmem -Wl,-z,noexecstack -Wl,-z,max-page-size=16384" \
+    CPPFLAGS="-D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I\"$source/src\" -I\"$out/include\"" \
+    LDFLAGS="-L\"$out\" -l:libtalloc.so.2 -landroid-shmem -Wl,-z,noexecstack -Wl,-z,max-page-size=16384" \
     PROOT_WITH_LIBANDROID_SHMEM=1 "${tools[@]}"
 cp "$source/src/proot" "$out/proot"
 cp "$source/src/loader/loader" "$out/loader"

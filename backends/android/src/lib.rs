@@ -45,9 +45,18 @@ impl ExecutionBackend for Android {
     }
     fn launch(&self, mut s: PreparedSession) -> Result<Box<dyn SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
-        // PRoot brokers the guest's file calls into the view; `mount` is the
-        // empty guest directory standing for the view's root.
-        let (mount, view) = expose(&mut s)?;
+        // PRoot brokers the guest's file calls into the view; the returned
+        // empty directory only stands for the view's root, so the guest is
+        // given the planned root's virtual path instead.
+        let (_empty, view) = expose(&mut s)?;
+        let guest_root = if let Some((drive, relative)) = s.plan.guest_root.split_once(":/") {
+            PathBuf::from(format!(
+                "/work/prefix/drive_{}/{relative}",
+                drive.to_ascii_lowercase()
+            ))
+        } else {
+            PathBuf::from(&s.plan.guest_root)
+        };
         let files = s
             .resources
             .parent()
@@ -72,9 +81,9 @@ impl ExecutionBackend for Android {
         if !std::fs::read(&proot)
             .map_err(|e| format!("Missing Android PRoot: {e}"))?
             .windows(21)
-            .any(|v| v == b"BANANA_VFS_PROTOCOL_1")
+            .any(|v| v == b"BANANA_VFS_PROTOCOL_2")
         {
-            return Err("Android PRoot lacks virtual filesystem protocol 1. Rebuild/install the application runtime; stock PRoot cannot expose mounted game content.".into());
+            return Err("Android PRoot lacks virtual filesystem protocol 2. Rebuild/install the application runtime; stock PRoot cannot expose mounted game content.".into());
         }
         let mut transport = Transport {
             files,
@@ -185,9 +194,9 @@ impl ExecutionBackend for Android {
         );
         transport.environment.insert(
             "BANANA_ANDROID_CWD".into(),
-            mount.join(&s.plan.cwd).to_string_lossy().into_owned(),
+            guest_root.join(&s.plan.cwd).to_string_lossy().into_owned(),
         );
-        let exe = mount
+        let exe = guest_root
             .join(&s.plan.executable)
             .to_string_lossy()
             .into_owned();
@@ -206,7 +215,7 @@ impl ExecutionBackend for Android {
         argv.extend(s.plan.args.clone());
         environment.insert(
             "BANANA_ANDROID_CWD".into(),
-            mount.join(&s.plan.cwd).to_string_lossy().into_owned(),
+            guest_root.join(&s.plan.cwd).to_string_lossy().into_owned(),
         );
         transport.environment = environment;
         owned.game = Some(transport.spawn("game", &argv, s.plan.timeout_ms)?);
@@ -279,7 +288,7 @@ impl Transport {
     ) -> Result<Box<dyn SessionHandle>, String> {
         let mut command = Command::new(self.files.join("bin/proot"));
         command
-            .args(["--kill-on-exit", "-0", "-r"])
+            .args(["--kill-on-exit", "--link2symlink", "-0", "-r"])
             .arg(self.files.join("rootfs"));
         for (host, guest) in [
             (PathBuf::from("/dev"), "/dev"),
@@ -332,7 +341,7 @@ impl Transport {
             ]);
         // Host-side broker variables are never interpolated into shell commands.
         for (k, v) in &self.environment {
-            if !k.starts_with("BANANA_VFS_") {
+            if !k.starts_with("BANANA_VFS_") && (name == "game" || k != "LD_PRELOAD") {
                 command.arg(format!("{k}={v}"));
             }
         }

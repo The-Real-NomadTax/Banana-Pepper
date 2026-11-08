@@ -118,10 +118,10 @@ fn missing(game: &dyn banana_api::GameCompat, files: &Path) -> Vec<String> {
         }
     }
     if !fs::read(files.join("bin/proot"))
-        .is_ok_and(|bytes| bytes.windows(21).any(|s| s == b"BANANA_VFS_PROTOCOL_1"))
+        .is_ok_and(|bytes| bytes.windows(21).any(|s| s == b"BANANA_VFS_PROTOCOL_2"))
     {
         missing.push(
-            "Android virtual filesystem protocol 1 (rebuild/install the patched runtime)".into(),
+            "Android virtual filesystem protocol 2 (rebuild/install the patched runtime)".into(),
         );
     }
     missing
