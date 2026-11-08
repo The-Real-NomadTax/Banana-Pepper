@@ -36,6 +36,13 @@ adapters remain under `game-compat/`. Reusable box32/libc and pthread ABI fixes 
 in the generic Linux guest services. Minecraft and Skylanders remain excluded from
 the Android registry until they have Android requirements and validation.
 
+PRoot and its view extension are being replaced by `banana-tracer`
+(`backends/android/tracer`), a Rust ptrace tracer that takes the same command
+line. Its PRoot core (guest root and binds, exec through guest interpreters,
+fake root, link emulation, kill-on-exit) passes its Linux tests. The view
+protocol client, seccomp filtering and device validation remain, and sessions
+still run PRoot until they are done (see the tracer's README).
+
 ## Build
 
 Every step is a `cargo xtask android` command (`tools/xtask`). Outputs and

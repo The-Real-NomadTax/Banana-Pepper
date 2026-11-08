@@ -31,7 +31,7 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
 | `backends/native` | Windows PE (staging, PE import injection), Linux `banana-sandbox` |
 | `backends/wine` | Wine prefix in a held session namespace |
 | `backends/water` | Linux-on-Windows runtime, like Wine in reverse: `water-x86` (ELF32 dynamic linker plus builtin libc/GLUT/GL/OSS) and `water-x64` (static ELF64); optional preload adapters (`AdapterV2`) |
-| `backends/android` | Box64 / Wine / PRoot plumbing, display/audio bridges (`bridge.rs`) |
+| `backends/android` | Box64 / Wine / PRoot plumbing, display/audio bridges (`bridge.rs`); `tracer/`: the Rust PRoot replacement (in progress, see its README) |
 | `guest/view-shim` | `banana_view.dll`: hooks Win32 file APIs to read the served view |
 | `guest/linux-shim`, `guest/win32` | Reusable in-guest services, included by game crates via `#[path]` |
 | `apps/desktop` | `arcade-desktop` (egui), including ZAR packing (`--pack`) |

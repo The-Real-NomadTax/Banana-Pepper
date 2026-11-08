@@ -4,6 +4,7 @@ members = [
     "crates/*",
     "apps/desktop",
     "backends/android",
+    "backends/android/tracer",
     "backends/native",
     "backends/wine",
     "backends/water",

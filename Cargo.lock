@@ -470,6 +470,13 @@ name = "banana-super-cars-hook"
 version = "0.1.0"
 
 [[package]]
+name = "banana-tracer"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "banana-vfs"
 version = "0.1.0"
 dependencies = [

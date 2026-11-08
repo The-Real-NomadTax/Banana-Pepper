@@ -1,0 +1,14 @@
+[package]
+name = "banana-tracer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust ptrace tracer giving Android guests their own root (replacing PRoot)"
+publish = false
+
+[[bin]]
+name = "banana-tracer"
+path = "src/main.rs"
+
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
+libc = "0.2"
