@@ -22,14 +22,11 @@ fn folder_archive_memory_have_the_same_contract() {
     fs::create_dir_all(folder.join("assets")).unwrap();
     fs::write(folder.join("assets/test.bin"), b"0123456789").unwrap();
     let archive = t.path().join("game.zar");
-    let mut writer = zarchive_rs::ArchiveWriter::new(fs::File::create(&archive).unwrap()).unwrap();
-    writer.create_dir_all("assets").unwrap();
-    writer
-        .start_file("assets/test.bin")
-        .unwrap()
-        .write_all(b"0123456789")
-        .unwrap();
-    writer.finish().unwrap();
+    let mut writer = zarust::ArchiveWriter::new(fs::File::create(&archive).unwrap());
+    writer.make_dir("assets", true).unwrap();
+    writer.start_file("assets/test.bin").unwrap();
+    writer.append_data(b"0123456789").unwrap();
+    writer.finish().unwrap().flush().unwrap();
     let before = fs::read(&archive).unwrap();
     contract(&Folder::new(&folder).unwrap());
     contract(&Zar::new(&archive).unwrap());
@@ -39,6 +36,42 @@ fn folder_archive_memory_have_the_same_contract() {
     assert_eq!(fs::read(archive).unwrap(), before);
     assert_eq!(fs::read_dir(t.path()).unwrap().count(), 2);
 }
+/// An archive written by the official ZArchive library (`tests/fixtures`,
+/// made with zarchive-rs) reads through the pure-Rust reader.
+#[test]
+fn archives_from_the_official_library_are_served() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/official.zar");
+    let zar = Zar::new(&fixture).unwrap();
+    zar.verify().unwrap();
+    contract(&zar);
+    let pattern: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+    assert_eq!(read_all(&zar, "assets/Deep/Pattern.bin", 1 << 20).unwrap(), pattern);
+    let file = zar.open("assets/Deep/Pattern.bin").unwrap();
+    let mut span = vec![0; 100];
+    assert_eq!(file.read_at(65_500, &mut span).unwrap(), 100);
+    assert_eq!(span, pattern[65_500..65_600]);
+    assert!(zar.metadata("game").unwrap().executable);
+    assert!(!zar.metadata("assets/test.bin").unwrap().executable);
+}
+
+/// Packing round-trips through the reader, and the archive verifies.
+#[test]
+fn packed_folders_read_back() {
+    let t = tempfile::tempdir().unwrap();
+    let game = t.path().join("game");
+    fs::create_dir_all(game.join("data/empty")).unwrap();
+    let noise: Vec<u8> = (0..300_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+    fs::write(game.join("data/noise.bin"), &noise).unwrap();
+    fs::write(game.join("data/blank.txt"), b"").unwrap();
+    let p = t.path().join("game.zar");
+    crate::pack::convert(&game, &p, &Default::default(), |_| {}).unwrap();
+    let zar = Zar::new(&p).unwrap();
+    zar.verify().unwrap();
+    assert_eq!(read_all(&zar, "data/noise.bin", 1 << 20).unwrap(), noise);
+    assert_eq!(zar.metadata("data/blank.txt").unwrap().len, 0);
+    assert!(zar.metadata("data/empty").unwrap().directory);
+}
+
 #[test]
 fn folder_link_cannot_escape() {
     let t = tempfile::tempdir().unwrap();

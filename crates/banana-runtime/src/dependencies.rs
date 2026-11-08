@@ -93,57 +93,26 @@ fn tar_path(archive: &Path) -> Result<PathBuf, String> {
     fs::write(&path, bytes).map_err(|e| e.to_string())?;
     Ok(path)
 }
+/// Decode a Zstandard stream (one or more frames) of at most `limit` bytes,
+/// in pure Rust.
 fn decode_zstd(bytes: &[u8], limit: usize) -> Result<Vec<u8>, String> {
-    struct Decoder(*mut zstd_sys::ZSTD_DStream);
-    impl Drop for Decoder {
-        fn drop(&mut self) {
-            unsafe {
-                zstd_sys::ZSTD_freeDStream(self.0);
-            }
-        }
-    }
-    let stream = Decoder(unsafe { zstd_sys::ZSTD_createDStream() });
-    if stream.0.is_null() {
-        return Err("Cannot allocate Zstandard decoder".into());
-    }
-    let init = unsafe { zstd_sys::ZSTD_initDStream(stream.0) };
-    if unsafe { zstd_sys::ZSTD_isError(init) } != 0 {
-        return Err("Cannot initialize Zstandard decoder".into());
-    }
-    let mut input = zstd_sys::ZSTD_inBuffer {
-        src: bytes.as_ptr().cast(),
-        size: bytes.len(),
-        pos: 0,
-    };
+    use std::io::Read;
+    let mut input = bytes;
     let mut output = Vec::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let before = input.pos;
-        let mut chunk = zstd_sys::ZSTD_outBuffer {
-            dst: buffer.as_mut_ptr().cast(),
-            size: buffer.len(),
-            pos: 0,
-        };
-        let remaining =
-            unsafe { zstd_sys::ZSTD_decompressStream(stream.0, &mut chunk, &mut input) };
-        if unsafe { zstd_sys::ZSTD_isError(remaining) } != 0 {
-            return Err(format!(
-                "Invalid Zstandard archive: {}",
-                unsafe { std::ffi::CStr::from_ptr(zstd_sys::ZSTD_getErrorName(remaining)) }
-                    .to_string_lossy()
-            ));
-        }
-        if output.len().saturating_add(chunk.pos) > limit {
+    while !input.is_empty() {
+        let decoder = ruzstd::decoding::StreamingDecoder::new(&mut input)
+            .map_err(|e| format!("Invalid Zstandard archive: {e}"))?;
+        let room = (limit - output.len()) as u64;
+        // One byte past the limit tells an oversized stream apart.
+        decoder
+            .take(room + 1)
+            .read_to_end(&mut output)
+            .map_err(|e| format!("Invalid Zstandard archive: {e}"))?;
+        if output.len() > limit {
             return Err("Dependency archive expands beyond its size limit".into());
         }
-        output.extend_from_slice(&buffer[..chunk.pos]);
-        if remaining == 0 && input.pos == input.size {
-            return Ok(output);
-        }
-        if input.pos == before && chunk.pos == 0 {
-            return Err("Truncated Zstandard archive".into());
-        }
     }
+    Ok(output)
 }
 pub fn write_library(path: &Path, bytes: &[u8], bits: u8) -> Result<(), String> {
     if !bytes.starts_with(&[0x7f, b'E', b'L', b'F', if bits == 64 { 2 } else { 1 }]) {
@@ -248,20 +217,14 @@ mod tests {
     #[test]
     fn zstandard_decoder_needs_no_external_program_and_enforces_bounds() {
         let data = b"synthetic dependency archive";
-        let bound = unsafe { zstd_sys::ZSTD_compressBound(data.len()) };
-        let mut compressed = vec![0u8; bound];
-        let size = unsafe {
-            zstd_sys::ZSTD_compress(
-                compressed.as_mut_ptr().cast(),
-                compressed.len(),
-                data.as_ptr().cast(),
-                data.len(),
-                1,
-            )
-        };
-        assert_eq!(unsafe { zstd_sys::ZSTD_isError(size) }, 0);
-        compressed.truncate(size);
+        let compressed = ruzstd::encoding::compress_to_vec(
+            &data[..],
+            ruzstd::encoding::CompressionLevel::Fastest,
+        );
         assert_eq!(decode_zstd(&compressed, 1024).unwrap(), data);
+        // Concatenated frames decode as one stream.
+        let twice = [compressed.clone(), compressed.clone()].concat();
+        assert_eq!(decode_zstd(&twice, 1024).unwrap(), [&data[..], &data[..]].concat());
         assert!(decode_zstd(&compressed, 1).is_err());
         assert!(decode_zstd(&compressed[..compressed.len() - 1], 1024).is_err());
         assert!(decode_zstd(b"invalid", 1024).is_err());

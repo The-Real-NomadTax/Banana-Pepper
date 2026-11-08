@@ -44,24 +44,13 @@ pub fn build() -> Result<()> {
         }
     }
 
-    // The JNI library and the tracer that runs every guest process.
-    let clang = sdk.clang();
-    let clangxx = clang.with_file_name(
-        clang
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .replacen("clang", "clang++", 1),
-    );
+    // The JNI library and the tracer that runs every guest process. Both are
+    // pure Rust: the NDK only links them.
     run(Command::new("cargo")
         .current_dir(&root)
         .args(["build", "--release", "--locked", "--target", "aarch64-linux-android"])
         .args(["-p", "banana-ffi", "-p", "banana-tracer"])
-        .env("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", &clang)
-        .env("CC_aarch64_linux_android", &clang)
-        .env("CXX_aarch64_linux_android", &clangxx)
-        .env("AR_aarch64_linux_android", sdk.tool("llvm-ar"))
-        .env("CXXFLAGS_aarch64_linux_android", "-std=c++20"))?;
+        .env("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", sdk.clang()))?;
 
     let work = build.join("kotlin-apk");
     if work.exists() {
@@ -117,15 +106,9 @@ pub fn build() -> Result<()> {
         libs.join("libbanana_ffi.so"),
     )
     .ctx("libbanana_ffi.so")?;
-    // zarchive is C++: the NDK runtime ships next to the JNI library.
-    fs::copy(
-        sdk.prebuilt.join("sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"),
-        libs.join("libc++_shared.so"),
-    )
-    .ctx("libc++_shared.so")?;
-    for library in ["libbanana_ffi.so", "libc++_shared.so"] {
-        run(Command::new(sdk.tool("llvm-strip")).arg("--strip-unneeded").arg(libs.join(library)))?;
-    }
+    run(Command::new(sdk.tool("llvm-strip"))
+        .arg("--strip-unneeded")
+        .arg(libs.join("libbanana_ffi.so")))?;
     fs::write(
         work.join("src/com/bananapepper/BuildInfo.kt"),
         format!(

@@ -15,7 +15,7 @@ banana-vfs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-zstd-sys = { version = "2.1.2", default-features = false }
+ruzstd = "0.8.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

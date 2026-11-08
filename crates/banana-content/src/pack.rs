@@ -7,7 +7,7 @@ use std::{
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
-use zarchive_rs::{Archive, ArchiveWriter};
+use zarust::{ArchiveReader, ArchiveWriter};
 
 #[derive(Clone, Debug, Default)]
 pub struct Progress {
@@ -161,7 +161,7 @@ pub fn convert(
             .prefix(".arcade-zar-")
             .tempfile_in(parent)
             .map_err(|e| e.to_string())?;
-        let mut writer = ArchiveWriter::new(temporary.as_file_mut()).map_err(|e| e.to_string())?;
+        let mut writer = ArchiveWriter::new(std::io::BufWriter::new(temporary.as_file_mut()));
         let mut buffer = vec![0; 1024 * 1024];
         progress.phase = "Compressing";
         report(progress.clone());
@@ -178,11 +178,11 @@ pub fn convert(
                 return Err(format!("Source changed during conversion: {path}"));
             }
             if before.is_dir() {
-                writer.create_dir_all(&path).map_err(|e| e.to_string())?;
+                writer.make_dir(&path, true).map_err(|e| e.to_string())?;
                 continue;
             }
             let mut input = File::open(&resolved).map_err(|e| format!("{path}: {e}"))?;
-            let mut entry = writer.start_file(&path).map_err(|e| e.to_string())?;
+            writer.start_file(&path).map_err(|e| e.to_string())?;
             let mut copied = 0;
             progress.path = path.clone();
             loop {
@@ -191,8 +191,8 @@ pub fn convert(
                 if count == 0 {
                     break;
                 }
-                entry
-                    .write_all(&buffer[..count])
+                writer
+                    .append_data(&buffer[..count])
                     .map_err(|e| e.to_string())?;
                 copied += count as u64;
                 progress.bytes_done += count as u64;
@@ -208,17 +208,23 @@ pub fn convert(
         check_cancel(cancel)?;
         progress.phase = "Finalizing";
         report(progress.clone());
-        writer.finish().map_err(|e| e.to_string())?;
+        writer
+            .finish()
+            .map_err(|e| e.to_string())?
+            .flush()
+            .map_err(|e| e.to_string())?;
         temporary.as_file().sync_all().map_err(|e| e.to_string())?;
         check_cancel(cancel)?;
         progress.phase = "Verifying archive";
         report(progress.clone());
-        let mut archive = Archive::new(BufReader::new(
+        let mut archive = ArchiveReader::new(BufReader::new(
             File::open(temporary.path()).map_err(|e| e.to_string())?,
         ))
         .map_err(|e| e.to_string())?;
-        archive.verify_integrity().map_err(|e| e.to_string())?;
-        preflight(&mut archive)?;
+        if !archive.verify_integrity().map_err(|e| e.to_string())? {
+            return Err("The written archive failed its integrity check".into());
+        }
+        preflight(&archive)?;
         drop(archive);
         check_cancel(cancel)?;
         temporary

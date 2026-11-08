@@ -5,8 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "Folder and ZArchive game sources for Banana Pepper"
 
+[features]
+# Pack archives with the C libzstd at the official level 6 (byte-identical to
+# the ZArchive tool). Without it, reading and packing are pure Rust (ruzstd),
+# and packed archives are valid but slightly larger. The desktop app enables it.
+zstd = ["zarust/zstd", "zarust/parallel"]
+
 [dependencies]
-zarchive-rs = "0.1.1"
+zarust = { version = "0.3.0", default-features = false, features = ["ruzstd"] }
 sha2.workspace = true
 tempfile = "3.20.0"
 

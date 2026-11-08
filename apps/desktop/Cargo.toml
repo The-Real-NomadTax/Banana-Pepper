@@ -8,7 +8,8 @@ license.workspace = true
 [dependencies]
 banana-api.workspace = true
 banana-compat.workspace = true
-banana-content.workspace = true
+# Packing writes at the official zstd level (C libzstd); reading stays pure Rust.
+banana-content = { workspace = true, features = ["zstd"] }
 banana-core.workspace = true
 banana-input.workspace = true
 banana-runtime.workspace = true
@@ -16,12 +17,10 @@ banana-settings.workspace = true
 eframe.workspace = true
 serde_json.workspace = true
 rfd = "0.17.2"
-
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tempfile = "3.20.0"
-zarchive-rs = "0.1.1"
 
 [[bin]]
 # Stable binary name used by shortcuts and documentation.

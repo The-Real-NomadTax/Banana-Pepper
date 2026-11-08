@@ -39,7 +39,7 @@ fn relocated_distribution_scans_archives_without_using_checkout_paths() {
     fs::create_dir(source.join("data")).unwrap();
     fs::write(source.join("game"), elf(64)).unwrap();
     let archive = temp.path().join("game.zar");
-    zarchive_rs::pack_dir(&source, &archive).unwrap();
+    banana_content::pack::convert(&source, &archive, &Default::default(), |_| {}).unwrap();
     let scan = Command::new(&executable)
         .env("LOCALAPPDATA", temp.path().join("user/local"))
         .env("APPDATA", temp.path().join("user/config"))
@@ -123,7 +123,7 @@ fn archived_library_inspects_the_same_games_as_its_original_folder() {
     }
     fs::create_dir_all(library.join("linux based/Minecraft Dungeons Arcade/data")).unwrap();
     let archive = temp.path().join("normal library.zar");
-    zarchive_rs::pack_dir(&library, &archive).unwrap();
+    banana_content::pack::convert(&library, &archive, &Default::default(), |_| {}).unwrap();
     let cache = temp.path().join("cache");
     let plain = scan(&library, &cache);
     assert!(plain.status.success());
@@ -157,7 +157,7 @@ fn direct_minecraft_archive_does_not_depend_on_the_cache_or_archive_name() {
     // An original ELF64 named "game", no .hvc marker and no title in the path.
     fs::write(source.join("game"), elf(64)).unwrap();
     let archive = temp.path().join("arbitrary.zar");
-    zarchive_rs::pack_dir(&source, &archive).unwrap();
+    banana_content::pack::convert(&source, &archive, &Default::default(), |_| {}).unwrap();
     let output = scan(&archive, &temp.path().join("cache"));
     assert!(
         output.status.success(),

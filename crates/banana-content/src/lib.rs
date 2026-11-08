@@ -1,41 +1,63 @@
 //! Immutable folder and archive providers. Game content is never extracted.
 use std::io::{Read, Seek};
-use zarchive_rs::Archive;
+use zarust::{ArchiveReader, NodeHandle, ROOT_NODE};
 pub mod pack;
 mod source;
 pub use source::*;
 const MAX_ENTRIES: usize = 1_000_000;
 const MAX_DEPTH: usize = 64;
 const MAX_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
-fn preflight<R: Read + Seek>(archive: &mut Archive<R>) -> Result<(), String> {
-    let mut pending = vec![(Vec::<u8>::new(), 0usize)];
-    let mut count = 0usize;
+
+/// One validated archive entry.
+struct ArchiveNode {
+    /// `/`-separated path below the archive root.
+    path: String,
+    handle: NodeHandle,
+    directory: bool,
+    len: u64,
+}
+
+/// Walk an archive's tree, checking it against the game-source limits and
+/// path rules. Every entry is returned, parents before their children.
+fn preflight<R: Read + Seek>(archive: &ArchiveReader<R>) -> Result<Vec<ArchiveNode>, String> {
+    let mut pending = vec![(String::new(), ROOT_NODE, 0usize)];
+    let mut nodes = Vec::new();
     let mut bytes = 0u64;
-    while let Some((directory, depth)) = pending.pop() {
+    while let Some((directory, handle, depth)) = pending.pop() {
         if depth > MAX_DEPTH {
             return Err("Archive nesting exceeds 64 directories".into());
         }
-        for entry in archive.read_dir(&directory).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            count += 1;
-            if count > MAX_ENTRIES {
+        for entry in archive
+            .directory_entries(handle)
+            .map_err(|e| e.to_string())?
+        {
+            if nodes.len() >= MAX_ENTRIES {
                 return Err("Archive contains more than one million entries".into());
             }
-            let path = entry.path_str().ok_or("Archive filenames must be UTF-8")?;
-            validate_path(path)?;
-            if entry.metadata().is_dir() {
-                pending.push((entry.path_bytes().to_vec(), depth + 1));
+            let name = std::str::from_utf8(entry.name).map_err(|_| "Archive filenames must be UTF-8")?;
+            let path = if directory.is_empty() {
+                name.to_owned()
             } else {
-                bytes = bytes
-                    .checked_add(entry.metadata().len())
-                    .ok_or("Archive size overflow")?;
+                format!("{directory}/{name}")
+            };
+            validate_path(&path)?;
+            if entry.is_directory() {
+                pending.push((path.clone(), entry.handle, depth + 1));
+            } else {
+                bytes = bytes.checked_add(entry.size).ok_or("Archive size overflow")?;
                 if bytes > MAX_UNPACKED_BYTES {
                     return Err("Archive expands beyond the 2 TiB game-source limit".into());
                 }
             }
+            nodes.push(ArchiveNode {
+                path,
+                handle: entry.handle,
+                directory: entry.is_directory(),
+                len: entry.size,
+            });
         }
     }
-    Ok(())
+    Ok(nodes)
 }
 
 fn validate_path(path: &str) -> Result<(), String> {

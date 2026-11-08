@@ -2,9 +2,9 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Read},
     path::Path,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,30 +302,11 @@ impl ContentFile for HostFile {
         }
     }
 }
-enum Request {
-    Read {
-        path: String,
-        offset: u64,
-        len: usize,
-        reply: mpsc::SyncSender<io::Result<Vec<u8>>>,
-    },
-    Verify(mpsc::SyncSender<io::Result<()>>),
-}
-struct ZarWorker {
-    tx: Option<mpsc::Sender<Request>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-impl Drop for ZarWorker {
-    fn drop(&mut self) {
-        self.tx.take();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
+/// A `.zar` archive served in place: its tree is indexed once, and reads
+/// decompress only the blocks they touch.
 pub struct Zar {
-    entries: BTreeMap<String, Metadata>,
-    worker: Arc<ZarWorker>,
+    entries: BTreeMap<String, (Metadata, zarust::NodeHandle)>,
+    reader: Arc<Mutex<zarust::ArchiveReader<File>>>,
     /// Archive size and modification time (ns); an archive's contents do not
     /// change without changing these.
     archive: (u64, u128),
@@ -348,113 +329,46 @@ impl Zar {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0),
         );
-        let (tx, rx) = mpsc::channel::<Request>();
-        let (ready, result) = mpsc::sync_channel(1);
-        // The native archive reader stays on its owning thread. No unsafe Send implementation.
-        let thread = std::thread::Builder::new()
-            .name("zarchive-reader".into())
-            .spawn(move || {
-                let setup = (|| -> io::Result<_> {
-                    let mut archive =
-                        zarchive_rs::Archive::new(file).map_err(|e| invalid(e.to_string()))?;
-                    super::preflight(&mut archive).map_err(invalid)?;
-                    let mut entries = BTreeMap::new();
-                    entries.insert(
-                        String::new(),
-                        Metadata {
-                            directory: true,
-                            len: 0,
-                            executable: false,
-                        },
-                    );
-                    let mut pending = vec![String::new()];
-                    while let Some(dir) = pending.pop() {
-                        let children = archive
-                            .read_dir(dir.as_bytes())
-                            .map_err(|e| invalid(e.to_string()))?
-                            .collect::<Result<Vec<_>, _>>()
-                            .map_err(|e| invalid(e.to_string()))?;
-                        for e in children {
-                            let name = e
-                                .path_str()
-                                .ok_or_else(|| invalid("Non UTF-8 archive path"))?
-                                .to_owned();
-                            let m = e.metadata();
-                            let mut executable = false;
-                            if m.is_dir() {
-                                pending.push(name.clone());
-                            } else {
-                                let mut magic = [0; 4];
-                                let mut f = archive
-                                    .open_file(name.as_bytes())
-                                    .map_err(|e| invalid(e.to_string()))?
-                                    .ok_or(io::ErrorKind::NotFound)?;
-                                if f.read(&mut magic)? == 4 {
-                                    executable = magic == *b"\x7fELF" || magic[..2] == *b"MZ";
-                                }
-                            }
-                            entries.insert(
-                                name,
-                                Metadata {
-                                    directory: m.is_dir(),
-                                    len: m.len(),
-                                    executable,
-                                },
-                            );
-                        }
-                    }
-                    Ok((archive, entries))
-                })();
-                let (mut archive, entries) = match setup {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let _ = ready.send(Err(e));
-                        return;
-                    }
-                };
-                if ready.send(Ok(entries)).is_err() {
-                    return;
+        let mut reader = zarust::ArchiveReader::new(file).map_err(|e| invalid(e.to_string()))?;
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            String::new(),
+            (
+                Metadata {
+                    directory: true,
+                    len: 0,
+                    executable: false,
+                },
+                zarust::ROOT_NODE,
+            ),
+        );
+        for node in super::preflight(&reader).map_err(invalid)? {
+            let mut executable = false;
+            if !node.directory {
+                let mut magic = [0; 4];
+                if reader
+                    .read_file(node.handle, 0, &mut magic)
+                    .map_err(|e| invalid(e.to_string()))?
+                    == 4
+                {
+                    executable = magic == *b"\x7fELF" || magic[..2] == *b"MZ";
                 }
-                while let Ok(r) = rx.recv() {
-                    match r {
-                        Request::Read {
-                            path,
-                            offset,
-                            len,
-                            reply,
-                        } => {
-                            let answer = (|| {
-                                let mut f = archive
-                                    .open_file(path.as_bytes())
-                                    .map_err(|e| invalid(e.to_string()))?
-                                    .ok_or(io::ErrorKind::NotFound)?;
-                                f.seek(SeekFrom::Start(offset))?;
-                                let mut bytes = vec![0; len];
-                                let n = f.read(&mut bytes)?;
-                                bytes.truncate(n);
-                                Ok(bytes)
-                            })();
-                            let _ = reply.send(answer);
-                        }
-                        Request::Verify(reply) => {
-                            let _ = reply.send(
-                                archive
-                                    .verify_integrity()
-                                    .map_err(|e| invalid(e.to_string())),
-                            );
-                        }
-                    }
-                }
-            })?;
-        let entries = result
-            .recv()
-            .map_err(|_| io::Error::other("Archive reader stopped"))??;
+            }
+            entries.insert(
+                node.path,
+                (
+                    Metadata {
+                        directory: node.directory,
+                        len: node.len,
+                        executable,
+                    },
+                    node.handle,
+                ),
+            );
+        }
         Ok(Self {
             entries,
-            worker: Arc::new(ZarWorker {
-                tx: Some(tx),
-                thread: Some(thread),
-            }),
+            reader: Arc::new(Mutex::new(reader)),
             archive,
         })
     }
@@ -470,20 +384,17 @@ impl ContentSource for Zar {
         Ok(Some(format!("{:x}", hash.finalize())))
     }
     fn verify(&self) -> io::Result<()> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        self.worker
-            .tx
-            .as_ref()
-            .unwrap()
-            .send(Request::Verify(tx))
-            .map_err(|_| io::Error::other("Archive reader stopped"))?;
-        rx.recv()
-            .map_err(|_| io::Error::other("Archive reader stopped"))?
+        let mut reader = self.reader.lock().map_err(|_| io::Error::other("Archive reader poisoned"))?;
+        match reader.verify_integrity() {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(invalid("Archive integrity check failed")),
+            Err(e) => Err(invalid(e.to_string())),
+        }
     }
     fn metadata(&self, name: &str) -> io::Result<Metadata> {
         self.entries
             .get(path(name)?)
-            .cloned()
+            .map(|(m, _)| m.clone())
             .ok_or(io::ErrorKind::NotFound.into())
     }
     fn read_dir(&self, name: &str) -> io::Result<Vec<Entry>> {
@@ -498,7 +409,7 @@ impl ContentSource for Zar {
         Ok(self
             .entries
             .iter()
-            .filter_map(|(p, m)| {
+            .filter_map(|(p, (m, _))| {
                 let n = p.strip_prefix(&prefix)?;
                 if n.is_empty() || n.contains('/') {
                     None
@@ -512,20 +423,23 @@ impl ContentSource for Zar {
             .collect())
     }
     fn open(&self, name: &str) -> io::Result<Arc<dyn ContentFile>> {
-        let m = self.metadata(name)?;
+        let (m, handle) = self
+            .entries
+            .get(path(name)?)
+            .ok_or(io::Error::from(io::ErrorKind::NotFound))?;
         if m.directory {
             return Err(io::ErrorKind::IsADirectory.into());
         }
         Ok(Arc::new(ZarFile {
-            worker: self.worker.clone(),
-            path: name.into(),
+            reader: self.reader.clone(),
+            handle: *handle,
             len: m.len,
         }))
     }
 }
 struct ZarFile {
-    worker: Arc<ZarWorker>,
-    path: String,
+    reader: Arc<Mutex<zarust::ArchiveReader<File>>>,
+    handle: zarust::NodeHandle,
     len: u64,
 }
 impl ContentFile for ZarFile {
@@ -536,23 +450,14 @@ impl ContentFile for ZarFile {
         if offset >= self.len {
             return Ok(0);
         }
-        let (tx, rx) = mpsc::sync_channel(1);
-        self.worker
-            .tx
-            .as_ref()
-            .unwrap()
-            .send(Request::Read {
-                path: self.path.clone(),
-                offset,
-                len: b.len().min((self.len - offset) as usize),
-                reply: tx,
+        self.reader
+            .lock()
+            .map_err(|_| io::Error::other("Archive reader poisoned"))?
+            .read_file(self.handle, offset, b)
+            .map_err(|e| match e {
+                zarust::Error::Io(e) => e,
+                other => invalid(other.to_string()),
             })
-            .map_err(|_| io::Error::other("Archive reader stopped"))?;
-        let data = rx
-            .recv()
-            .map_err(|_| io::Error::other("Archive reader stopped"))??;
-        b[..data.len()].copy_from_slice(&data);
-        Ok(data.len())
     }
 }
 
