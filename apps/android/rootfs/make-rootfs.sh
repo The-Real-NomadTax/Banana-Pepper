@@ -7,7 +7,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 out="$here/../build"
 mkdir -p "$out"
 AF=/data/local/tmp/af
-adb push "$here/afbridge.c" "$here/afaudio.c" "$here/build-rootfs-guest.sh" "$here/trim-rootfs-guest.sh" $AF/share/ >/dev/null
+adb push "$here/build-rootfs-guest.sh" "$here/trim-rootfs-guest.sh" $AF/share/ >/dev/null
 # box64 install tree from the dev build (patched, BOX32 enabled).
 adb shell "cd $AF && rm -rf share/box64-install && ./enter.sh /bin/sh -c 'cd /root/box64/build && make install DESTDIR=/af/box64-install >/dev/null && strip --strip-debug /af/box64-install/usr/local/bin/box64'"
 if [[ ${TRIM_ONLY:-0} == 1 ]]; then

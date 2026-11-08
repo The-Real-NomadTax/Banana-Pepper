@@ -6,7 +6,7 @@ pub fn profile() -> AndroidProfile {
         requirements: &[
             "opt/arcade/games/big-buck/linux-x86/libarcade_big_buck.so",
             "usr/local/bin/box64",
-            "usr/local/bin/afbridge",
+            "usr/bin/Xvfb",
         ],
         status: "Experimental mounted Android runtime",
         verified: false,

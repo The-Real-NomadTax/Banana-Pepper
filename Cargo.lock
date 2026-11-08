@@ -179,6 +179,8 @@ version = "0.1.0"
 dependencies = [
  "banana-api",
  "banana-content",
+ "libc",
+ "x11rb",
 ]
 
 [[package]]

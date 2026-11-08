@@ -1,5 +1,29 @@
 //! Platform execution/transport only. Titles use the same LaunchPlan and View
 //! as desktop; this module contains no title identities or preparation code.
+#[cfg(any(target_os = "android", target_os = "linux"))]
+pub mod bridge;
+/// Hosts without the bridges report the transport as unsupported.
+#[cfg(not(any(target_os = "android", target_os = "linux")))]
+mod bridge {
+    pub const AUDIO_RATE: u32 = 48_000;
+    pub const AUDIO_CHANNELS: u32 = 2;
+    const UNSUPPORTED: &str = "The Android display/audio bridges need Android or Linux";
+    pub struct Bridges;
+    impl Bridges {
+        pub fn new(_: &std::path::Path) -> Self {
+            Self
+        }
+        pub fn failure(&self) -> Option<String> {
+            None
+        }
+        pub fn display(&mut self, _: &std::path::Path, _: &std::path::Path, _: &str, _: u32) -> Result<(), String> {
+            Err(UNSUPPORTED.into())
+        }
+        pub fn audio(&mut self, _: &std::path::Path, _: &str) -> Result<(), String> {
+            Err(UNSUPPORTED.into())
+        }
+    }
+}
 use banana_api::*;
 use std::{
     path::{Path, PathBuf},
@@ -71,7 +95,7 @@ impl ExecutionBackend for Android {
         std::fs::create_dir_all(&run).map_err(|e| e.to_string())?;
         let tmp = s.state.join("tmp");
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        for relative in [".X0-lock", ".X11-unix/X0", "pulse-native"] {
+        for relative in [".X0-lock", ".X11-unix/X0", "pulse-native", "pulse-pcm"] {
             let path = tmp.join(relative);
             if std::fs::symlink_metadata(&path).is_ok() {
                 std::fs::remove_file(path).map_err(|e| e.to_string())?;
@@ -121,6 +145,7 @@ impl ExecutionBackend for Android {
         let mut owned = AndroidSession {
             game: None,
             support: Vec::new(),
+            bridges: None,
             events: std::collections::VecDeque::new(),
             frame: run.join("frame.bin"),
             view: Some(view),
@@ -149,16 +174,8 @@ impl ExecutionBackend for Android {
             .env
             .get("AF_INPUT_SOCKET")
             .ok_or("Android input socket is missing")?;
-        owned.support.push(transport.spawn(
-            "bridge",
-            &[
-                "/usr/local/bin/afbridge".into(),
-                "/run/af/frame.bin".into(),
-                input.clone(),
-                "60".into(),
-            ],
-            None,
-        )?);
+        let bridges = owned.bridges.insert(bridge::Bridges::new(&run.join("bridge.log")));
+        bridges.display(&transport.tmp.join(".X11-unix/X0"), &owned.frame, input, 60)?;
         if let Some(audio) = s
             .plan
             .env
@@ -173,13 +190,29 @@ impl ExecutionBackend for Android {
                 .insert("XDG_RUNTIME_DIR".into(), "/tmp/pulse-runtime".into());
             std::fs::create_dir_all(transport.tmp.join("pulse-runtime"))
                 .map_err(|e| e.to_string())?;
-            owned.support.push(transport.spawn("pulse", &["/usr/bin/pulseaudio".into(),"-n".into(),"--daemonize=no".into(),"--disable-shm=yes".into(),"--use-pid-file=no".into(),"--exit-idle-time=-1".into(),"--high-priority=no".into(),"--realtime=no".into(),"--log-target=stderr".into(),"--load=module-native-protocol-unix socket=/tmp/pulse-native auth-anonymous=1".into(),"--load=module-null-sink sink_name=arcade rate=48000 channels=2".into()],None)?);
+            // The game plays into a null sink; the simple protocol streams its
+            // monitor as raw PCM for the audio bridge to relay.
+            let (rate, channels) = (bridge::AUDIO_RATE, bridge::AUDIO_CHANNELS);
+            let pulse = [
+                "/usr/bin/pulseaudio".into(),
+                "-n".into(),
+                "--daemonize=no".into(),
+                "--disable-shm=yes".into(),
+                "--use-pid-file=no".into(),
+                "--exit-idle-time=-1".into(),
+                "--high-priority=no".into(),
+                "--realtime=no".into(),
+                "--log-target=stderr".into(),
+                "--load=module-native-protocol-unix socket=/tmp/pulse-native auth-anonymous=1".into(),
+                format!("--load=module-null-sink sink_name=arcade rate={rate} channels={channels}"),
+                format!(
+                    "--load=module-simple-protocol-unix socket=/tmp/pulse-pcm record=true playback=false source=arcade.monitor format=s16le rate={rate} channels={channels}"
+                ),
+            ];
+            owned.support.push(transport.spawn("pulse", &pulse, None)?);
             wait_for(&transport.tmp.join("pulse-native"), &mut owned.support)?;
-            owned.support.push(transport.spawn(
-                "audio",
-                &["/usr/local/bin/afaudio".into(), audio.clone()],
-                None,
-            )?);
+            wait_for(&transport.tmp.join("pulse-pcm"), &mut owned.support)?;
+            bridges.audio(&transport.tmp.join("pulse-pcm"), audio)?;
         }
         let mut environment = transport.environment.clone();
         environment.insert("ARCADE_ANDROID".into(), "1".into());
@@ -401,6 +434,8 @@ fn wait_for(path: &Path, processes: &mut [Box<dyn SessionHandle>]) -> Result<(),
 struct AndroidSession {
     game: Option<Box<dyn SessionHandle>>,
     support: Vec<Box<dyn SessionHandle>>,
+    /// Frame/input/audio relays to the app; stopped before their servers.
+    bridges: Option<bridge::Bridges>,
     events: std::collections::VecDeque<SessionEvent>,
     frame: PathBuf,
     /// Serves the guest's files; dropped (and flushed) once the game exits.
@@ -426,6 +461,10 @@ impl SessionHandle for AndroidSession {
                 "Android display/audio transport exited with {code}; inspect the session logs"
             ));
         }
+        if let Some(failure) = self.bridges.as_ref().and_then(bridge::Bridges::failure) {
+            self.cancel()?;
+            return Err(failure);
+        }
         self.game
             .as_mut()
             .ok_or("Session has not started")?
@@ -448,6 +487,7 @@ impl SessionHandle for AndroidSession {
     }
     fn wait(&mut self) -> Result<i32, String> {
         let result = self.game.as_mut().ok_or("Session has not started")?.wait();
+        self.bridges.take();
         for p in &mut self.support {
             let _ = p.cancel();
             let _ = p.wait();
@@ -462,6 +502,7 @@ impl Drop for AndroidSession {
         if let Some(p) = &mut self.game {
             let _ = p.wait();
         }
+        self.bridges.take();
         for p in &mut self.support {
             let _ = p.wait();
         }

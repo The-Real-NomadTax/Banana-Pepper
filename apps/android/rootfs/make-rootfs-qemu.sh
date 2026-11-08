@@ -67,7 +67,7 @@ if [[ ! -x $work/share/box64-install/usr/local/bin/box64 ]]; then
 fi
 
 # 2. The release rootfs: only what the Android runtime needs.
-cp "$here/afbridge.c" "$here/afaudio.c" "$here/build-rootfs-guest.sh" "$here/trim-rootfs-guest.sh" "$work/share/"
+cp "$here/build-rootfs-guest.sh" "$here/trim-rootfs-guest.sh" "$work/share/"
 fresh "$work/release"
 enter "$work/release" /bin/bash /af/build-rootfs-guest.sh
 

@@ -6,9 +6,8 @@ pub fn profile() -> AndroidProfile {
         requirements: &[
             "opt/arcade/games/super-cars/windows-x86/arcade_wine_hook.dll",
             "usr/local/bin/box64",
-            "usr/local/bin/afbridge",
+            "usr/bin/Xvfb",
             "usr/bin/pulseaudio",
-            "usr/local/bin/afaudio",
             "opt/arcade/wine/bin/wine",
             "opt/arcade/x64-libs/libgcc_s.so.1",
             "opt/arcade/wine/lib/wine/x86_64-unix/ntdll.so",

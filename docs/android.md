@@ -71,7 +71,17 @@ The APK build compiles the ARM64 JNI library, asks `banana-dist android-resource
 for crate-declared title artifacts, and builds pinned PRoot with the namespace
 extension. The JNI library retains 16 KiB load alignment. Stock PRoot is rejected
 by capability checks. No interpreted game launcher is packaged; generic Rust
-backend code supervises Xvfb, frame/audio bridges and the guest process.
+backend code supervises Xvfb, PulseAudio and the guest process.
+
+The display and audio bridges are threads of the session owner
+(`backends/android/src/bridge.rs`), not programs in the rootfs. The display bridge
+speaks X11 directly: it mirrors the root window into `run/frame.bin` through an
+MIT-SHM memfd segment (falling back to GetImage) and injects the app's input lines
+with XTest. PulseAudio streams the null sink's monitor through its simple protocol
+(`/tmp/pulse-pcm`), and the audio bridge relays that PCM to the app's AudioTrack
+socket. Bridge notes and failures go to `run/bridge.log` and end the session with
+an error. `cargo test -p banana-android --test bridge` checks both against a real
+Xvfb on Linux.
 
 Each title imports from either a game folder or a single `.zar` archive (also
 `.zarchive`/`.wua`), picked with the system file chooser. An explicit import

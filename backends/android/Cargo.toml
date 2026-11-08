@@ -7,3 +7,8 @@ description = "Android Box64/Wine process and display transport for shared mount
 [dependencies]
 banana-api.workspace = true
 banana-content.workspace = true
+
+# The display/audio bridges (also built on Linux, where their tests run).
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
+libc = "0.2"
+x11rb = { version = "0.13.2", default-features = false, features = ["shm", "xtest"] }

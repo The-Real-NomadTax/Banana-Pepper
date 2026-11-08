@@ -14,8 +14,8 @@ fn android_profiles_declare_their_runtime_and_controls() {
             game.id()
         );
         assert!(
-            profile.requirements.contains(&"usr/local/bin/afbridge"),
-            "{} display bridge",
+            profile.requirements.contains(&"usr/bin/Xvfb"),
+            "{} display server",
             game.id()
         );
         assert!(
