@@ -73,10 +73,13 @@ extension. The JNI library retains 16 KiB load alignment. Stock PRoot is rejecte
 by capability checks. No interpreted game launcher is packaged; generic Rust
 backend code supervises Xvfb, frame/audio bridges and the guest process.
 
-The existing folder import UI is preserved. An explicit import creates a source
-library entry in private storage; existing private/external game folders are also
-found in place. ZAR sources placed in those library directories use the common
-archive provider. Touch button keys come from the current Rust controls bindings.
+Each title imports from either a game folder or a single `.zar` archive (also
+`.zarchive`/`.wua`), picked with the system file chooser. An explicit import
+creates a source library entry in private storage: a folder is copied file by
+file, and an archive is copied whole (never extracted) into a staging directory
+outside the scanned library, checked for a recognized build, and only then
+replaces that title's previous folder or archive. Existing private/external game
+folders and archives are also found in place and use the common archive provider. Touch button keys come from the current Rust controls bindings.
 Input buffering is bounded and resynchronizes held state after reconnecting.
 
 Redistributable legacy libraries can be supplied from per-user dependency storage

@@ -25,6 +25,10 @@ pub fn make(b: &IdentifiedBuild, c: &PlanContext, a: &ActionRequest) -> Result<L
         ("SDL_VIDEO_X11_XRANDR".into(), "0".into()),
         ("SDL_VIDEO_X11_VIDMODE".into(), "0".into()),
         ("SDL_VIDEO_X11_DGAMOUSE".into(), "0".into()),
+        // The game's statically linked SDL writes Xinerama requests straight into
+        // Xlib's Display buffer, which Box32's translated Display (Android) lacks.
+        // The game runs in an ordinary window, so the head query is unneeded.
+        ("SDL_VIDEO_X11_XINERAMA".into(), "0".into()),
         (
             "LD_LIBRARY_PATH".into(),
             "/pm/.banana/libraries:/usr/lib32".into(),

@@ -3,7 +3,7 @@
 #include "syscall/chain.h"
 #include <sched.h>
 #include <stddef.h>
-#include <sys/random.h>
+#include <sys/syscall.h>
 
 struct OpenFile { uint64_t id, offset; unsigned mode; };
 struct FileEntry {
@@ -101,6 +101,19 @@ struct TransferPacket {
   char byte;
 };
 enum { FD_SOCKET=1, FD_CONNECT, FD_RECEIVE };
+/* SO_PEERCRED reports the connecting thread's process (thread group), while a
+ * tracee is one thread; compare against the tracee's thread group. */
+static pid_t thread_group(pid_t tid) {
+  char path[64], line[128];
+  snprintf(path,sizeof(path),"/proc/%d/status",tid);
+  FILE *f=fopen(path,"re");
+  if(!f) return -1;
+  pid_t group=-1;
+  while(fgets(line,sizeof(line),f))
+    if(!strncmp(line,"Tgid:",5)) { group=(pid_t)strtol(line+5,NULL,10); break; }
+  fclose(f);
+  return group;
+}
 static int transfer_finish(struct State *s, Tracee *t, long result) {
   transfer_cleanup(s);
   s->stage=0;
@@ -124,7 +137,8 @@ static int begin_transfer(struct State *s, Tracee *t, uint64_t id, unsigned mode
   packet.address.sun_family=AF_UNIX;
   unsigned char random[24];
   ssize_t n;
-  do { n=getrandom(random,sizeof(random),0); } while(n<0 && errno==EINTR);
+  // Bionic declares getrandom() only from API 28; the tracer targets API 26.
+  do { n=syscall(__NR_getrandom,random,sizeof(random),0); } while(n<0 && errno==EINTR);
   if(n!=sizeof(random)) { transfer_cleanup(s); return -EIO; }
   memcpy(packet.address.sun_path+1,random,sizeof(random));
   socklen_t size=offsetof(struct sockaddr_un,sun_path)+1+sizeof(random);
@@ -168,7 +182,7 @@ static int transfer_step(struct State *s, Tracee *t) {
     struct ucred credentials;
     socklen_t length=sizeof(credentials);
     int e=getsockopt(peer,SOL_SOCKET,SO_PEERCRED,&credentials,&length);
-    if(e || credentials.uid!=getuid() || credentials.pid!=t->pid) {
+    if(e || credentials.uid!=getuid() || credentials.pid!=thread_group(t->pid)) {
       close(peer); return transfer_finish(s,t,-EACCES);
     }
     e=deliver_fd(peer,s->transfer_fd);

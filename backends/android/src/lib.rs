@@ -303,6 +303,12 @@ impl Transport {
             command.arg("-b").arg(format!("{}:{guest}", host.display()));
         }
         if name == "game" {
+            // Developer tracing: a verbosity level in `config/proot-trace` makes
+            // the game's tracer log intercepted system calls into game.log.
+            if let Ok(level) = std::fs::read_to_string(self.files.join("config/proot-trace")) {
+                let level = level.trim().parse::<u8>().unwrap_or(2).min(9);
+                command.arg("-v").arg(level.to_string());
+            }
             for tool in &self.inert {
                 if tool.contains('/') || tool.contains('\\') {
                     return Err("Inert tool must be a basename".into());

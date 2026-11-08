@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.*
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.view.*
 import android.widget.*
 import org.json.*
@@ -44,7 +45,7 @@ class MainActivity : Activity() {
         status=text("Checking your library…",14,ink); panel.addView(status)
         progress=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=100; visibility=View.GONE }
         panel.addView(progress)
-        importButton=button("Import a game folder",accent,0xff16220d.toInt()).apply { setOnClickListener { chooseImport() } }
+        importButton=button("Import a game",accent,0xff16220d.toInt()).apply { setOnClickListener { chooseImport() } }
         panel.addView(importButton)
         val filters=LinearLayout(this)
         for ((key,label) in listOf("all" to "All games","ready" to "Ready to play")) {
@@ -97,7 +98,7 @@ class MainActivity : Activity() {
             row.addView(button(if(ready)"Play  ›" else "Details",if(ready)accent else 0xff2a382d.toInt(),if(ready)0xff18240e.toInt() else ink).apply {
                 setOnClickListener { if(ready)play(game) else details(game) }
             },LinearLayout.LayoutParams(0,dp(48),1f).apply { topMargin=dp(10); marginEnd=dp(8) })
-            row.addView(button("Import",0xff2a382d.toInt(),ink).apply { setOnClickListener { pickFolder(game.getString("id")) } },LinearLayout.LayoutParams(dp(94),dp(48)).apply { topMargin=dp(10) })
+            row.addView(button("Import",0xff2a382d.toInt(),ink).apply { setOnClickListener { pickSource(game.getString("id")) } },LinearLayout.LayoutParams(dp(94),dp(48)).apply { topMargin=dp(10) })
             card.addView(row)
         }
     }
@@ -105,25 +106,40 @@ class MainActivity : Activity() {
         val missing=game.getJSONArray("missing")
         val message=buildString {
             append(game.getString("status")); append("\n\n")
-            if(!game.getBoolean("found"))append("Import the folder containing ${game.getString("executable")}.\n\n")
+            if(!game.getBoolean("found"))append("Import the folder containing ${game.getString("executable")}, or a .zar archive of it.\n\n")
             if(missing.length()>0)append("Missing runtime components:\n"+(0 until missing.length()).joinToString("\n") { missing.getString(it) }+"\n\n")
         }.trimEnd()
         AlertDialog.Builder(this).setTitle(game.getString("title")).setMessage(message).setPositiveButton("OK",null).show()
     }
     private fun chooseImport() {
         val games=(0 until entries.length()).map { entries.getJSONObject(it) }
-        AlertDialog.Builder(this).setTitle("Which game are you importing?").setItems(games.map { it.getString("title") }.toTypedArray()) { _,which -> pickFolder(games[which].getString("id")) }.show()
+        AlertDialog.Builder(this).setTitle("Which game are you importing?").setItems(games.map { it.getString("title") }.toTypedArray()) { _,which -> pickSource(games[which].getString("id")) }.show()
+    }
+    private fun pickSource(id:String) {
+        if(busy)return
+        AlertDialog.Builder(this).setTitle("Import from").setItems(arrayOf("Game folder","ZAR archive (.zar)")) { _,which ->
+            if(which==0)pickFolder(id) else pickArchive(id)
+        }.show()
     }
     private fun pickFolder(id:String) {
         if(busy)return
         pendingImport=id
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),1)
     }
+    /** ZAR has no registered MIME type, so any openable file is offered and the name is checked. */
+    private fun pickArchive(id:String) {
+        if(busy)return
+        pendingImport=id
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),2)
+    }
     @Deprecated("Platform activity result for SDK-only build")
     override fun onActivityResult(request:Int,result:Int,data:Intent?) {
         super.onActivityResult(request,result,data)
         val tree=data?.data ?: return; val id=pendingImport ?: return
-        if(request!=1 || result!=RESULT_OK)return
+        if(result!=RESULT_OK)return
+        if(request==2) { importArchive(tree,id); return }
+        if(request!=1)return
         task("Importing your files…", {
             val parent=File(filesDir,"games").apply { mkdirs() }
             val staging=File(parent,"$id.importing")
@@ -139,8 +155,51 @@ class MainActivity : Activity() {
                 if(dest.exists())check(dest.renameTo(previous)) { "Cannot keep previous import" }
                 if(!staging.renameTo(dest)) { previous.renameTo(dest); error("Cannot activate import") }
                 RuntimeInstaller.deleteTree(previous)
+                File(parent,"$id.zar").delete()
                 RustBackend.saveSource(this,id,File(dest,relative.path).path)
             } catch(e:Exception) { RuntimeInstaller.deleteTree(staging); throw e }
+        })
+    }
+    /** Copy one archive into private storage. It is staged outside the scanned
+     *  library, so a partial copy is never offered as a game, and it replaces the
+     *  game's previous folder or archive only once it is recognized. */
+    private fun importArchive(uri:Uri,id:String) {
+        var name=""; var size=-1L
+        contentResolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE),null,null,null)?.use { c ->
+            if(c.moveToFirst()) { name=c.getString(0)?:""; if(!c.isNull(1))size=c.getLong(1) }
+        }
+        val extension=name.substringAfterLast('.',"").lowercase()
+        if(extension !in setOf("zar","zarchive","wua")) { alert("Choose a .zar archive. \"$name\" is not one."); return }
+        task("Importing $name…", {
+            val staging=File(filesDir,"import").apply { RuntimeInstaller.deleteTree(this); mkdirs() }
+            val parent=File(filesDir,"games").apply { mkdirs() }
+            if(size>0)check(staging.usableSpace>size+(256L shl 20)) { "Not enough free space to import $name (${size shr 20} MB)." }
+            val staged=File(staging,"$id.$extension")
+            try {
+                contentResolver.openInputStream(uri).use { input ->
+                    check(input!=null) { "Cannot read $name" }
+                    staged.outputStream().use { output ->
+                        val buffer=ByteArray(1 shl 20); var copied=0L; var shown=-1L
+                        while(true) {
+                            val n=input.read(buffer); if(n<0)break
+                            output.write(buffer,0,n); copied+=n
+                            if(copied shr 23!=shown) {
+                                shown=copied shr 23
+                                val pct=if(size>0)(copied*100/size).toInt() else -1; val mb=copied shr 20
+                                handler.post { progress.isIndeterminate=pct<0; if(pct>=0)progress.progress=pct; status.text="Importing $name… $mb MB" }
+                            }
+                        }
+                    }
+                }
+                val inspected=RustBackend.call("catalog",JSONObject().put("files",filesDir.path).put("roots",JSONArray().put(staged.path))) as JSONArray
+                val identified=(0 until inspected.length()).map { inspected.getJSONObject(it) }.first { it.getString("id")==id }
+                check(identified.getBoolean("found")) { "$name does not contain a recognized build of the selected game. Your previous import was kept." }
+                val dest=File(parent,"$id.$extension")
+                check(staged.renameTo(dest)) { "Cannot activate import" }
+                for(old in listOf("zar","zarchive","wua"))if(old!=extension)File(parent,"$id.$old").delete()
+                RuntimeInstaller.deleteTree(File(parent,id))
+                RustBackend.saveSource(this,id,dest.path)
+            } finally { RuntimeInstaller.deleteTree(staging) }
         })
     }
     private fun importTree(tree:Uri,id:String,dest:File,depth:Int) {
