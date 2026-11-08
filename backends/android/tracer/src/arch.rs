@@ -18,6 +18,13 @@ struct SyscallInfo {
 const PTRACE_GET_SYSCALL_INFO: libc::c_uint = 0x420e;
 const INFO_ENTRY: u8 = 1;
 const INFO_EXIT: u8 = 2;
+const INFO_SECCOMP: u8 = 3;
+
+/// The seccomp audit architecture of this build.
+#[cfg(target_arch = "x86_64")]
+pub const AUDIT_ARCH: u32 = 0xc000_003e;
+#[cfg(target_arch = "aarch64")]
+pub const AUDIT_ARCH: u32 = 0xc000_00b7;
 
 /// Where a tracee stopped in a system call.
 pub enum Stop {
@@ -47,7 +54,8 @@ pub fn syscall_stop(tid: i32) -> io::Result<Stop> {
         return Err(io::Error::last_os_error());
     }
     Ok(match info.op {
-        INFO_ENTRY => Stop::Entry {
+        // A seccomp stop carries the same entry view (nr, args).
+        INFO_ENTRY | INFO_SECCOMP => Stop::Entry {
             nr: info.data[0] as i64,
             args: info.data[1..7].try_into().unwrap(),
         },
@@ -115,6 +123,15 @@ mod imp {
         }
         pub fn sp(&self) -> u64 {
             self.sp
+        }
+        /// From a syscall-exit stop: run system call `nr` again at the
+        /// same `svc` instruction, with `args`.
+        pub fn inject(&mut self, nr: i64, args: &[u64]) {
+            self.pc -= 4;
+            self.regs[8] = nr as u64;
+            for (i, &a) in args.iter().enumerate() {
+                self.regs[i] = a;
+            }
         }
     }
 
@@ -201,6 +218,16 @@ mod imp {
         pub fn sp(&self) -> u64 {
             self.rsp
         }
+        /// From a syscall-exit stop: run system call `nr` again at the
+        /// same `syscall` instruction, with `args`.
+        pub fn inject(&mut self, nr: i64, args: &[u64]) {
+            self.rip -= 2;
+            self.rax = nr as u64;
+            self.orig_rax = nr as u64;
+            for (i, &a) in args.iter().enumerate() {
+                self.set_arg(i, a);
+            }
+        }
     }
 
     /// Replace the system call about to run (-1 skips it).
@@ -233,6 +260,35 @@ pub mod nr {
     const fn x86(name: &str) -> i64 {
         match name.as_bytes() {
             b"read" => 0,
+            b"lseek" => 8,
+            b"mmap" => 9,
+            b"munmap" => 11,
+            b"pread64" => 17,
+            b"pwrite64" => 18,
+            b"readv" => 19,
+            b"writev" => 20,
+            b"mremap" => 25,
+            b"msync" => 26,
+            b"dup" => 32,
+            b"dup2" => 33,
+            b"sendfile" => 40,
+            b"socket" => 41,
+            b"recvmsg" => 47,
+            b"fcntl" => 72,
+            b"fsync" => 74,
+            b"fdatasync" => 75,
+            b"ftruncate" => 77,
+            b"fchdir" => 81,
+            b"fchmod" => 91,
+            b"getdents64" => 217,
+            b"splice" => 275,
+            b"fallocate" => 285,
+            b"dup3" => 292,
+            b"preadv" => 295,
+            b"pwritev" => 296,
+            b"copy_file_range" => 326,
+            b"preadv2" => 327,
+            b"pwritev2" => 328,
             b"write" => 1,
             b"open" => 2,
             b"close" => 3,
@@ -315,6 +371,34 @@ pub mod nr {
     const fn arm(name: &str) -> i64 {
         match name.as_bytes() {
             b"read" => 63,
+            b"lseek" => 62,
+            b"mmap" => 222,
+            b"munmap" => 215,
+            b"pread64" => 67,
+            b"pwrite64" => 68,
+            b"readv" => 65,
+            b"writev" => 66,
+            b"mremap" => 216,
+            b"msync" => 227,
+            b"dup" => 23,
+            b"sendfile" => 71,
+            b"socket" => 198,
+            b"recvmsg" => 212,
+            b"fcntl" => 25,
+            b"fsync" => 82,
+            b"fdatasync" => 83,
+            b"ftruncate" => 46,
+            b"fchdir" => 50,
+            b"fchmod" => 52,
+            b"getdents64" => 61,
+            b"splice" => 76,
+            b"fallocate" => 47,
+            b"dup3" => 24,
+            b"preadv" => 69,
+            b"pwritev" => 70,
+            b"copy_file_range" => 285,
+            b"preadv2" => 286,
+            b"pwritev2" => 287,
             b"write" => 64,
             b"close" => 57,
             b"fstat" => 80,
@@ -373,6 +457,35 @@ pub mod nr {
         }
     }
     calls!(
+        lseek,
+        mmap,
+        munmap,
+        pread64,
+        pwrite64,
+        readv,
+        writev,
+        mremap,
+        msync,
+        dup,
+        dup2,
+        sendfile,
+        socket,
+        recvmsg,
+        fcntl,
+        fsync,
+        fdatasync,
+        ftruncate,
+        fchdir,
+        fchmod,
+        getdents64,
+        splice,
+        fallocate,
+        dup3,
+        preadv,
+        pwritev,
+        copy_file_range,
+        preadv2,
+        pwritev2,
         read,
         write,
         open,

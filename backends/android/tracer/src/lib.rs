@@ -10,6 +10,7 @@ mod exec;
 mod mem;
 pub mod path;
 mod trace;
+mod view;
 
 pub use trace::{Options, Tracer};
 

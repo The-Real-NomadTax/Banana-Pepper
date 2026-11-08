@@ -38,10 +38,10 @@ the Android registry until they have Android requirements and validation.
 
 PRoot and its view extension are being replaced by `banana-tracer`
 (`backends/android/tracer`), a Rust ptrace tracer that takes the same command
-line. Its PRoot core (guest root and binds, exec through guest interpreters,
-fake root, link emulation, kill-on-exit) passes its Linux tests. The view
-protocol client, seccomp filtering and device validation remain, and sessions
-still run PRoot until they are done (see the tracer's README).
+line. It covers PRoot's core (guest root and binds, exec through guest interpreters,
+fake root, link emulation, kill-on-exit), view protocol 2 with descriptor handoff,
+and seccomp filtering, and passes its Linux tests against the real view server.
+Group stops and device validation remain; sessions still run PRoot until then (see the tracer's README).
 
 ## Build
 

@@ -5,8 +5,10 @@ use crate::{
     exec,
     mem::{self, Scratch},
     path::{self, Fs},
+    view::{self, View},
 };
 use std::{
+    cell::RefCell,
     collections::HashMap,
     ffi::CString,
     io,
@@ -39,6 +41,8 @@ struct Exit {
     /// The call was skipped: its result.
     result: Option<i64>,
     fix: Fix,
+    /// View bookkeeping (or a descriptor handoff) for this call.
+    view: Option<view::Pending>,
 }
 
 #[derive(Default)]
@@ -58,6 +62,8 @@ struct Thread {
     /// Created by a traced clone; its first SIGSTOP is the attach stop.
     awaiting_stop: bool,
     exit: Exit,
+    /// Handled at a seccomp stop; the syscall-entry stop that follows is not new.
+    entered: bool,
 }
 
 pub struct Tracer {
@@ -70,6 +76,253 @@ pub struct Tracer {
     executing: HashMap<i32, String>,
     uid: u32,
     gid: u32,
+    /// The session's view server (`BANANA_VFS_SOCKET`), when it has one.
+    view: RefCell<Option<View>>,
+    /// A seccomp filter stops the tracee only for calls the tracer handles.
+    seccomp: bool,
+}
+
+/// Guest path arguments a view-owned path can appear in: (dirfd, path).
+type PathArg = Option<(Option<usize>, usize)>;
+fn view_paths(call: i64) -> (PathArg, PathArg) {
+    let one = |d, a| (Some((d, a)), None);
+    match call {
+        c if [
+            nr::open,
+            nr::creat,
+            nr::stat,
+            nr::lstat,
+            nr::access,
+            nr::unlink,
+            nr::rmdir,
+            nr::mkdir,
+            nr::chmod,
+            nr::truncate,
+            nr::readlink,
+            nr::chdir,
+            nr::mknod,
+            nr::link,
+        ]
+        .contains(&c) =>
+        {
+            one(None, 0)
+        }
+        c if c == nr::symlink => one(None, 1),
+        c if c == nr::rename => (Some((None, 0)), Some((None, 1))),
+        c if [
+            nr::openat,
+            nr::openat2,
+            nr::newfstatat,
+            nr::statx,
+            nr::faccessat,
+            nr::faccessat2,
+            nr::unlinkat,
+            nr::mkdirat,
+            nr::fchmodat,
+            nr::fchmodat2,
+            nr::utimensat,
+            nr::readlinkat,
+            nr::mknodat,
+            nr::linkat,
+        ]
+        .contains(&c) =>
+        {
+            one(Some(0), 1)
+        }
+        c if c == nr::renameat || c == nr::renameat2 => (Some((Some(0), 1)), Some((Some(2), 3))),
+        c if c == nr::symlinkat => one(Some(1), 2),
+        _ => (None, None),
+    }
+}
+
+/// Calls the tracer handles. A seccomp filter stops the tracee for these
+/// only; descriptor calls matter only with a view, ids only with `-0`.
+fn traced_calls(view: bool, fake_root: bool) -> Vec<i64> {
+    let mut calls = vec![
+        nr::open,
+        nr::creat,
+        nr::stat,
+        nr::lstat,
+        nr::fstat,
+        nr::access,
+        nr::truncate,
+        nr::chdir,
+        nr::rename,
+        nr::mkdir,
+        nr::rmdir,
+        nr::link,
+        nr::unlink,
+        nr::symlink,
+        nr::readlink,
+        nr::chmod,
+        nr::chown,
+        nr::lchown,
+        nr::fchown,
+        nr::utime,
+        nr::utimes,
+        nr::mknod,
+        nr::statfs,
+        nr::chroot,
+        nr::setxattr,
+        nr::lsetxattr,
+        nr::getxattr,
+        nr::lgetxattr,
+        nr::listxattr,
+        nr::llistxattr,
+        nr::removexattr,
+        nr::lremovexattr,
+        nr::inotify_add_watch,
+        nr::openat,
+        nr::openat2,
+        nr::mkdirat,
+        nr::mknodat,
+        nr::fchownat,
+        nr::futimesat,
+        nr::newfstatat,
+        nr::unlinkat,
+        nr::renameat,
+        nr::renameat2,
+        nr::linkat,
+        nr::symlinkat,
+        nr::readlinkat,
+        nr::fchmodat,
+        nr::fchmodat2,
+        nr::faccessat,
+        nr::faccessat2,
+        nr::utimensat,
+        nr::statx,
+        nr::execve,
+        nr::execveat,
+        nr::getcwd,
+        nr::bind,
+        nr::connect,
+    ];
+    if fake_root {
+        calls.extend([
+            nr::getuid,
+            nr::geteuid,
+            nr::getgid,
+            nr::getegid,
+            nr::getresuid,
+            nr::getresgid,
+            nr::setuid,
+            nr::setgid,
+            nr::setreuid,
+            nr::setregid,
+            nr::setresuid,
+            nr::setresgid,
+            nr::setfsuid,
+            nr::setfsgid,
+            nr::setgroups,
+        ]);
+    }
+    if view {
+        calls.extend([
+            nr::read,
+            nr::write,
+            nr::pread64,
+            nr::pwrite64,
+            nr::readv,
+            nr::writev,
+            nr::preadv,
+            nr::pwritev,
+            nr::preadv2,
+            nr::pwritev2,
+            nr::ftruncate,
+            nr::fsync,
+            nr::fdatasync,
+            nr::fchmod,
+            nr::fchdir,
+            nr::getdents64,
+            nr::fallocate,
+            nr::close,
+            nr::lseek,
+            nr::mmap,
+            nr::fcntl,
+            nr::dup,
+            nr::dup2,
+            nr::dup3,
+            nr::mremap,
+            nr::msync,
+            nr::copy_file_range,
+            nr::sendfile,
+            nr::splice,
+        ]);
+    }
+    calls.retain(|&c| c >= 0);
+    calls.sort_unstable();
+    calls.dedup();
+    calls
+}
+
+/// A classic BPF program: trap `calls` (and any foreign architecture) to
+/// the tracer, allow everything else.
+fn seccomp_program(calls: &[i64]) -> Vec<libc::sock_filter> {
+    const LOAD: u16 = 0x20; // BPF_LD | BPF_W | BPF_ABS
+    const JEQ: u16 = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
+    const RET: u16 = 0x06; // BPF_RET | BPF_K
+    const TRACE: u32 = 0x7ff0_0000;
+    const ALLOW: u32 = 0x7fff_0000;
+    let op = |code, jt, jf, k| libc::sock_filter { code, jt, jf, k };
+    let mut program = vec![
+        op(LOAD, 0, 0, 4), // seccomp_data.arch
+        op(JEQ, 1, 0, arch::AUDIT_ARCH),
+        op(RET, 0, 0, TRACE),
+        op(LOAD, 0, 0, 0), // seccomp_data.nr
+    ];
+    let n = calls.len();
+    for (i, &call) in calls.iter().enumerate() {
+        // On a match, skip the remaining tests and the ALLOW to reach TRACE.
+        program.push(op(JEQ, (n - i) as u8, 0, call as u32));
+    }
+    program.push(op(RET, 0, 0, ALLOW));
+    program.push(op(RET, 0, 0, TRACE));
+    program
+}
+
+/// `Seccomp_filters` of a process (Linux 5.9+).
+fn seccomp_filters(pid: &str) -> Option<u32> {
+    std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("Seccomp_filters:"))
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// Programs for exec planning: the view first, then the guest root.
+struct Programs<'a> {
+    tracer: &'a Tracer,
+    tgid: i32,
+    tid: i32,
+}
+
+impl exec::Programs for Programs<'_> {
+    fn head(&self, guest: &str, limit: usize) -> Result<Vec<u8>, i32> {
+        if let Some(view) = self.tracer.view.borrow_mut().as_mut()
+            && view.owns(guest)?
+        {
+            return view.head(guest, limit);
+        }
+        use std::io::Read;
+        let host = self.tracer.fs.translate(guest, true, self.tgid, self.tid)?;
+        let file = std::fs::File::open(&host).map_err(errno)?;
+        if file.metadata().is_ok_and(|m| m.is_dir()) {
+            return Err(libc::EACCES);
+        }
+        let mut head = Vec::new();
+        file.take(limit as u64)
+            .read_to_end(&mut head)
+            .map_err(errno)?;
+        Ok(head)
+    }
+    fn host(&self, guest: &str) -> Result<PathBuf, i32> {
+        if let Some(view) = self.tracer.view.borrow_mut().as_mut()
+            && view.owns(guest)?
+        {
+            return view.program(guest);
+        }
+        self.tracer.fs.translate(guest, true, self.tgid, self.tid)
+    }
 }
 
 fn errno(e: io::Error) -> i32 {
@@ -129,6 +382,8 @@ impl Tracer {
             executing: HashMap::new(),
             uid,
             gid,
+            view: RefCell::new(None),
+            seccomp: false,
         }
     }
 
@@ -147,10 +402,33 @@ impl Tracer {
             .cloned()
             .ok_or_else(|| io::Error::other("No command"))?;
         let cwd = path::normalize(&self.options.cwd);
-        let host_cwd = self
-            .fs
-            .translate(&cwd, true, 0, 0)
-            .map_err(io::Error::from_raw_os_error)?;
+        if let Ok(socket) = std::env::var("BANANA_VFS_SOCKET") {
+            let empty = std::env::var_os("BANANA_VFS_EMPTY")
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    io::Error::other("BANANA_VFS_EMPTY is required with BANANA_VFS_SOCKET")
+                })?;
+            *self.view.get_mut() = Some(View::connect(&socket, empty).map_err(io::Error::other)?);
+            // The broker endpoint is the tracer's, never the guest's.
+            // SAFETY: the tracer is still single-threaded.
+            unsafe {
+                std::env::remove_var("BANANA_VFS_SOCKET");
+                std::env::remove_var("BANANA_VFS_EMPTY");
+            }
+        }
+        // A working directory inside the view: the kernel's cwd is the empty
+        // stand-in directory, and the tracer keeps the guest path.
+        let in_view = match self.view.get_mut() {
+            Some(view) => view.owns(&cwd).map_err(io::Error::from_raw_os_error)?,
+            None => false,
+        };
+        let host_cwd = if in_view {
+            self.view.get_mut().as_ref().unwrap().empty.clone()
+        } else {
+            self.fs
+                .translate(&cwd, true, 0, 0)
+                .map_err(io::Error::from_raw_os_error)?
+        };
         let c = |s: &str| CString::new(s).map_err(|_| io::Error::other("NUL in argument"));
         let c_program = c(&path::join(&cwd, &program))?;
         let c_args: Vec<CString> = self
@@ -166,6 +444,13 @@ impl Tracer {
         unsafe extern "C" {
             static environ: *const *const libc::c_char;
         }
+        let calls = traced_calls(self.view.get_mut().is_some(), self.options.fake_root);
+        let mut program = seccomp_program(&calls);
+        let filter = libc::sock_fprog {
+            len: program.len() as u16,
+            filter: program.as_mut_ptr(),
+        };
+        let use_seccomp = std::env::var_os("BANANA_TRACER_NO_SECCOMP").is_none();
         // SAFETY: the child only calls async-signal-safe functions on data
         // prepared before fork.
         let child = unsafe { libc::fork() };
@@ -178,6 +463,11 @@ impl Tracer {
                 if libc::chdir(c_cwd.as_ptr()) != 0 {
                     libc::_exit(127);
                 }
+                // Installed last: until the tracer asks for seccomp stops,
+                // trapped calls would fail. The tracer checks it took.
+                if use_seccomp && libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 {
+                    libc::syscall(libc::SYS_seccomp, 1usize, 0usize, &filter);
+                }
                 libc::raise(libc::SIGSTOP);
                 libc::execve(c_program.as_ptr(), pointers.as_ptr(), environ);
                 libc::_exit(127);
@@ -186,23 +476,67 @@ impl Tracer {
         let mut status = 0;
         // SAFETY: waiting for the child just forked.
         unsafe { libc::waitpid(child, &mut status, 0) };
+        if in_view && let Some(view) = self.view.get_mut() {
+            view.enter_directory(child, &cwd)
+                .map_err(io::Error::from_raw_os_error)?;
+        }
         let options = libc::PTRACE_O_TRACESYSGOOD
             | libc::PTRACE_O_TRACEFORK
             | libc::PTRACE_O_TRACEVFORK
             | libc::PTRACE_O_TRACECLONE
             | libc::PTRACE_O_TRACEEXEC
+            | libc::PTRACE_O_TRACESECCOMP
             | libc::PTRACE_O_EXITKILL;
         ptrace(libc::PTRACE_SETOPTIONS as _, child, options as usize)?;
+        self.seccomp = match (seccomp_filters("self"), seccomp_filters(&child.to_string())) {
+            (Some(own), Some(theirs)) => theirs > own,
+            _ => false,
+        };
+        self.log(1, || {
+            format!(
+                "seccomp filter: {} ({} calls)",
+                if self.seccomp {
+                    "on"
+                } else {
+                    "off, every call stops"
+                },
+                calls.len()
+            )
+        });
         self.threads.insert(
             child,
             Thread {
                 tgid: child,
                 awaiting_stop: false,
                 exit: Exit::default(),
+                entered: false,
             },
         );
-        ptrace(libc::PTRACE_SYSCALL as _, child, 0)?;
+        self.resume(child, 0)?;
         self.wait(child)
+    }
+
+    /// Continue a stopped thread: to its next syscall stop while a call it
+    /// is in still needs its exit, otherwise to its next seccomp stop.
+    fn resume(&self, tid: i32, signal: i32) -> io::Result<()> {
+        let stepping = !self.seccomp
+            || self.threads.get(&tid).is_some_and(|t| {
+                let e = &t.exit;
+                t.entered
+                    || !e.restore.is_empty()
+                    || e.result.is_some()
+                    || !matches!(e.fix, Fix::None)
+                    || e.view.is_some()
+            });
+        let request = if stepping {
+            libc::PTRACE_SYSCALL
+        } else {
+            libc::PTRACE_CONT
+        };
+        match ptrace(request as _, tid, signal as usize) {
+            Err(e) if e.raw_os_error() != Some(libc::ESRCH) => Err(e),
+            _ => Ok(()),
+        }
     }
 
     fn wait(&mut self, first: i32) -> io::Result<i32> {
@@ -222,7 +556,11 @@ impl Tracer {
                 return Err(e);
             }
             if libc::WIFEXITED(status) || libc::WIFSIGNALED(status) {
-                self.threads.remove(&tid);
+                if self.threads.remove(&tid).is_some_and(|t| t.tgid == tid)
+                    && let Some(view) = self.view.get_mut()
+                {
+                    view.exit(tid);
+                }
                 if tid == first {
                     code = Some(if libc::WIFEXITED(status) {
                         libc::WEXITSTATUS(status)
@@ -249,6 +587,21 @@ impl Tracer {
             let deliver = if signal == libc::SIGTRAP | 0x80 {
                 self.syscall(tid)?;
                 0
+            } else if signal == libc::SIGTRAP && event == libc::PTRACE_EVENT_SECCOMP {
+                self.syscall(tid)?;
+                // Stepping on from here passes the call's syscall-entry stop.
+                let stepping = !self.seccomp
+                    || self.threads.get(&tid).is_some_and(|t| {
+                        let e = &t.exit;
+                        !e.restore.is_empty()
+                            || e.result.is_some()
+                            || !matches!(e.fix, Fix::None)
+                            || e.view.is_some()
+                    });
+                if let Some(thread) = self.threads.get_mut(&tid) {
+                    thread.entered = stepping;
+                }
+                0
             } else if signal == libc::SIGTRAP && event != 0 {
                 self.event(tid, event)?;
                 0
@@ -266,6 +619,7 @@ impl Tracer {
                                 tgid,
                                 awaiting_stop: false,
                                 exit: Exit::default(),
+                                entered: false,
                             },
                         );
                     }
@@ -274,11 +628,7 @@ impl Tracer {
             } else {
                 signal
             };
-            if let Err(e) = ptrace(libc::PTRACE_SYSCALL as _, tid, deliver as usize)
-                && e.raw_os_error() != Some(libc::ESRCH)
-            {
-                return Err(e);
-            }
+            self.resume(tid, deliver)?;
         }
     }
 
@@ -297,11 +647,15 @@ impl Tracer {
                 {
                     self.programs.insert(tgid, program);
                 }
+                if let Some(view) = self.view.get_mut() {
+                    view.fork(parent, tgid);
+                }
                 let seen = self.threads.contains_key(&child);
                 let thread = self.threads.entry(child).or_insert(Thread {
                     tgid,
                     awaiting_stop: true,
                     exit: Exit::default(),
+                    entered: false,
                 });
                 thread.tgid = tgid;
                 if seen {
@@ -320,6 +674,9 @@ impl Tracer {
                     thread.tgid = tid;
                     self.threads.insert(tid, thread);
                 }
+                if let Some(view) = self.view.get_mut() {
+                    view.exec(tgid);
+                }
                 if let Some(program) = self.executing.remove(&tgid) {
                     self.log(1, || format!("{tid} runs {program}"));
                     self.programs.insert(tid, program);
@@ -333,6 +690,20 @@ impl Tracer {
     fn syscall(&mut self, tid: i32) -> io::Result<()> {
         match arch::syscall_stop(tid)? {
             Stop::Entry { nr, args } => {
+                // The entry stop after a seccomp stop already handled.
+                if let Some(thread) = self.threads.get_mut(&tid)
+                    && thread.entered
+                {
+                    thread.entered = false;
+                    return Ok(());
+                }
+                // The entry of a call injected by a descriptor handoff.
+                if let Some(thread) = self.threads.get(&tid)
+                    && let Some(view::Pending::Transfer(t)) = &thread.exit.view
+                    && t.injecting
+                {
+                    return Ok(());
+                }
                 let exit = match self.enter(tid, nr, args) {
                     Ok(exit) => exit,
                     Err(error) => {
@@ -349,10 +720,32 @@ impl Tracer {
                 Ok(())
             }
             Stop::Exit { result } => {
-                let exit = match self.threads.get_mut(&tid) {
+                let mut exit = match self.threads.get_mut(&tid) {
                     Some(thread) => std::mem::take(&mut thread.exit),
                     None => return Ok(()),
                 };
+                if let Some(mut pending) = exit.view.take() {
+                    let tgid = self.tgid(tid);
+                    let view = self
+                        .view
+                        .get_mut()
+                        .as_mut()
+                        .ok_or_else(|| io::Error::other("no view"))?;
+                    let transfer = matches!(pending, view::Pending::Transfer(_));
+                    let running = view
+                        .leave(tid, tgid, result, &mut pending)
+                        .map_err(io::Error::from_raw_os_error)?;
+                    if running {
+                        exit.view = Some(pending);
+                        if let Some(thread) = self.threads.get_mut(&tid) {
+                            thread.exit = exit;
+                        }
+                        return Ok(());
+                    }
+                    if transfer {
+                        return Ok(()); // the handoff restored the registers
+                    }
+                }
                 self.leave(tid, result, exit)
             }
             Stop::Other => Ok(()),
@@ -365,6 +758,21 @@ impl Tracer {
 
     /// The guest directory a relative path in `dirfd` resolves against.
     fn base(&self, tid: i32, dirfd: Option<i64>) -> Result<String, i32> {
+        if let Some(view) = self.view.borrow_mut().as_mut() {
+            let tgid = self.tgid(tid);
+            match dirfd {
+                Some(fd) if fd as i32 != libc::AT_FDCWD => {
+                    if let Some(directory) = view.directory_of(tid, tgid, fd) {
+                        return directory;
+                    }
+                }
+                _ => {
+                    if let Some(cwd) = view.cwd(tgid) {
+                        return Ok(cwd.clone());
+                    }
+                }
+            }
+        }
         let link = match dirfd {
             Some(fd) if fd as i32 != libc::AT_FDCWD => format!("/proc/{tid}/fd/{}", fd as i32),
             _ => format!("/proc/{tid}/cwd"),
@@ -410,6 +818,38 @@ impl Tracer {
         let mut exit = Exit::default();
         let flag = |arg: usize, bit: u64| args[arg] & bit != 0;
         let nofollow = libc::AT_SYMLINK_NOFOLLOW as u64;
+
+        if self.view.borrow().is_some() {
+            let (first, second) = view_paths(call);
+            let guest = |p: PathArg| -> Result<Option<String>, i32> {
+                let Some((dirfd, arg)) = p else {
+                    return Ok(None);
+                };
+                Ok(self
+                    .guest_path(tid, dirfd.map(|d| args[d] as i64), args[arg])?
+                    .map(|g| path::normalize(&g)))
+            };
+            let paths = view::Paths {
+                first: guest(first)?,
+                second: guest(second)?,
+            };
+            let outcome = self
+                .view
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .enter(tid, tgid, call, args, &paths)?;
+            match outcome {
+                view::Outcome::Skip(result) => return self.skip(tid, result),
+                view::Outcome::Rewritten(pending) => {
+                    return Ok(Exit {
+                        view: Some(pending),
+                        ..Exit::default()
+                    });
+                }
+                view::Outcome::Continue(pending) => exit.view = pending,
+            }
+        }
 
         // Paths to translate: (dirfd argument, path argument, follow).
         let mut paths: Vec<(Option<usize>, usize, Follow)> = Vec::new();
@@ -720,7 +1160,15 @@ impl Tracer {
         let guest = path::normalize(&guest);
         let guest = self.proc_exe(tgid, &guest).unwrap_or(guest);
         let argv = mem::strings(tid, args[argv_arg]).map_err(errno)?;
-        let plan = exec::plan(&self.fs, &guest, argv, tgid, tid)?;
+        let plan = exec::plan(
+            &Programs {
+                tracer: self,
+                tgid,
+                tid,
+            },
+            &guest,
+            argv,
+        )?;
         self.log(1, || {
             format!("{tid} execve {guest} via {}", plan.host.display())
         });
@@ -871,8 +1319,13 @@ impl Tracer {
             Fix::ProcLink { buffer, size } => {
                 let mut host = vec![0u8; result as usize];
                 mem::read(tid, buffer, &mut host).map_err(errno)?;
-                let host = PathBuf::from(String::from_utf8_lossy(&host).into_owned());
-                let Some(guest) = self.fs.guest_of(&host) else {
+                let host = String::from_utf8_lossy(&host).into_owned();
+                let viewed = self
+                    .view
+                    .borrow_mut()
+                    .as_mut()
+                    .and_then(|v| v.link_target(&host));
+                let Some(guest) = viewed.or_else(|| self.fs.guest_of(Path::new(&host))) else {
                     return Ok(result);
                 };
                 let bytes = &guest.as_bytes()[..guest.len().min(size as usize)];
