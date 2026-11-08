@@ -9,6 +9,10 @@ mod arch;
 mod exec;
 mod mem;
 pub mod path;
+
+/// Carried in the binary for the backend's capability check: the view
+/// protocol this tracer speaks (`--version` prints it).
+pub const MARKER: &str = "BANANA_TRACER_VIEW_PROTOCOL_2";
 mod trace;
 mod view;
 

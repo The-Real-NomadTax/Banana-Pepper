@@ -108,22 +108,7 @@ fn missing(game: &dyn banana_api::GameCompat, files: &Path) -> Vec<String> {
         })
         .map(|s| (*s).into())
         .collect();
-    for (relative, label) in [
-        ("bin/proot", "Android proot"),
-        ("bin/loader", "Android proot loader"),
-        ("rootfs/usr/bin/Xvfb", "X11 runtime"),
-    ] {
-        if !files.join(relative).is_file() {
-            missing.push(label.into());
-        }
-    }
-    if !fs::read(files.join("bin/proot"))
-        .is_ok_and(|bytes| bytes.windows(21).any(|s| s == b"BANANA_VFS_PROTOCOL_2"))
-    {
-        missing.push(
-            "Android virtual filesystem protocol 2 (rebuild/install the patched runtime)".into(),
-        );
-    }
+    missing.extend(banana_android::missing_runtime(files));
     missing
 }
 

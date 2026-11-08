@@ -285,7 +285,7 @@ pub trait SessionView: Send + Sync {
     fn serve_fuse(&self, _device: std::fs::File) -> std::io::Result<()> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
-    /// Serve the PRoot interception protocol on Unix socket `socket`, with
+    /// Serve the tracer interception protocol on Unix socket `socket`, with
     /// the view's root at absolute guest path `root`, until the returned
     /// server is dropped (which flushes the overlay). Android only.
     fn serve_traced(
@@ -297,7 +297,7 @@ pub trait SessionView: Send + Sync {
     }
 }
 
-/// A running PRoot interception server ([`SessionView::serve_traced`]).
+/// A running tracer interception server ([`SessionView::serve_traced`]).
 pub trait TracedView: Send {
     /// Expose view path `source` ("" for the root) at absolute guest path `guest`.
     fn map(&self, guest: &str, source: &str, readonly: bool) -> std::io::Result<()>;

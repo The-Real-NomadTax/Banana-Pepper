@@ -1,7 +1,7 @@
 //! Shared composed filesystems, persistent overlays and their exposure to
 //! guests: the [`wire`] protocol for intercepting backends (Water, the
 //! Windows file shim), FUSE connections served into a session's own Linux
-//! namespace, and the PRoot tracer protocol on Android ([`rootless`]).
+//! namespace, and the banana-tracer protocol on Android ([`rootless`]).
 //! Nothing here mounts on the host.
 mod view;
 pub mod wire;

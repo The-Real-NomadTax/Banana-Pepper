@@ -277,6 +277,7 @@ dependencies = [
 name = "banana-ffi"
 version = "0.1.0"
 dependencies = [
+ "banana-android",
  "banana-api",
  "banana-compat",
  "banana-content",

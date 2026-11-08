@@ -3,7 +3,7 @@
 //! Gradle. Runs on Windows, Linux and macOS hosts; it downloads nothing
 //! beyond the pinned Kotlin compiler.
 use crate::{
-    android::{PROOT_PROTOCOL, Sdk, java, kotlin},
+    android::{Sdk, java, kotlin},
     util::{Context, Result, android_build, native, output, root, run, sha256, sha256_file},
 };
 use std::{
@@ -24,7 +24,6 @@ pub fn build() -> Result<()> {
     let kotlinc = kotlin()?;
     let java = java()?;
     let resources = root.join("target/dist/banana-pepper-android-resources");
-    let proot = build.join("proot");
     let version_code = env(
         "VERSION_CODE",
         &std::time::SystemTime::now()
@@ -38,25 +37,14 @@ pub fn build() -> Result<()> {
 
     for (path, hint) in [
         (build.join("rootfs.tar.gz"), "cargo xtask android rootfs"),
-        (proot.join("proot"), "cargo xtask android proot (Linux host)"),
-        (proot.join("loader"), "cargo xtask android proot-deps"),
-        (proot.join("libtalloc.so.2"), "cargo xtask android proot-deps"),
-        (proot.join("libandroid-shmem.so"), "cargo xtask android proot-deps"),
         (resources.join("banana-pepper.dist"), "cargo xtask android resources (Linux host)"),
     ] {
         if !path.is_file() {
             return Err(format!("Missing {}; run {hint}", path.display()));
         }
     }
-    if !fs::read(proot.join("proot"))
-        .ctx("proot")?
-        .windows(PROOT_PROTOCOL.len())
-        .any(|w| w == PROOT_PROTOCOL)
-    {
-        return Err("build/proot/proot lacks the view protocol; run cargo xtask android proot".into());
-    }
 
-    // The JNI library.
+    // The JNI library and the tracer that runs every guest process.
     let clang = sdk.clang();
     let clangxx = clang.with_file_name(
         clang
@@ -67,7 +55,8 @@ pub fn build() -> Result<()> {
     );
     run(Command::new("cargo")
         .current_dir(&root)
-        .args(["build", "--release", "--locked", "-p", "banana-ffi", "--target", "aarch64-linux-android"])
+        .args(["build", "--release", "--locked", "--target", "aarch64-linux-android"])
+        .args(["-p", "banana-ffi", "-p", "banana-tracer"])
         .env("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", &clang)
         .env("CC_aarch64_linux_android", &clang)
         .env("CXX_aarch64_linux_android", &clangxx)
@@ -84,8 +73,12 @@ pub fn build() -> Result<()> {
     for dir in [&tools, &libs, &work.join("gen"), &work.join("dex"), &work.join("src/com/bananapepper")] {
         fs::create_dir_all(dir).ctx(dir.display())?;
     }
-    for name in ["proot", "loader", "libtalloc.so.2", "libandroid-shmem.so"] {
-        fs::copy(proot.join(name), assets.join(name)).ctx(name)?;
+    let tracer = assets.join("banana-tracer");
+    fs::copy(root.join("target/aarch64-linux-android/release/banana-tracer"), &tracer).ctx("banana-tracer")?;
+    run(Command::new(sdk.tool("llvm-strip")).arg("--strip-unneeded").arg(&tracer))?;
+    let marker = b"BANANA_TRACER_VIEW_PROTOCOL_2";
+    if !fs::read(&tracer).ctx("banana-tracer")?.windows(marker.len()).any(|w| w == marker) {
+        return Err("The built banana-tracer lacks its view protocol marker".into());
     }
     copy_tree(&resources.join("games"), &tools.join("games"))?;
     for name in ["banana-pepper.dist", "artifacts.json", "THIRD-PARTY-NOTICES.txt"] {

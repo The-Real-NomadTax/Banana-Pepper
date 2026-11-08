@@ -7,14 +7,14 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
 ## Hard rules
 
 - **Never write to sources and never extract.** Patched executables and configs are in-memory `generated` files in the view. Game writes go to the per-user overlay (dirty 64 KiB blocks).
-- **Nothing gets installed on the host.** No WinFsp, no FUSE drivers or fusermount, no Bubblewrap, no helper apps. Windows serves the view over pipes (`banana-wire`). Linux mounts FUSE inside the session's own namespace (`banana-sandbox`). Android uses PRoot interception.
+- **Nothing gets installed on the host.** No WinFsp, no FUSE drivers or fusermount, no Bubblewrap, no helper apps. Windows serves the view over pipes (`banana-wire`). Linux mounts FUSE inside the session's own namespace (`banana-sandbox`). Android runs guests under `banana-tracer`, a Rust ptrace tracer (`backends/android/tracer`).
 - **Everything title-specific lives in `game-compat/<game>/`:** offsets, hashes, transforms, controls, settings, adapters, docs and probes. Shared crates, backends, the orchestrator and frontends never name a game. The only exception is the registry in `crates/banana-compat`.
 - **Write each patch once, for the game's own OS.**
   - **Windows games:** `hook/` DLLs run natively on Windows and unchanged under Wine on Linux and Android.
   - **Linux games:** the `guest/` crate is preloaded on Linux and Android, and the same crate is built as Water's optional preload adapter on Windows. Override the same library functions on both, and keep only device reading per platform (see `game-compat/big-buck-hunter/guest/src/{jamma,glut,linux,water}.rs`). Per-frame controller work goes through `banana_input::session::Players`.
 - **Water grows like Wine:** add missing Linux functions or libraries to Water as generic builtins, never as title code (see `backends/water/README.md`).
 - **Plans reference artifacts by `name`, never by path.** Declare each artifact in its crate's `Cargo.toml` under `[[package.metadata.banana.artifacts]]` (`name, kind, target, hosts, destination`). A name must equal the library/binary filename and be unique per host.
-- **No interpreted launchers or build scripts.** No Python or shell launch or build scripts. Repository tooling (packaging, the Android runtime image, Box64, PRoot, the APK, fixtures) is Rust in `tools/xtask` (`cargo xtask …`). Title-specific dev probes go in `game-compat/<game>/tools/`. Neither is ever shipped.
+- **No interpreted launchers or build scripts.** No Python or shell launch or build scripts. Repository tooling (packaging, the Android runtime image, Box64, the APK, fixtures) is Rust in `tools/xtask` (`cargo xtask …`). Title-specific dev probes go in `game-compat/<game>/tools/`. Neither is ever shipped.
 - **Unsupported means an error.** Unsupported combinations fail with a clear session error, never a silent fallback.
 
 ## Map
@@ -22,7 +22,7 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
 | Path | Owns |
 |---|---|
 | `crates/banana-content` | Sources (folder, ZAR, memory), cheap `stamp`, streaming fingerprints |
-| `crates/banana-vfs` | View composition, overlay, `wire::serve`, `serve_fuse` (Linux), PRoot server (Android) |
+| `crates/banana-vfs` | View composition, overlay, `wire::serve`, `serve_fuse` (Linux), tracer view server (Android) |
 | `crates/banana-wire` | Dependency-free view protocol and guest client |
 | `crates/banana-api` | `GameCompat`, `LaunchPlan`, `ExecutionBackend`, `SessionView`, process ownership |
 | `crates/banana-runtime` | Orchestration, storage, fingerprint cache, dependencies, migration |
@@ -31,12 +31,12 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
 | `backends/native` | Windows PE (staging, PE import injection), Linux `banana-sandbox` |
 | `backends/wine` | Wine prefix in a held session namespace |
 | `backends/water` | Linux-on-Windows runtime, like Wine in reverse: `water-x86` (ELF32 dynamic linker plus builtin libc/GLUT/GL/OSS) and `water-x64` (static ELF64); optional preload adapters (`AdapterV2`) |
-| `backends/android` | Box64 / Wine / PRoot plumbing, display/audio bridges (`bridge.rs`); `tracer/`: the Rust PRoot replacement (in progress, see its README) |
+| `backends/android` | Box64 / Wine plumbing, display/audio bridges (`bridge.rs`); `tracer/`: `banana-tracer`, the guest root, view client and seccomp filter (see its README) |
 | `guest/view-shim` | `banana_view.dll`: hooks Win32 file APIs to read the served view |
 | `guest/linux-shim`, `guest/win32` | Reusable in-guest services, included by game crates via `#[path]` |
 | `apps/desktop` | `arcade-desktop` (egui), including ZAR packing (`--pack`) |
 | `apps/android` | Kotlin UI over `crates/banana-ffi` |
-| `tools/xtask` | `cargo xtask`: builds declared artifacts into `target/dist/…` plus `artifacts.json`; the Android rootfs (from Debian packages), Box64, PRoot, Wine/Kotlin/x64 inputs and the APK; fixtures |
+| `tools/xtask` | `cargo xtask`: builds declared artifacts into `target/dist/…` plus `artifacts.json`; the Android rootfs (from Debian packages), Box64, Wine/Kotlin/x64 inputs and the APK (with banana-tracer); fixtures |
 
 Game crate layout: `src/` (metadata in `lib.rs`, `plan.rs`, `prepare.rs`, `settings.rs`, `controls.rs`, `android.rs`), `guest/` (Linux preload / Water adapter), `hook/` (Windows DLL), `io/`, `tests/defaults.rs`, `docs/`, `tools/`.
 
@@ -48,7 +48,7 @@ Game crate layout: `src/` (metadata in `lib.rs`, `plan.rs`, `prepare.rs`, `setti
 just build                                   # = cargo xtask dist: every artifact for this host -> target/dist/banana-pepper-<os>-<arch>/
 just run                                     # = cargo xtask run: build, then launch the packaged app
 cargo xtask android all                      # Android inputs this host can build, then apps/android/build/BananaPepper.apk
-cargo xtask android <step>                   # kotlin | wine | x64-libs | proot-deps | proot | box64 | rootfs | resources | apk
+cargo xtask android <step>                   # kotlin | wine | x64-libs | box64 | rootfs | resources | apk
 cargo test --workspace --locked              # the full suite (Windows and 64-bit Linux)
 cargo build --release --locked -p <crate> --target i686-pc-windows-msvc    # hooks / Water adapters
 cargo build --release --locked -p <crate> --target i686-unknown-linux-gnu  # Linux guest libraries (build on Linux/WSL)

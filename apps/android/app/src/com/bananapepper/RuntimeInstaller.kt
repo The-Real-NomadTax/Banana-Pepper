@@ -39,8 +39,10 @@ object RuntimeInstaller {
         }
         progress("Updating runtime tools…", 95)
         Paths.bin(c).mkdirs(); Paths.opt(c).mkdirs()
-        for (name in listOf("proot", "loader", "libtalloc.so.2", "libandroid-shmem.so"))
-            copyAsset(c, "runtime/$name", File(Paths.bin(c), name), 493)
+        copyAsset(c, "runtime/banana-tracer", File(Paths.bin(c), "banana-tracer"), 493)
+        // The PRoot runtime it replaces (tracer, loader and their libraries).
+        for (old in listOf("proot", "loader", "libtalloc.so.2", "libandroid-shmem.so"))
+            File(Paths.bin(c), old).delete()
         val tools = Paths.opt(c)
         val stagedTools = File(c.filesDir,"opt.installing")
         val previousTools = File(c.filesDir,"opt.previous")

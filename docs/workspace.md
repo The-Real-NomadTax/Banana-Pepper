@@ -3,7 +3,7 @@
 - `crates/banana-content`: provider contracts, folder/ZAR/memory sources and archive conversion.
 - `crates/banana-api`: compatibility/backend/session contracts and common process ownership.
 - `crates/banana-core`: source-based executable inspection and reports.
-- `crates/banana-vfs`: composition, persistent overlays, the view protocol host, the FUSE connection server (Linux) and the PRoot server (Android).
+- `crates/banana-vfs`: composition, persistent overlays, the view protocol host, the FUSE connection server (Linux) and the tracer view server (Android).
 - `crates/banana-wire`: the dependency-free view protocol and its guest-side client.
 - `guest/view-shim`: `banana_view.dll`, which serves native Windows titles' file calls from the view.
 - `crates/banana-runtime`: game-agnostic orchestration, storage, dependency preparation and migration mechanisms.
@@ -18,7 +18,7 @@
 - `guest/`: reusable guest services and platform input helpers. Session controller settings (`ARCADE_PLAYERS`, `ARCADE_PAD`, ...) are read by `banana_input::session` on every platform.
 - `crates/banana-compat`: composition root registering built-in modules.
 - `apps/`: frontends; shared FFI remains in `crates/banana-ffi`.
-- `tools/xtask`: `cargo xtask`, the repository's only build tooling. It builds and packages crate-declared artifacts, builds the Android runtime inputs (the Debian rootfs from packages, Box64, PRoot, Wine, Kotlin and x86-64 libraries) and the APK, and rebuilds committed fixtures. The desktop app owns ZAR packing (`--pack` and its compressor window).
+- `tools/xtask`: `cargo xtask`, the repository's only build tooling. It builds and packages crate-declared artifacts, builds the Android runtime inputs (the Debian rootfs from packages, Box64, Wine, Kotlin and x86-64 libraries) and the APK, and rebuilds committed fixtures. The desktop app owns ZAR packing (`--pack` and its compressor window).
 
 Game plan crates depend on shared contracts and content/input/settings services, rather than the session orchestrator. Backend crates implement the execution API. Title adapters may use a backend's published extension services.
 
@@ -26,4 +26,4 @@ Each shipped artifact is declared using `[[package.metadata.banana.artifacts]]` 
 
 Adding a game means adding its `game-compat/<title>/` folder and registering it in `crates/banana-compat` (its manifest and `games()`). Adding a content format means registering a provider. Neither requires title branches in the frontend, filesystem, orchestrator or backend.
 
-Android execution plumbing lives in `backends/android/`: its Rust backend owns processes and transports, while the PRoot extension only translates namespace operations into the shared Rust filesystem service. Kotlin owns the UI. Skylanders uses the same provider/plan contracts and crate-declared adapter artifacts as other titles.
+Android execution plumbing lives in `backends/android/`: its Rust backend owns processes and transports, while `banana-tracer` (`backends/android/tracer`) only translates namespace operations into the shared Rust filesystem service. Kotlin owns the UI. Skylanders uses the same provider/plan contracts and crate-declared adapter artifacts as other titles.

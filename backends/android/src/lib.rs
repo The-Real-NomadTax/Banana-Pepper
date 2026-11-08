@@ -69,7 +69,7 @@ impl ExecutionBackend for Android {
     }
     fn launch(&self, mut s: PreparedSession) -> Result<Box<dyn SessionHandle>, String> {
         self.check(&s.plan).map_err(|e| e.to_string())?;
-        // PRoot brokers the guest's file calls into the view; the returned
+        // banana-tracer brokers the guest's file calls into the view; the returned
         // empty directory only stands for the view's root, so the guest is
         // given the planned root's virtual path instead.
         let (_empty, view) = expose(&mut s)?;
@@ -101,13 +101,10 @@ impl ExecutionBackend for Android {
                 std::fs::remove_file(path).map_err(|e| e.to_string())?;
             }
         }
-        let proot = files.join("bin/proot");
-        if !std::fs::read(&proot)
-            .map_err(|e| format!("Missing Android PRoot: {e}"))?
-            .windows(21)
-            .any(|v| v == b"BANANA_VFS_PROTOCOL_2")
-        {
-            return Err("Android PRoot lacks virtual filesystem protocol 2. Rebuild/install the application runtime; stock PRoot cannot expose mounted game content.".into());
+        if let Some(missing) = missing_runtime(&files).first() {
+            return Err(format!(
+                "The Android runtime lacks {missing}. Rebuild/install the application runtime."
+            ));
         }
         let mut transport = Transport {
             files,
@@ -255,7 +252,26 @@ impl ExecutionBackend for Android {
         Ok(Box::new(owned))
     }
 }
-/// Serve the view to PRoot: map the planned root (and, for Wine, its prefix
+/// The tracer executable in the app's `files/bin`, and the marker its
+/// binary carries for the view protocol it speaks.
+pub const TRACER: &str = "bin/banana-tracer";
+pub const TRACER_MARKER: &[u8] = b"BANANA_TRACER_VIEW_PROTOCOL_2";
+
+/// Runtime pieces every Android session needs, missing from `files`.
+pub fn missing_runtime(files: &Path) -> Vec<String> {
+    let mut missing = Vec::new();
+    match std::fs::read(files.join(TRACER)) {
+        Ok(bytes) if bytes.windows(TRACER_MARKER.len()).any(|w| w == TRACER_MARKER) => {}
+        Ok(_) => missing.push("a tracer speaking view protocol 2 (reinstall the runtime)".into()),
+        Err(_) => missing.push("the banana-tracer executable".into()),
+    }
+    if !files.join("rootfs/usr/bin/Xvfb").is_file() {
+        missing.push("the X11 runtime".into());
+    }
+    missing
+}
+
+/// Serve the view to the tracer: map the planned root (and, for Wine, its prefix
 /// drive), the generated cpuinfo and the plan's extra mounts, and publish
 /// the endpoint in the plan's environment.
 fn expose(s: &mut PreparedSession) -> Result<(PathBuf, Box<dyn TracedView>), String> {
@@ -268,7 +284,7 @@ fn expose(s: &mut PreparedSession) -> Result<(PathBuf, Box<dyn TracedView>), Str
     let view = s
         .view
         .serve_traced(&socket, &root.to_string_lossy())
-        .map_err(|e| format!("Cannot serve the view to PRoot: {e}"))?;
+        .map_err(|e| format!("Cannot serve the view to the tracer: {e}"))?;
     let plan = &mut s.plan;
     let map = |guest: &str, source: &str, readonly: bool| {
         view.map(guest, source, readonly).map_err(|e| e.to_string())
@@ -319,7 +335,7 @@ impl Transport {
         argv: &[String],
         timeout: Option<u64>,
     ) -> Result<Box<dyn SessionHandle>, String> {
-        let mut command = Command::new(self.files.join("bin/proot"));
+        let mut command = Command::new(self.files.join(TRACER));
         command
             .args(["--kill-on-exit", "--link2symlink", "-0", "-r"])
             .arg(self.files.join("rootfs"));
@@ -336,9 +352,9 @@ impl Transport {
             command.arg("-b").arg(format!("{}:{guest}", host.display()));
         }
         if name == "game" {
-            // Developer tracing: a verbosity level in `config/proot-trace` makes
-            // the game's tracer log intercepted system calls into game.log.
-            if let Ok(level) = std::fs::read_to_string(self.files.join("config/proot-trace")) {
+            // Developer tracing: a verbosity level in `config/tracer-trace` makes
+            // the game's tracer log execs (1) and translated paths (2) into game.log.
+            if let Ok(level) = std::fs::read_to_string(self.files.join("config/tracer-trace")) {
                 let level = level.trim().parse::<u8>().unwrap_or(2).min(9);
                 command.arg("-v").arg(level.to_string());
             }
@@ -386,10 +402,7 @@ impl Transport {
         }
         command
             .args(argv)
-            .env_remove("LD_PRELOAD")
-            .env("LD_LIBRARY_PATH", self.files.join("bin"))
-            .env("PROOT_LOADER", self.files.join("bin/loader"))
-            .env("PROOT_TMP_DIR", &self.tmp);
+            .env_remove("LD_PRELOAD");
         // Only the game tracer opens the namespace broker. Support processes don't
         // access game files and must not monopolize its serialized RPC connection.
         if name == "game" {

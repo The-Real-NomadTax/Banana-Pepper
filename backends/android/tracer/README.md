@@ -1,15 +1,20 @@
 # banana-tracer
 
-A Rust ptrace tracer that gives Android guests their own root: the job PRoot
-does today. It takes PRoot's command line (`--kill-on-exit --link2symlink -0 -r
-ROOT -b HOST:GUEST… -w DIR -v LEVEL COMMAND…`), so the backend switch is a change
-of executable. It is one Rust executable, with no talloc, libandroid-shmem or
-loader beside it. It runs on Linux AArch64 (Android) and
-x86-64 (desktop Linux, where its tests run).
+The Rust ptrace tracer every Android guest process runs under. It gives the
+guest the runtime image as its root and serves game paths from the session's
+view. It replaced PRoot and its view extension, along with their loader,
+talloc and libandroid-shmem.
 
-**Status: feature-complete against the PRoot extension on Linux x86-64; not yet run on a device. The Android backend still runs PRoot.**
+The Android backend runs it as `files/bin/banana-tracer` with PRoot's
+command-line spelling: `--kill-on-exit --link2symlink -0 -r ROOT
+-b HOST:GUEST… -w DIR -v LEVEL COMMAND…`. `cargo xtask android apk` builds it
+and packages it as an APK asset. Its binary carries `BANANA_TRACER_VIEW_PROTOCOL_2`
+(`--version` prints it), which the backend's capability check requires. It runs
+on Linux AArch64 (Android) and x86-64 (desktop Linux, where its tests run).
 
-## Done (milestone 1: PRoot's core)
+**Status: in use by Android sessions. Tested on Linux x86-64; not yet run on a device.**
+
+## Guest root (PRoot's core)
 
 - Processes and threads: fork, vfork and clone are followed. Exec moves the
   thread to its process id, and `PTRACE_O_EXITKILL` plus `--kill-on-exit` tie
@@ -47,12 +52,12 @@ through the tracer: guest-only files, absolute links, cwd and getcwd,
 kill-on-exit. The AArch64 build links for `aarch64-linux-android` but has not
 yet run on a device.
 
-## Done (milestone 2: the view and seccomp)
+## The view and seccomp
 
 - **View protocol 2** (`view.rs`). With `BANANA_VFS_SOCKET` and
   `BANANA_VFS_EMPTY`, the tracer holds one connection to the session's
   `banana-vfs::rootless` server, which is unchanged, and serves the guest paths
-  it owns. This is a port of `proot/banana_vfs.c` and `banana_fd.h`:
+  it owns. It ports the former PRoot view extension (`banana_vfs.c`, `banana_fd.h`):
   - **Path calls:** open, creat, the stat family, access, unlink, rmdir, mkdir,
     rename, chmod, utimensat, truncate, chdir and readlink. Links and nodes on
     view paths are refused.
@@ -100,7 +105,7 @@ programs then exercise it:
 
 Every test passes with and without the filter.
 
-## Remaining before it replaces PRoot
+## Remaining
 
 1. **Group stops** (`PTRACE_SEIZE` and `PTRACE_LISTEN`). A SIGSTOP or SIGTSTP
    inside the guest is delivered but does not keep the process stopped, as
@@ -108,12 +113,6 @@ Every test passes with and without the filter.
 2. **Device validation** on the SM-S721U: Xvfb, PulseAudio, Box64/Box32 and a
    title under the tracer. The AArch64 register, injection and seccomp paths
    are only compiled so far.
-3. **The switch**:
-   - Declare the binary as an Android artifact and have the backend spawn it.
-   - Replace the protocol-string check with the tracer's.
-   - Delete `backends/android/proot`, the `proot`/`proot-deps` xtask steps, and
-     the talloc, libandroid-shmem and PRoot notices and assets.
-
 ## Known differences from PRoot
 
 - Emulated hard links are symbolic links to lstat.

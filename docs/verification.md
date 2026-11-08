@@ -24,6 +24,6 @@ The C parts of these builds need the NDK's compilers (`CC_aarch64_linux_android`
 `cargo test -p banana-android --test bridge` (Linux with Xvfb) checks the display
 and audio bridges against a real X server, and `cargo test -p xtask` checks package
 resolution, merged-/usr layout, trimming and APK assembly. `cargo xtask android all`
-builds the complete APK (the rootfs, Box64, PRoot and the optional Wine inputs
+builds the complete APK (the rootfs, Box64, banana-tracer and the optional Wine inputs
 described in `android.md`). Successful host tests do not establish phone gameplay
 support.

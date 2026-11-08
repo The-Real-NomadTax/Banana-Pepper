@@ -6,9 +6,10 @@ API as desktop. Kotlin owns the native library/game UI, touch input, frame displ
 and AudioTrack output. Rust owns preparation, execution and process cleanup.
 
 Normal, unrooted ARM64 phones are the target. Android apps cannot mount an arbitrary
-FUSE filesystem. The Android adapter instead extends the PRoot tracer with a
-versioned namespace protocol into `banana-vfs`. No extracted game tree or patched
-executable is written to disk.
+FUSE filesystem. Every guest process instead runs under `banana-tracer`
+(`backends/android/tracer`), a Rust ptrace tracer that gives it the runtime
+image as its root and brokers game paths into `banana-vfs` through a versioned
+view protocol. No extracted game tree or patched executable is written to disk.
 
 ## Namespace and persistence
 
@@ -36,12 +37,22 @@ adapters remain under `game-compat/`. Reusable box32/libc and pthread ABI fixes 
 in the generic Linux guest services. Minecraft and Skylanders remain excluded from
 the Android registry until they have Android requirements and validation.
 
-PRoot and its view extension are being replaced by `banana-tracer`
-(`backends/android/tracer`), a Rust ptrace tracer that takes the same command
-line. It covers PRoot's core (guest root and binds, exec through guest interpreters,
-fake root, link emulation, kill-on-exit), view protocol 2 with descriptor handoff,
-and seccomp filtering, and passes its Linux tests against the real view server.
-Group stops and device validation remain; sessions still run PRoot until then (see the tracer's README).
+The tracer is one executable (`files/bin/banana-tracer`):
+- **Guest root:** the runtime image as the root, with binds.
+- **Programs:** guest programs run through their own `ld.so` or `#!`
+  interpreter.
+- **Root and links:** fake root, and hard links as symbolic links (Android
+  denies link()).
+- **Game files:** view protocol 2, with descriptor handoff (see the SM-S721U
+  notes below).
+- **Filtering:** a seccomp filter, so only the calls it handles stop the guest.
+  Xvfb and PulseAudio never stop on reads and writes.
+
+It replaced PRoot, its loader, talloc and libandroid-shmem. Sessions check the
+marker its binary carries for the view protocol. A verbosity level in
+`files/config/tracer-trace` logs execs (1) and translated paths (2) into the
+game log. See the tracer's README for what it covers and what remains (group
+stops).
 
 ## Build
 
@@ -54,8 +65,6 @@ cargo xtask android all          # every step this host can run, then the APK
 cargo xtask android kotlin       # pinned Kotlin 2.2.21 compiler (SHA-256 checked)
 cargo xtask android wine         # pinned Wine 11.0 WoW64 build for Windows titles
 cargo xtask android x64-libs     # Debian x86-64 libstdc++/libgcc_s for Box64's Wine side
-cargo xtask android proot-deps   # Termux talloc/libandroid-shmem and headers
-cargo xtask android proot        # patched PRoot tracer (Linux host)
 cargo xtask android box64        # patched Box64 with BOX32, cross-compiled
 cargo xtask android rootfs       # Debian arm64 runtime image from packages
 cargo xtask android resources    # crate-declared title adapters (Linux host)
@@ -78,14 +87,12 @@ cargo xtask android apk          # build/BananaPepper.apk, signed with the debug
   CMake requires, and uses the Android SDK's CMake and Ninja when present.
   Outputs are `build/box64` and `build/box64-install` (rc file and BOX32's i386
   libraries).
-- **proot** and **resources** need a Linux host (WSL works). PRoot's makefiles
-  need `make`. With a Windows NDK seen from WSL, PRoot compiles with the host's
-  clang and the NDK sysroot. Set `LLD_DIR` (for example Rust's `gcc-ld`
-  directory) when `ld.lld` is not on PATH, and install AArch64 binutils
-  (`aarch64-linux-gnu-strip`). The title adapters link against i686 GL/GLUT,
-  SDL 1.2 and PulseAudio development libraries, the same as the desktop Linux
-  adapters.
-- **apk** runs on Windows, Linux or macOS with the SDK, NDK and a JDK. Assets,
+- **resources** needs a Linux host (WSL works). The title adapters link against
+  i686 GL/GLUT, SDL 1.2 and PulseAudio development libraries, the same as the
+  desktop Linux adapters.
+- **apk** runs on Windows, Linux or macOS with the SDK, an NDK built for that
+  host, and a JDK. It builds the JNI library and `banana-tracer` for
+  aarch64-linux-android, and checks the tracer's protocol marker. Assets,
   native libraries and dex are appended to aapt2's base APK, because aapt2 on
   Windows names nested assets with backslashes. The APK is signed with the local
   debug key (`apps/android/debug.keystore`): install it by allowing installs from
@@ -104,9 +111,11 @@ updating a development device, and install with
 On the SM-S721U, an incremental update reported success before Android removed
 the package and its data; the streamed installation succeeded.
 
-The APK build compiles the ARM64 JNI library and packages the crate-declared title
-artifacts and the pinned PRoot built with the namespace extension. The JNI library retains 16 KiB load alignment. Stock PRoot is rejected
-by capability checks. No interpreted game launcher is packaged; generic Rust
+The APK packages the ARM64 JNI library, `banana-tracer` and the crate-declared
+title artifacts. The JNI library retains 16 KiB load alignment. A runtime whose
+tracer lacks the view protocol marker fails the capability check. On update, the
+installer removes the previous PRoot files from `files/bin`. No interpreted game
+launcher is packaged; generic Rust
 backend code supervises Xvfb, PulseAudio and the guest process.
 
 The display and audio bridges are threads of the session owner
@@ -135,10 +144,13 @@ The runtime installer preserves its previous rootfs/tools during replacement.
 ## Validation status
 
 The Kotlin frontend compiles against Android API 36. The shared JNI library builds
-for aarch64-linux-android with 16 KiB load alignment. The complete patched tracer links for Android ARM64, and the declared adapter resource package builds. Live
-Linux PRoot tests exercise virtual executable loading, file/dir operations, copying,
-shared/private mappings, persistence and child access. Desktop provider, migration
-and overlay tests exercise the same implementation.
+for aarch64-linux-android with 16 KiB load alignment, `banana-tracer` links for
+Android ARM64, and the declared adapter resource package builds. On x86-64 Linux,
+the tracer's tests run a shell, coreutils and Python through it against a real
+view server. They cover view reads, writes, listing, mappings, rename and
+persistence, a view cwd, exec of a view program, and descriptor sharing across
+dup and children. Desktop provider, migration and overlay tests exercise the same
+View implementation. The tracer's AArch64 code has not yet run on a device.
 
 The previous Android runner had verified Big Buck gameplay on a Galaxy S24 FE;
 that result does not certify this new namespace path. All migrated Android profiles
@@ -149,7 +161,7 @@ runtime inputs and a physical-device run are required for end-to-end APK validat
 
 The rebuilt APK installs through a streamed update and recognizes all five game
 folders. Device testing exposed and repaired the missing packaged artifact catalog,
-PRoot cross-build path/tool selection, omitted hard-link emulation, game preload
+the then-PRoot cross-build path/tool selection, omitted hard-link emulation, game preload
 leaking into support processes, and host paths being passed instead of virtual
 guest paths. Xvfb and the frame bridge start after those fixes.
 

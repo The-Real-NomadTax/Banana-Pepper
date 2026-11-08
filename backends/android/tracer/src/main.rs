@@ -2,6 +2,10 @@
 #[cfg(any(target_os = "android", target_os = "linux"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--version") {
+        println!("banana-tracer {}", banana_tracer::MARKER);
+        return;
+    }
     let options = match banana_tracer::parse(&args) {
         Ok(options) => options,
         Err(e) => {
