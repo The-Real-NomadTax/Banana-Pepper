@@ -1,5 +1,5 @@
 //! Water's ELF32 dynamic linker, end to end: a real 32-bit Linux program
-//! (`tests/elf32/src`, built by `tests/elf32/build.sh`) runs in `water-x86`
+//! (`tests/elf32/src`, built by `cargo xtask water-fixtures`) runs in `water-x86`
 //! from a served view, with a library it ships and a plugin it dlopens.
 #![cfg(all(windows, target_arch = "x86_64"))]
 use std::{path::PathBuf, process::Command, sync::Arc};

@@ -38,27 +38,57 @@ the Android registry until they have Android requirements and validation.
 
 ## Build
 
-Use the Linux Android build tools with a JDK, Kotlin 2.2.21, Android SDK and NDK. Cross-building the declared guest adapters also requires LLVM lld-link and i686 GL/GLUT, SDL 1.2 and PulseAudio development libraries (the same dependencies as the desktop Linux adapters):
+Every step is a `cargo xtask android` command (`tools/xtask`). Outputs and
+downloads go to `apps/android/build/` (or `BANANA_ANDROID_BUILD`). No phone,
+emulator or shell script is involved:
 
 ```sh
-apps/android/fetch-proot.sh
-# Build/provide rootfs.tar.gz, patched Box64, and optional Wine/x64 libraries.
-apps/android/build-apk.sh
+cargo xtask android all          # every step this host can run, then the APK
+cargo xtask android kotlin       # pinned Kotlin 2.2.21 compiler (SHA-256 checked)
+cargo xtask android wine         # pinned Wine 11.0 WoW64 build for Windows titles
+cargo xtask android x64-libs     # Debian x86-64 libstdc++/libgcc_s for Box64's Wine side
+cargo xtask android proot-deps   # Termux talloc/libandroid-shmem and headers
+cargo xtask android proot        # patched PRoot tracer (Linux host)
+cargo xtask android box64        # patched Box64 with BOX32, cross-compiled
+cargo xtask android rootfs       # Debian arm64 runtime image from packages
+cargo xtask android resources    # crate-declared title adapters (Linux host)
+cargo xtask android apk          # build/BananaPepper.apk, signed with the debug key
 ```
 
-No phone is needed to build. On an x86-64 Linux host (WSL works), with `qemu-user` and a `proot` binary:
+- **rootfs** reads Debian trixie's arm64 and i386 indexes, resolves the essential
+  set plus the runtime packages (Depends and Pre-Depends, as apt
+  `--no-install-recommends` would), downloads each `.deb` checked against its
+  index SHA-256 over HTTPS, and merges the packages' data archives in memory.
+  Nothing is extracted or run. The merge follows merged `/usr`, keeps only each
+  package's copyright file under `/usr/share/doc`, and drops the i386 Mesa/LLVM
+  that Box32 never loads. The few postinst results the runtime relies on are
+  written directly (accounts, `/bin/sh`, nsswitch, alternatives such as `awk`,
+  fontconfig defaults, UTC). The result is
+  `build/rootfs.tar.gz` plus `build/rootfs.packages` (the package list).
+- **box64** checks out pinned Box64, applies `apps/android/patches/*.patch`, and
+  cross-compiles it with clang, lld, CMake and Ninja against a Debian arm64
+  sysroot made from packages. It needs LLVM and Python 3, which Box64's own
+  CMake requires, and uses the Android SDK's CMake and Ninja when present.
+  Outputs are `build/box64` and `build/box64-install` (rc file and BOX32's i386
+  libraries).
+- **proot** and **resources** need a Linux host (WSL works). PRoot's makefiles
+  need `make`. With a Windows NDK seen from WSL, PRoot compiles with the host's
+  clang and the NDK sysroot. Set `LLD_DIR` (for example Rust's `gcc-ld`
+  directory) when `ld.lld` is not on PATH, and install AArch64 binutils
+  (`aarch64-linux-gnu-strip`). The title adapters link against i686 GL/GLUT,
+  SDL 1.2 and PulseAudio development libraries, the same as the desktop Linux
+  adapters.
+- **apk** runs on Windows, Linux or macOS with the SDK, NDK and a JDK. Assets,
+  native libraries and dex are appended to aapt2's base APK, because aapt2 on
+  Windows names nested assets with backslashes. The APK is signed with the local
+  debug key (`apps/android/debug.keystore`): install it by allowing installs from
+  unknown sources. Optional legacy libraries come from `BANANA_ANDROID_LEGACY32`
+  (default `~/.local/share/banana-pepper/dependencies/legacy32`; `just
+  setup-libraries` fills it on Linux).
 
-```sh
-apps/android/rootfs/make-rootfs-qemu.sh   # Debian arm64 under PRoot + QEMU: build/rootfs.tar.gz, build/box64
-apps/android/fetch-wine.sh                 # Windows titles: pinned Wine WoW64 build
-apps/android/prepare-x64-libs.sh           # Debian x86-64 libstdc++/libgcc_s for Box64
-apps/android/fetch-proot.sh                # Termux talloc/shmem and headers
-apps/android/build-proot.sh                # patched PRoot (any NDK: a non-Linux NDK is used through host clang + LLD_DIR)
-cargo run --release -p banana-dist --locked -- android-resources
-cargo run --release -p banana-runtime --bin banana-session -- --setup-legacy32
-```
-
-`build-apk.sh` then runs on Linux, or on Windows in Git Bash with the Windows SDK, NDK and a JDK; it downloads nothing but expects the Kotlin compiler in `build/kotlin-2.2.21`. The APK is signed with the local debug key (`apps/android/debug.keystore`): install it by allowing installs from unknown sources.
+`cargo xtask android input PORT FILE` replays transport input lines (`m x y`,
+`b n 0|1`, `k key 0|1`, `@ms` pauses) through
+`adb forward tcp:PORT localabstract:<input socket>`.
 
 For the earlier `com.arcadefoundry` installation, build with
 `APP_ID=com.arcadefoundry` and retain its signing key. Back up app data before
@@ -67,9 +97,8 @@ updating a development device, and install with
 On the SM-S721U, an incremental update reported success before Android removed
 the package and its data; the streamed installation succeeded.
 
-The APK build compiles the ARM64 JNI library, asks `banana-dist android-resources`
-for crate-declared title artifacts, and builds pinned PRoot with the namespace
-extension. The JNI library retains 16 KiB load alignment. Stock PRoot is rejected
+The APK build compiles the ARM64 JNI library and packages the crate-declared title
+artifacts and the pinned PRoot built with the namespace extension. The JNI library retains 16 KiB load alignment. Stock PRoot is rejected
 by capability checks. No interpreted game launcher is packaged; generic Rust
 backend code supervises Xvfb, PulseAudio and the guest process.
 

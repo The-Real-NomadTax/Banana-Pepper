@@ -1,4 +1,5 @@
-//! Build/package only crate-declared artifacts for the current host.
+//! Build/package only crate-declared artifacts for the current host, or the
+//! Android resource package (title adapters) for the APK.
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -90,14 +91,19 @@ fn output(target: &Path, a: &Artifact) -> PathBuf {
     };
     p.join("release").join(name)
 }
-fn run() -> Result<(), String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let mode = std::env::args().nth(1);
-    let android = mode.as_deref() == Some("android-resources");
-    let build = mode.as_deref() == Some("build") || android;
+/// Which package to assemble.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Host {
+    /// The desktop distribution of the running OS.
+    Current,
+    /// `banana-pepper-android-resources`: the APK's title adapters.
+    Android,
+}
+
+/// Assemble the package, first building its artifacts when `build` is set.
+pub fn run(target_host: Host, build: bool) -> Result<(), String> {
+    let root = crate::util::root();
+    let android = target_host == Host::Android;
     let host = if android {
         "android"
     } else {
@@ -167,7 +173,7 @@ fn run() -> Result<(), String> {
         let source = output(&artifact_target, a);
         let bytes = fs::read(&source).map_err(|e| {
             format!(
-                "Missing artifact {}: {e}. Run just build.",
+                "Missing artifact {}: {e}. Run cargo xtask dist.",
                 source.display()
             )
         })?;
@@ -237,7 +243,7 @@ fn run() -> Result<(), String> {
             }
         }
     }
-    write(&staging,"THIRD-PARTY-NOTICES.txt",b"PRoot: GPL-2.0-or-later; https://github.com/termux/proot (Android tracer built from pinned source).\nBox64: MIT; https://github.com/ptitSeb/box64\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\niced-x86: MIT; https://github.com/icedland/iced\nAndroid packages also carry: Wine (LGPL-2.1-or-later; https://gitlab.winehq.org/wine/wine, binaries from https://github.com/Kron4ek/Wine-Builds); a Debian trixie arm64 runtime image (per-package licenses in its /usr/share/doc/*/copyright; sources at https://sources.debian.org); the Debian x86-64 GCC runtime libraries libstdc++ and libgcc_s (GPL-3.0-or-later with the GCC Runtime Library Exception; x64-libs/licenses); talloc (LGPL-3.0-or-later) and libandroid-shmem (BSD-3-Clause) from Termux; the LLVM libc++ runtime (Apache-2.0 WITH LLVM-exception); and the Kotlin standard library (Apache-2.0).\nLinux requires /dev/fuse and unprivileged user namespaces; Wine for PE games.\n")?;
+    write(&staging,"THIRD-PARTY-NOTICES.txt",b"PRoot: GPL-2.0-or-later; https://github.com/termux/proot (Android tracer built from pinned source).\nBox64: MIT; https://github.com/ptitSeb/box64\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nZArchive/zarchive-rs: MIT; see their source distributions.\niced-x86: MIT; https://github.com/icedland/iced\nx11rb (Android display bridge): MIT OR Apache-2.0; https://github.com/psychon/x11rb\nAndroid packages also carry: Wine (LGPL-2.1-or-later; https://gitlab.winehq.org/wine/wine, binaries from https://github.com/Kron4ek/Wine-Builds); a Debian trixie arm64 runtime image (per-package licenses in its /usr/share/doc/*/copyright; sources at https://sources.debian.org); the Debian x86-64 GCC runtime libraries libstdc++ and libgcc_s (GPL-3.0-or-later with the GCC Runtime Library Exception; x64-libs/licenses); talloc (LGPL-3.0-or-later) and libandroid-shmem (BSD-3-Clause) from Termux; the LLVM libc++ runtime (Apache-2.0 WITH LLVM-exception); and the Kotlin standard library (Apache-2.0).\nLinux requires /dev/fuse and unprivileged user namespaces; Wine for PE games.\n")?;
     let inventory = inventory(&staging)?;
     write(&staging,"manifest.json",&serde_json::to_vec_pretty(&json!({"version":2,"files":inventory,"os":host,"arch":if android {"aarch64"}else{std::env::consts::ARCH}})).map_err(|e|e.to_string())?)?;
     fs::write(
@@ -293,12 +299,6 @@ fn remove_owned(root: &Path, path: &Path) -> Result<(), String> {
         return Err("Refusing deletion outside the distribution output".into());
     }
     fs::remove_dir_all(target).map_err(|e| e.to_string())
-}
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("Distribution: {e}");
-        std::process::exit(1)
-    }
 }
 
 #[cfg(test)]

@@ -14,7 +14,7 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
   - **Linux games:** the `guest/` crate is preloaded on Linux and Android, and the same crate is built as Water's optional preload adapter on Windows. Override the same library functions on both, and keep only device reading per platform (see `game-compat/big-buck-hunter/guest/src/{jamma,glut,linux,water}.rs`). Per-frame controller work goes through `banana_input::session::Players`.
 - **Water grows like Wine:** add missing Linux functions or libraries to Water as generic builtins, never as title code (see `backends/water/README.md`).
 - **Plans reference artifacts by `name`, never by path.** Declare each artifact in its crate's `Cargo.toml` under `[[package.metadata.banana.artifacts]]` (`name, kind, target, hosts, destination`). A name must equal the library/binary filename and be unique per host.
-- **No interpreted launchers.** No Python or shell launch scripts. Dev-only probes go in `game-compat/<game>/tools/` or `scripts/`, and are never shipped.
+- **No interpreted launchers or build scripts.** No Python or shell launch or build scripts. Repository tooling (packaging, the Android runtime image, Box64, PRoot, the APK, fixtures) is Rust in `tools/xtask` (`cargo xtask …`). Title-specific dev probes go in `game-compat/<game>/tools/`. Neither is ever shipped.
 - **Unsupported means an error.** Unsupported combinations fail with a clear session error, never a silent fallback.
 
 ## Map
@@ -31,12 +31,12 @@ Banana Pepper runs user-supplied PC arcade cabinet builds on Windows, Linux and 
 | `backends/native` | Windows PE (staging, PE import injection), Linux `banana-sandbox` |
 | `backends/wine` | Wine prefix in a held session namespace |
 | `backends/water` | Linux-on-Windows runtime, like Wine in reverse: `water-x86` (ELF32 dynamic linker plus builtin libc/GLUT/GL/OSS) and `water-x64` (static ELF64); optional preload adapters (`AdapterV2`) |
-| `backends/android` | Box64 / Wine / PRoot plumbing |
+| `backends/android` | Box64 / Wine / PRoot plumbing, display/audio bridges (`bridge.rs`) |
 | `guest/view-shim` | `banana_view.dll`: hooks Win32 file APIs to read the served view |
 | `guest/linux-shim`, `guest/win32` | Reusable in-guest services, included by game crates via `#[path]` |
 | `apps/desktop` | `arcade-desktop` (egui), including ZAR packing (`--pack`) |
 | `apps/android` | Kotlin UI over `crates/banana-ffi` |
-| `tools/dist` | Builds declared artifacts and writes `target/dist/…` plus `artifacts.json` |
+| `tools/xtask` | `cargo xtask`: builds declared artifacts into `target/dist/…` plus `artifacts.json`; the Android rootfs (from Debian packages), Box64, PRoot, Wine/Kotlin/x64 inputs and the APK; fixtures |
 
 Game crate layout: `src/` (metadata in `lib.rs`, `plan.rs`, `prepare.rs`, `settings.rs`, `controls.rs`, `android.rs`), `guest/` (Linux preload / Water adapter), `hook/` (Windows DLL), `io/`, `tests/defaults.rs`, `docs/`, `tools/`.
 
@@ -45,13 +45,16 @@ Game crate layout: `src/` (metadata in `lib.rs`, `plan.rs`, `prepare.rs`, `setti
 ## Commands
 
 ```bash
-just build                                   # every artifact for this host -> target/dist/banana-pepper-<os>-<arch>/
-just run                                     # build, then launch the packaged app
+just build                                   # = cargo xtask dist: every artifact for this host -> target/dist/banana-pepper-<os>-<arch>/
+just run                                     # = cargo xtask run: build, then launch the packaged app
+cargo xtask android all                      # Android inputs this host can build, then apps/android/build/BananaPepper.apk
+cargo xtask android <step>                   # kotlin | wine | x64-libs | proot-deps | proot | box64 | rootfs | resources | apk
 cargo test --workspace --locked              # the full suite (Windows and 64-bit Linux)
 cargo build --release --locked -p <crate> --target i686-pc-windows-msvc    # hooks / Water adapters
 cargo build --release --locked -p <crate> --target i686-unknown-linux-gnu  # Linux guest libraries (build on Linux/WSL)
 cargo test -p banana-native --test namespace # Linux: real FUSE + namespace end-to-end
 cargo test -p banana-water --test elf32      # Windows: a real ELF32 program through Water's linker
+cargo test -p banana-android --test bridge   # Linux with Xvfb: frame/input/audio bridges
 ```
 
 Real-game check: run `target/dist/<pkg>/arcade-desktop --action <game> probe "<source folder or .zar>"`. The session's `game.log` and captures land in the path it prints (`…/BananaPepper/state/entries/<id>/`). Other useful flags: `--runtime-info`, `--entries`, `--scan SRC`, `--reset-overlay ENTRY [PATH]`.

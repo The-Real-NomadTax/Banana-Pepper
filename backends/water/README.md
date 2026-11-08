@@ -28,4 +28,4 @@ Water grows the way Wine did: builtin library by builtin library, each one check
 3. **X11 and XCB subsets** for programs that talk to the display directly (Aliens Armageddon's statically linked SDL).
 4. **ELF64 dynamic programs**: the same linker for x86-64, with `%fs` TLS rewriting and glibc's start-up. Minecraft Dungeons needs this, plus libstdc++ and FMOD loaded as shipped libraries.
 
-Build through `just build`. `cargo test -p banana-water` runs the ELF64 loader and execution checks, and on Windows `tests/elf32.rs`: a real 32-bit Linux program (built by `tests/elf32/build.sh`) runs with a library it ships and a plugin it dlopens.
+Build through `just build`. `cargo test -p banana-water` runs the ELF64 loader and execution checks, and on Windows `tests/elf32.rs`: a real 32-bit Linux program (built by `cargo xtask water-fixtures`) runs with a library it ships and a plugin it dlopens.

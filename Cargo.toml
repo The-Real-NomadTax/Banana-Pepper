@@ -13,7 +13,7 @@ members = [
     "game-compat/*/guest",
     "game-compat/*/hook",
     "game-compat/*/io",
-    "tools/dist",
+    "tools/xtask",
 ]
 default-members = ["apps/desktop"]
 resolver = "3"

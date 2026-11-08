@@ -18,3 +18,7 @@ rustflags = [
     "-C", "link-arg=-Wl,-z,max-page-size=16384",
     "-C", "link-arg=-Wl,-z,common-page-size=16384",
 ]
+
+# Repository tooling: `cargo xtask <command>` (tools/xtask).
+[alias]
+xtask = "run --quiet --release --locked -p xtask --"

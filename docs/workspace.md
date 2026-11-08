@@ -18,7 +18,7 @@
 - `guest/`: reusable guest services and platform input helpers. Session controller settings (`ARCADE_PLAYERS`, `ARCADE_PAD`, ...) are read by `banana_input::session` on every platform.
 - `crates/banana-compat`: composition root registering built-in modules.
 - `apps/`: frontends; shared FFI remains in `crates/banana-ffi`.
-- `tools/dist`: builds and packages crate-declared artifacts. The desktop app owns ZAR packing (`--pack` and its compressor window).
+- `tools/xtask`: `cargo xtask`, the repository's only build tooling. It builds and packages crate-declared artifacts, builds the Android runtime inputs (the Debian rootfs from packages, Box64, PRoot, Wine, Kotlin and x86-64 libraries) and the APK, and rebuilds committed fixtures. The desktop app owns ZAR packing (`--pack` and its compressor window).
 
 Game plan crates depend on shared contracts and content/input/settings services, rather than the session orchestrator. Backend crates implement the execution API. Title adapters may use a backend's published extension services.
 

@@ -13,7 +13,7 @@ rustup target add i686-pc-windows-msvc
 cargo build -p banana-ford-hook --target i686-pc-windows-msvc --release
 cargo run -p banana-desktop -- --launch-ford "C:\path\to\Ford Racing"
 # Or:
-.\scripts\run-windows.ps1 -Game ford -Mode launch -GamesRoot "C:\path\to\Ford Racing"
+cargo xtask run --action ford launch "C:\path\to\Ford Racing"
 ```
 
 LLVM `lld-link` must be on PATH. Select **Ford Racing Full Blown → Play Ford

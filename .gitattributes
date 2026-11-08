@@ -1,5 +1,2 @@
-# Guest launch scripts must remain executable by Bash after Windows checkouts.
-*.sh text eol=lf
-
 # Unified patches represent empty context lines with a single space.
 *.patch whitespace=-blank-at-eol

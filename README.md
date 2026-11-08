@@ -10,7 +10,7 @@ Original content stays read-only. Executable reconstruction and compatibility pa
 
 ## Build and run
 
-Install Rust, just, and the platform build tools, then run `just build`. The build reads artifact declarations from each crate and creates `target/dist/banana-pepper-<os>-<arch>/`. `just run` starts that package.
+Install Rust, just, and the platform build tools, then run `just build` (`cargo xtask dist`). The build reads artifact declarations from each crate and creates `target/dist/banana-pepper-<os>-<arch>/`. `just run` starts that package. All build tooling is Rust in `tools/xtask`: `cargo xtask android all` builds the Android runtime and APK (see [Android](docs/android.md)).
 
 Windows needs nothing installed: Water and native Windows titles are served the game view directly over private pipes, with no OS mount (see [architecture](docs/architecture.md)). Linux needs `/dev/fuse`, unprivileged user namespaces and a desktop display; Windows games additionally require Wine. No fusermount or Bubblewrap: the package's own `banana-sandbox` helper mounts the served view inside each session's namespace. Missing components produce a session error. There is no extraction fallback.
 
