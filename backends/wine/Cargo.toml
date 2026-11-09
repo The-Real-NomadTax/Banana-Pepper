@@ -7,6 +7,7 @@ description = "Wine execution backend for Banana Pepper"
 
 [dependencies]
 banana-api.workspace = true
+banana-content.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 banana-native.workspace = true

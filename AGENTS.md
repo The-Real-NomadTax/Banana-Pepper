@@ -51,6 +51,7 @@ cargo xtask android all                      # Android inputs this host can buil
 cargo xtask android <step>                   # kotlin | wine | x64-libs | box64 | rootfs | resources | apk
 cargo test --workspace --locked              # the full suite (Windows and 64-bit Linux)
 cargo build --release --locked -p <crate> --target i686-pc-windows-msvc    # hooks / Water adapters
+# 64-bit hooks off Windows: CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C panic=abort -C target-feature=+crt-static"
 cargo build --release --locked -p <crate> --target i686-unknown-linux-gnu  # Linux guest libraries (build on Linux/WSL)
 cargo test -p banana-native --test namespace # Linux: real FUSE + namespace end-to-end
 cargo test -p banana-water --test elf32      # Windows: a real ELF32 program through Water's linker

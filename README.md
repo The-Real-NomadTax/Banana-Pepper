@@ -24,6 +24,8 @@ Windows needs nothing installed: Water and native Windows titles are served the 
 
 Water runs Linux programs on Windows the way Wine runs Windows programs on Linux: its own dynamic linker plus builtin Linux libraries. It grows incrementally, and anything a program needs that Water lacks is reported by name (see [Water](backends/water/README.md)). The mounted architecture still requires gameplay validation for each title/build/backend combination.
 
+Wangan Midnight Maximum Tune 6R (64-bit, Wine on Linux) is in bring-up: it boots against an emulated auth service, Wangan terminal and game server and plays guest races; see its [startup notes](game-compat/wangan-midnight-6r/docs/startup.md).
+
 ## Storage
 
 Windows configuration lives in `%APPDATA%/banana-pepper`; data, state and cache live under `%LOCALAPPDATA%/BananaPepper/`. Linux uses the XDG configuration, data, state and cache directories under `banana-pepper`.

@@ -112,7 +112,7 @@ impl View {
         let source: Arc<dyn ContentSource> = if case_sensitive {
             source
         } else {
-            Arc::new(banana_content::CaseFoldSource(source))
+            Arc::new(banana_content::CaseFoldSource::new(source))
         };
         let fold = |p: String| {
             if case_sensitive {

@@ -13,6 +13,7 @@ banana-game-aliens-armageddon = { path = "../../game-compat/aliens-armageddon" }
 banana-game-big-buck-hunter = { path = "../../game-compat/big-buck-hunter" }
 banana-game-jurassic-park = { path = "../../game-compat/jurassic-park" }
 banana-game-super-cars = { path = "../../game-compat/super-cars" }
+banana-game-wangan-midnight-6r = { path = "../../game-compat/wangan-midnight-6r" }
 banana-game-ford-racing = { path = "../../game-compat/ford-racing" }
 
 [target.'cfg(target_os = "android")'.dependencies]

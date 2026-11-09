@@ -11,11 +11,11 @@
 use super::pad::Pad;
 use core::ptr;
 
-#[link(
-    name = "kernel32",
-    kind = "raw-dylib",
-    import_name_type = "undecorated"
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "kernel32", kind = "raw-dylib", import_name_type = "undecorated")
 )]
+#[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
 unsafe extern "system" {
     #[link_name = "LoadLibraryA"]
     fn xinput_load_library(name: *const u8) -> isize;

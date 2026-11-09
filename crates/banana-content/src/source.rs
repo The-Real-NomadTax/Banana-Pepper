@@ -642,25 +642,56 @@ impl ContentSource for MountedSources {
 }
 
 /// ASCII-insensitive guest namespace with preserved directory entry spelling.
-pub struct CaseFoldSource(pub Arc<dyn ContentSource>);
+///
+/// Sources never change while open, so each directory's spellings are listed
+/// once and kept: a lookup costs one listing per new directory instead of one
+/// per path component.
+pub struct CaseFoldSource {
+    inner: Arc<dyn ContentSource>,
+    /// Resolved directory -> its entries' spelling by lowercase name (`None`
+    /// marks names that are ambiguous there).
+    names: Mutex<BTreeMap<String, Arc<BTreeMap<String, Option<String>>>>>,
+}
 impl CaseFoldSource {
+    pub fn new(inner: Arc<dyn ContentSource>) -> Self {
+        Self {
+            inner,
+            names: Mutex::new(BTreeMap::new()),
+        }
+    }
+    fn names(&self, directory: &str) -> io::Result<Arc<BTreeMap<String, Option<String>>>> {
+        if let Some(names) = self.names.lock().unwrap().get(directory) {
+            return Ok(names.clone());
+        }
+        let mut names = BTreeMap::new();
+        for e in self.inner.read_dir(directory)? {
+            names
+                .entry(e.name.to_ascii_lowercase())
+                .and_modify(|n| *n = None)
+                .or_insert(Some(e.name));
+        }
+        let names = Arc::new(names);
+        self.names
+            .lock()
+            .unwrap()
+            .insert(directory.to_owned(), names.clone());
+        Ok(names)
+    }
     fn resolve(&self, p: &str) -> io::Result<String> {
         path(p)?;
         let mut current = String::new();
         for component in p.split('/').filter(|c| !c.is_empty()) {
-            let entries = self.0.read_dir(&current)?;
-            let candidates = entries
-                .iter()
-                .filter(|e| e.name.eq_ignore_ascii_case(component))
-                .collect::<Vec<_>>();
-            if candidates.len() > 1 {
-                return Err(invalid(
-                    "Content has ambiguous names in a case-insensitive guest namespace",
-                ));
-            }
-            let name = &candidates.first().ok_or(io::ErrorKind::NotFound)?.name;
+            let name = match self.names(&current)?.get(&component.to_ascii_lowercase()) {
+                Some(Some(name)) => name.clone(),
+                Some(None) => {
+                    return Err(invalid(
+                        "Content has ambiguous names in a case-insensitive guest namespace",
+                    ));
+                }
+                None => return Err(io::ErrorKind::NotFound.into()),
+            };
             current = if current.is_empty() {
-                name.clone()
+                name
             } else {
                 format!("{current}/{name}")
             };
@@ -670,10 +701,10 @@ impl CaseFoldSource {
 }
 impl ContentSource for CaseFoldSource {
     fn metadata(&self, p: &str) -> io::Result<Metadata> {
-        self.0.metadata(&self.resolve(p)?)
+        self.inner.metadata(&self.resolve(p)?)
     }
     fn read_dir(&self, p: &str) -> io::Result<Vec<Entry>> {
-        let entries = self.0.read_dir(&self.resolve(p)?)?;
+        let entries = self.inner.read_dir(&self.resolve(p)?)?;
         let mut names = std::collections::BTreeSet::new();
         for e in &entries {
             if !names.insert(e.name.to_ascii_lowercase()) {
@@ -683,7 +714,7 @@ impl ContentSource for CaseFoldSource {
         Ok(entries)
     }
     fn open(&self, p: &str) -> io::Result<Arc<dyn ContentFile>> {
-        self.0.open(&self.resolve(p)?)
+        self.inner.open(&self.resolve(p)?)
     }
 }
 

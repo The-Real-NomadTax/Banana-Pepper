@@ -1,0 +1,31 @@
+[package]
+name = "banana-wangan-midnight-6r-hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 64-bit Windows guest library that takes bngrw.dll's place in the game's
+# view and serves the cabinet devices (see src/lib.rs). It is freestanding:
+# off Windows, `cargo xtask dist` builds it with lld-link and panic=abort,
+# like this:
+# CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link \
+# CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-C panic=abort -C target-feature=+crt-static" \
+#   cargo build -p banana-wangan-midnight-6r-hook --target x86_64-pc-windows-msvc --release
+[lib]
+name = "arcade_wmmt6r"
+crate-type = ["cdylib", "rlib"]
+
+[[package.metadata.banana.artifacts]]
+name="arcade_wmmt6r"
+kind="lib"
+target="x86_64-pc-windows-msvc"
+hosts=["linux"]
+destination="games/wmmt6r/windows-x64/arcade_wmmt6r.dll"
+
+# The emulated terminal's TLS server (src/tls.rs, src/pki.rs): pure Rust,
+# no_std, no allocation.
+[dependencies]
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes"] }
+hmac = { version = "0.12.1", default-features = false }
+p256 = { version = "0.13.2", default-features = false, features = ["ecdh", "ecdsa"] }
+sha2 = { version = "0.10.9", default-features = false }

@@ -8,11 +8,11 @@
 use super::pad::{self, Pad};
 use core::ptr;
 
-#[link(
-    name = "kernel32",
-    kind = "raw-dylib",
-    import_name_type = "undecorated"
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "kernel32", kind = "raw-dylib", import_name_type = "undecorated")
 )]
+#[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
 unsafe extern "system" {
     #[link_name = "GetEnvironmentVariableA"]
     fn controllers_get_env(name: *const u8, value: *mut u8, size: u32) -> u32;

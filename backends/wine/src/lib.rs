@@ -51,6 +51,9 @@ impl Prefix {
                 ("WINEARCH".into(), architecture.into()),
                 ("WINEDEBUG".into(), "-all".into()),
                 ("WINEDLLOVERRIDES".into(), "mscoree,mshtml=".into()),
+                // Without the system bus Wine's mount manager cannot give
+                // the host's removable disks drive letters in the session.
+                ("DBUS_SYSTEM_BUS_ADDRESS".into(), "unix:path=/dev/null".into()),
             ]),
         };
         if !path.join("system.reg").exists() {
@@ -276,6 +279,10 @@ impl ExecutionBackend for Wine {
             }
             std::os::unix::fs::symlink(&mount, &target).map_err(|e| e.to_string())?;
         }
+        #[cfg(unix)]
+        for m in &s.plan.guest_mounts {
+            map_drive(&prefix.path, &mount, m)?;
+        }
         if let Some(resolution) = s.plan.env.get("ARCADE_RESOLUTION") {
             prefix.desktop(
                 "BananaPepper",
@@ -303,6 +310,33 @@ impl ExecutionBackend for Wine {
             _holder: holder,
         }))
     }
+}
+
+/// Wine guests see a guest mount as a drive: target `F:` maps drive F to the
+/// view directory `source`. Wine drives cannot be read-only, and C: and Z:
+/// belong to the prefix, so those requests are errors.
+#[cfg(unix)]
+fn map_drive(prefix: &Path, mount: &Path, m: &banana_api::GuestMount) -> Result<(), String> {
+    let letter = match m.target.as_bytes() {
+        [l, b':'] if l.is_ascii_alphabetic() => l.to_ascii_lowercase(),
+        _ => return Err(format!("Wine guest mount {} is not a drive letter", m.target)),
+    };
+    if matches!(letter, b'c' | b'z') || m.readonly {
+        return Err(format!("Wine cannot map drive {} as requested", m.target));
+    }
+    let source = banana_content::path(&m.source).map_err(|e| e.to_string())?;
+    let devices = prefix.join("dosdevices");
+    let link = devices.join(format!("{}:", letter as char));
+    // `x::` is the drive's raw device, if Wine gave it a host disk.
+    for old in [devices.join(format!("{}::", letter as char)), link.clone()] {
+        if let Ok(meta) = fs::symlink_metadata(&old) {
+            if !meta.file_type().is_symlink() {
+                return Err(format!("Wine drive {} is not a link", m.target));
+            }
+            fs::remove_file(&old).map_err(|e| e.to_string())?;
+        }
+    }
+    std::os::unix::fs::symlink(mount.join(source), &link).map_err(|e| e.to_string())
 }
 
 fn server_for(wine: &Path) -> Option<PathBuf> {

@@ -31,7 +31,7 @@ Entry records bind a stable ID to a content fingerprint. The fingerprint streams
 
 ## Execution
 
-Windows uses Native for supported PE plans and Water for supported ELF plans. Linux uses Native (in the session sandbox) or Wine (in a held session namespace). Water runs Linux programs on Windows the way Wine runs Windows programs on Linux: its own dynamic linker, builtin Linux libraries (C library, GLUT/OpenGL, OSS audio) and, for static ELF64, trapped system calls. A title may add an optional preload adapter (`AdapterV2`), the same patch code as its Linux preload. See `backends/water/README.md`.
+Windows uses Native for supported PE plans and Water for supported ELF plans. Linux uses Native (in the session sandbox) or Wine (in a held session namespace). A Wine plan's guest mounts are drive letters (`F:` → a view folder); Wine sessions run without the system D-Bus, so the host's removable disks never appear as drives. Water runs Linux programs on Windows the way Wine runs Windows programs on Linux: its own dynamic linker, builtin Linux libraries (C library, GLUT/OpenGL, OSS audio) and, for static ELF64, trapped system calls. A title may add an optional preload adapter (`AdapterV2`), the same patch code as its Linux preload. See `backends/water/README.md`.
 
 Windows children start suspended, join a kill-on-close job, and resume after assignment. Linux children run in owned process groups; native guests are additionally isolated by `banana-sandbox`. Session handles expose events, cancellation, commands and exit status. Time-limited diagnostics report a timeout distinctly.
 

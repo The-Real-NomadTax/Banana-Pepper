@@ -145,6 +145,15 @@ pub fn run(target_host: Host, build: bool) -> Result<(), String> {
             }
             if !a.target.is_empty() {
                 c.args(["--target", &a.target]);
+                // Off Windows, MSVC-target guest DLLs are freestanding (no
+                // CRT, no unwinding) and link with LLVM's lld-link.
+                if a.target.ends_with("-windows-msvc") && !cfg!(windows) {
+                    let key = a.target.to_uppercase().replace('-', "_");
+                    c.env(format!("CARGO_TARGET_{key}_LINKER"), "lld-link").env(
+                        format!("CARGO_TARGET_{key}_RUSTFLAGS"),
+                        "-C panic=abort -C target-feature=+crt-static",
+                    );
+                }
             }
             command(&mut c)?;
         }
@@ -243,7 +252,7 @@ pub fn run(target_host: Host, build: bool) -> Result<(), String> {
             }
         }
     }
-    write(&staging,"THIRD-PARTY-NOTICES.txt",b"Box64: MIT; https://github.com/ptitSeb/box64\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nzarust (ZArchive reader/writer): MIT-0; https://github.com/Aspenini/zarust\nruzstd: MIT; https://github.com/KillingSpark/zstd-rs\nZstandard (desktop builds, through the zstd crate, MIT): BSD-3-Clause; https://github.com/facebook/zstd\niced-x86: MIT; https://github.com/icedland/iced\nx11rb (Android display bridge): MIT OR Apache-2.0; https://github.com/psychon/x11rb\nAndroid packages also carry: Wine (LGPL-2.1-or-later; https://gitlab.winehq.org/wine/wine, binaries from https://github.com/Kron4ek/Wine-Builds); a Debian trixie arm64 runtime image (per-package licenses in its /usr/share/doc/*/copyright; sources at https://sources.debian.org); the Debian x86-64 GCC runtime libraries libstdc++ and libgcc_s (GPL-3.0-or-later with the GCC Runtime Library Exception; x64-libs/licenses); and the Kotlin standard library (Apache-2.0).\nLinux requires /dev/fuse and unprivileged user namespaces; Wine for PE games.\n")?;
+    write(&staging,"THIRD-PARTY-NOTICES.txt",b"Box64: MIT; https://github.com/ptitSeb/box64\nFUSE/fuser: MIT; https://github.com/cberner/fuser\nzarust (ZArchive reader/writer): MIT-0; https://github.com/Aspenini/zarust\nruzstd: MIT; https://github.com/KillingSpark/zstd-rs\nZstandard (desktop builds, through the zstd crate, MIT): BSD-3-Clause; https://github.com/facebook/zstd\niced-x86: MIT; https://github.com/icedland/iced\nx11rb (Android display bridge): MIT OR Apache-2.0; https://github.com/psychon/x11rb\nRustCrypto aes-gcm, p256, sha2 and hmac (the wmmt6r terminal emulation's TLS): MIT OR Apache-2.0; https://github.com/RustCrypto\nAndroid packages also carry: Wine (LGPL-2.1-or-later; https://gitlab.winehq.org/wine/wine, binaries from https://github.com/Kron4ek/Wine-Builds); a Debian trixie arm64 runtime image (per-package licenses in its /usr/share/doc/*/copyright; sources at https://sources.debian.org); the Debian x86-64 GCC runtime libraries libstdc++ and libgcc_s (GPL-3.0-or-later with the GCC Runtime Library Exception; x64-libs/licenses); and the Kotlin standard library (Apache-2.0).\nLinux requires /dev/fuse and unprivileged user namespaces; Wine for PE games.\n")?;
     let inventory = inventory(&staging)?;
     write(&staging,"manifest.json",&serde_json::to_vec_pretty(&json!({"version":2,"files":inventory,"os":host,"arch":if android {"aarch64"}else{std::env::consts::ARCH}})).map_err(|e|e.to_string())?)?;
     fs::write(

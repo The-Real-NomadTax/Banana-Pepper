@@ -20,6 +20,9 @@ pub fn games() -> Vec<&'static dyn GameCompat> {
     // Skylanders runs under Wine on the desktop; no Android launch plan yet.
     #[cfg(not(target_os = "android"))]
     games.push(&banana_game_skylanders_cloud_patrol::GAME);
+    // A 64-bit Windows build: desktop Wine only.
+    #[cfg(not(target_os = "android"))]
+    games.push(&banana_game_wangan_midnight_6r::GAME);
     games
 }
 

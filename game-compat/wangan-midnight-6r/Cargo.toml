@@ -1,0 +1,14 @@
+[package]
+name = "banana-game-wangan-midnight-6r"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wangan Midnight Maximum Tune 6R compatibility for Banana Pepper"
+
+[dependencies]
+banana-api.workspace = true
+banana-content.workspace = true
+banana-input.workspace = true
+banana-settings.workspace = true
+# The emulated terminal's CA certificate (hook/src/pki.rs).
+banana-wangan-midnight-6r-hook = { path = "hook" }

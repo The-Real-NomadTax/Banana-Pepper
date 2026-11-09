@@ -1,5 +1,5 @@
 use super::*;
-use std::{collections::BTreeMap, fs, io::Write, sync::Arc};
+use std::{collections::BTreeMap, fs, io, io::Write, sync::Arc};
 fn contract(source: &dyn ContentSource) {
     assert!(source.metadata("").unwrap().directory);
     assert_eq!(source.read_dir("").unwrap()[0].name, "assets");
@@ -133,4 +133,46 @@ fn fingerprints_bind_content_and_a_new_provider_needs_no_game_changes() {
         files: BTreeMap::from([("assets/test.bin".into(), Arc::from(&b"0123456780"[..]))]),
     };
     assert_ne!(first, different.fingerprint().unwrap());
+}
+
+/// Counts directory listings of the source it wraps.
+struct Listings(MemorySource, std::sync::atomic::AtomicUsize);
+impl ContentSource for Listings {
+    fn metadata(&self, p: &str) -> io::Result<Metadata> {
+        self.0.metadata(p)
+    }
+    fn read_dir(&self, p: &str) -> io::Result<Vec<Entry>> {
+        self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.0.read_dir(p)
+    }
+    fn open(&self, p: &str) -> io::Result<Arc<dyn ContentFile>> {
+        self.0.open(p)
+    }
+}
+
+#[test]
+fn case_folding_lists_each_directory_once() {
+    let source = Arc::new(Listings(
+        MemorySource {
+            files: BTreeMap::from([
+                ("Data/Car/A.lua".into(), Arc::from(&b"a"[..])),
+                ("Data/Car/b.LUA".into(), Arc::from(&b"b"[..])),
+                ("Data/x".into(), Arc::from(&b"x"[..])),
+                ("Data/X".into(), Arc::from(&b"X"[..])),
+            ]),
+        },
+        Default::default(),
+    ));
+    let folded = CaseFoldSource::new(source.clone());
+    assert_eq!(read_all(&folded, "data/car/a.lua", 8).unwrap(), b"a");
+    let listed = source.1.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(read_all(&folded, "DATA/CAR/B.lua", 8).unwrap(), b"b");
+    assert_eq!(folded.metadata("data/car").unwrap().directory, true);
+    assert_eq!(source.1.load(std::sync::atomic::Ordering::Relaxed), listed);
+    assert!(folded.metadata("data/missing").is_err());
+    // Names differing only in case stay ambiguous.
+    assert_eq!(
+        folded.metadata("data/x").unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
 }

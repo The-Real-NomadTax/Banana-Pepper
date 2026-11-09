@@ -16,11 +16,11 @@
 use super::pad::{self, Pad};
 use core::{ffi::c_void, ptr};
 
-#[link(
-    name = "kernel32",
-    kind = "raw-dylib",
-    import_name_type = "undecorated"
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "kernel32", kind = "raw-dylib", import_name_type = "undecorated")
 )]
+#[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
 unsafe extern "system" {
     #[link_name = "LoadLibraryA"]
     fn dinput_load_library(name: *const u8) -> isize;

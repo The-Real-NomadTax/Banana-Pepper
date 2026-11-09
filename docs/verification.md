@@ -1,6 +1,6 @@
 # Verification
 
-Run `cargo test --workspace --locked` on Windows and on 64-bit Linux; both build without warnings. Then build and test the 32-bit targets: `--target i686-pc-windows-msvc` for Water and the Windows hooks and adapters, and `--target i686-unknown-linux-gnu` for the Linux game guests, which are empty crates on other targets.
+Run `cargo test --workspace --locked` on Windows and on 64-bit Linux; both build without warnings. Then build and test the 32-bit targets: `--target i686-pc-windows-msvc` for Water and the Windows hooks and adapters (64-bit hooks such as Maximum Tune 6R's use `x86_64-pc-windows-msvc`; `cargo xtask dist` builds MSVC guest DLLs off Windows with lld-link and `panic=abort`), and `--target i686-unknown-linux-gnu` for the Linux game guests, which are empty crates on other targets.
 
 Coverage checks provider parity and fingerprints; path containment; archive corruption and conversion; dirty-block persistence; metadata and case rules; stable identity and single writers; controls, controller frames and gun aiming modes; worker timeouts; static ELF64 execution; portable CLI archive inspection; and artifact metadata validation.
 
