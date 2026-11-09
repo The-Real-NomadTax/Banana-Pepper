@@ -185,3 +185,5 @@ signed/aligned APK build successfully. All five source game folders were restore
 after the incremental-install data loss; Jurassic's desktop launcher symlink and
 dangling `pmuser` symlink were omitted on Android external storage. Phone-only saves
 from the removed installation have not been recovered.
+
+Big Buck World has an experimental profile and shares Pro's guest input modules, but has not been run on an Android device. Its supplied `hasp/` corpus stays in the source view; its prepared libstdc++5 dependency must also be present under `opt/arcade/dependencies/big-buck-world`. Desktop validation does not validate the tracer/Box32 path.

@@ -32,17 +32,17 @@ fn crosshair_setting_only_for_gun_games() {
     assert_eq!(Settings::parse(&sized.to_text()).unwrap(), sized);
     assert!(Settings::parse("[big_buck]\ncrosshair_size = 5\n").is_err());
     assert!(Settings::parse("[big_buck]\ncrosshair_size = huge\n").is_err());
-    // Only Big Buck writes a crosshair line.
+    // Pro and World write crosshair settings.
     assert_eq!(
         Settings::default().to_text().matches("crosshair =").count(),
-        1
+        2
     );
     assert_eq!(
         Settings::default()
             .to_text()
             .matches("crosshair_size =")
             .count(),
-        1
+        2
     );
     assert_eq!(Crosshair::all().len(), 5);
 }
@@ -75,8 +75,8 @@ fn two_players_only_for_two_player_games() {
     assert!(Settings::parse("[aliens]\nplayers = 4\n").is_err());
     assert!(Settings::parse("[ford]\nplayers = 2\n").is_err());
     assert!(Settings::parse("[super_cars]\nplayers = 1\n").is_ok());
-    // Aliens, Jurassic and Big Buck write a players line.
-    assert_eq!(one.to_text().matches("players =").count(), 3);
+    // Aliens, Jurassic, Pro and World write a players line.
+    assert_eq!(one.to_text().matches("players =").count(), 4);
 }
 
 #[test]
@@ -148,8 +148,8 @@ fn players_choose_their_input_method() {
     assert!(Settings::parse("[aliens]\np1_input = gamepad\n").is_err());
     // One-player games (racers, Skylanders) write only p1_input; gun games write both.
     let text = Settings::default().to_text();
-    assert_eq!(text.matches("p1_input =").count(), 7);
-    assert_eq!(text.matches("p2_input =").count(), 3);
+    assert_eq!(text.matches("p1_input =").count(), 8);
+    assert_eq!(text.matches("p2_input =").count(), 4);
 }
 
 #[test]

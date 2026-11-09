@@ -15,7 +15,9 @@ use std::{
 mod controllers;
 #[path = "../../../../guest/win32/dinput.rs"]
 mod dinput;
+#[path = "water/probe.rs"]
 mod probe;
+#[path = "water/rawinput.rs"]
 mod rawinput;
 #[path = "../../../../guest/win32/xinput.rs"]
 mod xinput;

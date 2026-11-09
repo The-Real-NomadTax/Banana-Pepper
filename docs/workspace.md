@@ -27,3 +27,5 @@ Each shipped artifact is declared using `[[package.metadata.banana.artifacts]]` 
 Adding a game means adding its `game-compat/<title>/` folder and registering it in `crates/banana-compat` (its manifest and `games()`). Adding a content format means registering a provider. Neither requires title branches in the frontend, filesystem, orchestrator or backend.
 
 Android execution plumbing lives in `backends/android/`: its Rust backend owns processes and transports, while `banana-tracer` (`backends/android/tracer`) only translates namespace operations into the shared Rust filesystem service. Kotlin owns the UI. Skylanders uses the same provider/plan contracts and crate-declared adapter artifacts as other titles.
+
+Big Buck World owns its metadata, executable transform, response adapter and artifact declarations in `game-compat/big-buck-world`. Its guest crate includes Pro's JAMMA/GLUT and device modules, with build-specific hook addresses declared separately by each title.

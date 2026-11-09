@@ -99,10 +99,10 @@ pub unsafe fn install() -> Result<(), String> {
     INSTALLED
         .get_or_init(|| {
             let hooks = [
-                (0x80d9ce5usize, success as *const () as usize),
-                (0x80d9e81, success as *const () as usize),
-                (0x80dbf32, success as *const () as usize),
-                (0x80da943, op as *const () as usize),
+                (crate::JAMMA_HOOKS[0], success as *const () as usize),
+                (crate::JAMMA_HOOKS[1], success as *const () as usize),
+                (crate::JAMMA_HOOKS[2], success as *const () as usize),
+                (crate::JAMMA_HOOKS[3], op as *const () as usize),
             ];
             for &(address, _) in &hooks {
                 if unsafe { std::slice::from_raw_parts(address as *const u8, 3) }
@@ -111,6 +111,7 @@ pub unsafe fn install() -> Result<(), String> {
                     return Err(format!("incompatible JAMMA prologue at {address:#x}"));
                 }
             }
+            crate::install_extra()?;
             for (address, target) in hooks {
                 let mut patch = [0xb8, 0, 0, 0, 0, 0xff, 0xe0];
                 patch[1..5].copy_from_slice(&(target as u32).to_le_bytes());

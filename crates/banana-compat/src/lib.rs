@@ -11,6 +11,7 @@ pub fn games() -> Vec<&'static dyn GameCompat> {
         &banana_game_aliens_armageddon::GAME,
         &banana_game_jurassic_park::GAME,
         &banana_game_big_buck_hunter::GAME,
+        &banana_game_big_buck_world::GAME,
         &banana_game_super_cars::GAME,
     ];
     // Minecraft remains desktop-only until Android work is explicitly requested.

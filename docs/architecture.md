@@ -44,3 +44,5 @@ Configuration, durable overlays/dependencies, logs/captured records, and disposa
 Legacy imports are declared by each game. Captured state is imported before planning; saves are imported after the overlay opens. An import ledger makes retries idempotent. Conflicts retain both copies. Old staged images, extracted assets and toolchains are not imported or deleted.
 
 Android uses the same view preparation and sessions behind its native Kotlin UI. A Rust ptrace tracer (`banana-tracer`) brokers filesystem operations into the view and provides transient memfd backing for mapped ranges, without an OS mount or extracted game files. Generic Rust supervision owns Box64/Wine, Xvfb and frame/audio transports. See `android.md` for current limits and validation. Further Water game capabilities remain separate work.
+
+Big Buck World illustrates title-family reuse: its plan mounts the supplied response corpus through the same view, its guest reads those files through Linux/Water library calls, and it shares Pro's cabinet input code. Live memory protection remains in the title adapter; durable game writes remain in the VFS overlay.

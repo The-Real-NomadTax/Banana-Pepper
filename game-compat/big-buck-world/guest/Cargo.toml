@@ -1,0 +1,32 @@
+[package]
+name="banana-big-buck-world-guest"
+version.workspace=true
+edition.workspace=true
+license.workspace=true
+description="Big Buck World's in-process patch, for Linux preload and Water"
+[lib]
+name="arcade_big_buck_world"
+crate-type=["cdylib"]
+[dependencies]
+banana-input.workspace=true
+png="0.18.1"
+[target.'cfg(target_os = "linux")'.dependencies]
+libc="0.2"
+[target.'cfg(windows)'.dependencies]
+banana-water.workspace=true
+windows-sys={version="0.61.2",features=["Win32_Foundation","Win32_UI_Input"]}
+
+# One patch, built for each way the game runs.
+[[package.metadata.banana.artifacts]]
+name="arcade_big_buck_world"
+kind="lib"
+target="i686-unknown-linux-gnu"
+hosts=["linux", "android"]
+destination="games/big-buck-world/linux-x86/libarcade_big_buck_world.so"
+
+[[package.metadata.banana.artifacts]]
+name="arcade_big_buck_world"
+kind="lib"
+target="i686-pc-windows-msvc"
+hosts=["windows"]
+destination="games/big-buck-world/windows-x86/arcade_big_buck_world.dll"

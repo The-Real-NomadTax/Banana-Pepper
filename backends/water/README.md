@@ -29,3 +29,5 @@ Water grows the way Wine did: builtin library by builtin library, each one check
 4. **ELF64 dynamic programs**: the same linker for x86-64, with `%fs` TLS rewriting and glibc's start-up. Minecraft Dungeons needs this, plus libstdc++ and FMOD loaded as shipped libraries.
 
 Build through `just build`. `cargo test -p banana-water` runs the ELF64 loader and execution checks, and on Windows `tests/elf32.rs`: a real 32-bit Linux program (built by `cargo xtask water-fixtures`) runs with a library it ships and a plugin it dlopens.
+
+Big Buck World declares a separate `arcade_big_buck_world` adapter using Pro's JAMMA/GLUT implementation with World-specific addresses and response handling. Its Windows adapter is compile-checked; World gameplay under Water has not been verified. Missing generic ELF libraries/functions must still be implemented in Water.

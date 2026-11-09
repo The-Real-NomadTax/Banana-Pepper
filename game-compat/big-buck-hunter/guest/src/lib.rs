@@ -64,3 +64,10 @@ mod box32_abi;
 #[cfg(all(target_os = "linux", target_arch = "x86"))]
 #[path = "../../../../guest/linux-shim/src/android_threads.rs"]
 mod android_threads;
+
+const JAMMA_HOOKS: [usize; 4] = [0x080d9ce5, 0x080d9e81, 0x080dbf32, 0x080da943];
+const WINDOW_TITLE: &std::ffi::CStr = c"Banana pepper - Big Buck Hunter Pro";
+
+fn install_extra() -> Result<(), String> {
+    Ok(())
+}

@@ -245,6 +245,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "banana-big-buck-world-guest"
+version = "0.1.0"
+dependencies = [
+ "banana-input",
+ "banana-water",
+ "libc",
+ "png",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "banana-compat"
 version = "0.1.0"
 dependencies = [
@@ -254,6 +265,7 @@ dependencies = [
  "banana-core",
  "banana-game-aliens-armageddon",
  "banana-game-big-buck-hunter",
+ "banana-game-big-buck-world",
  "banana-game-ford-racing",
  "banana-game-jurassic-park",
  "banana-game-minecraft-dungeons",
@@ -347,6 +359,19 @@ dependencies = [
 
 [[package]]
 name = "banana-game-big-buck-hunter"
+version = "0.1.0"
+dependencies = [
+ "banana-api",
+ "banana-content",
+ "banana-core",
+ "banana-input",
+ "banana-settings",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "banana-game-big-buck-world"
 version = "0.1.0"
 dependencies = [
  "banana-api",

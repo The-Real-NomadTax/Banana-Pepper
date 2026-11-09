@@ -26,6 +26,8 @@ Water runs Linux programs on Windows the way Wine runs Windows programs on Linux
 
 Wangan Midnight Maximum Tune 6R (64-bit, Wine on Linux) is in bring-up: it boots against an emulated auth service, Wangan terminal and game server and plays guest races; see its [startup notes](game-compat/wangan-midnight-6r/docs/startup.md).
 
+Big Buck World 1.20 has its own compatibility entry and shares Pro's JAMMA/GLUT input implementation. See its [setup and verification notes](game-compat/big-buck-world/docs/startup.md).
+
 ## Storage
 
 Windows configuration lives in `%APPDATA%/banana-pepper`; data, state and cache live under `%LOCALAPPDATA%/BananaPepper/`. Linux uses the XDG configuration, data, state and cache directories under `banana-pepper`.

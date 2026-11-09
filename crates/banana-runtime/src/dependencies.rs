@@ -74,10 +74,30 @@ pub fn download(url: &str, digest: &str, destination: &Path, limit: u64) -> Resu
     result
 }
 pub fn extract_member(archive: &Path, member: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut magic = [0u8; 8];
+    let deb = fs::File::open(archive)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .is_ok()
+        && &magic == b"!<arch>\n";
+    let archive = if deb {
+        let listing = checked(Command::new("ar").arg("t").arg(archive))?;
+        let listing = String::from_utf8_lossy(&listing.stdout);
+        let data = listing
+            .lines()
+            .find(|name| ["data.tar", "data.tar.gz", "data.tar.xz", "data.tar.zst"].contains(name))
+            .ok_or("Dependency package has no data archive")?;
+        let path = archive.with_extension(data);
+        let bytes = checked(Command::new("ar").arg("p").arg(archive).arg(data))?.stdout;
+        fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        path
+    } else {
+        archive.to_owned()
+    };
     Ok(checked(
         Command::new("tar")
             .args(["-xOf"])
-            .arg(tar_path(archive)?)
+            .arg(tar_path(&archive)?)
             .arg(member),
     )?
     .stdout)
@@ -215,6 +235,41 @@ pub fn setup_legacy(project: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    #[cfg(target_os = "linux")]
+    fn pinned_deb_members_are_read_without_installing_the_package() {
+        let work = tempfile::tempdir().unwrap();
+        fs::write(work.path().join("library"), b"synthetic dependency").unwrap();
+        let tar = work.path().join("data.tar");
+        checked(
+            Command::new("tar")
+                .args(["-cf"])
+                .arg(&tar)
+                .arg("-C")
+                .arg(work.path())
+                .arg("library"),
+        )
+        .unwrap();
+        fs::write(work.path().join("debian-binary"), b"2.0\n").unwrap();
+        let deb = work.path().join("runtime.archive");
+        checked(
+            Command::new("ar")
+                .arg("rcs")
+                .arg(&deb)
+                .arg(work.path().join("debian-binary"))
+                .arg(&tar),
+        )
+        .unwrap();
+        assert_eq!(
+            extract_member(&deb, "library").unwrap(),
+            b"synthetic dependency"
+        );
+        assert!(extract_member(&deb, "missing").is_err());
+        assert_eq!(
+            fs::read(work.path().join("library")).unwrap(),
+            b"synthetic dependency"
+        );
+    }
+    #[test]
     fn zstandard_decoder_needs_no_external_program_and_enforces_bounds() {
         let data = b"synthetic dependency archive";
         let compressed = ruzstd::encoding::compress_to_vec(
@@ -224,7 +279,10 @@ mod tests {
         assert_eq!(decode_zstd(&compressed, 1024).unwrap(), data);
         // Concatenated frames decode as one stream.
         let twice = [compressed.clone(), compressed.clone()].concat();
-        assert_eq!(decode_zstd(&twice, 1024).unwrap(), [&data[..], &data[..]].concat());
+        assert_eq!(
+            decode_zstd(&twice, 1024).unwrap(),
+            [&data[..], &data[..]].concat()
+        );
         assert!(decode_zstd(&compressed, 1).is_err());
         assert!(decode_zstd(&compressed[..compressed.len() - 1], 1024).is_err());
         assert!(decode_zstd(b"invalid", 1024).is_err());

@@ -237,7 +237,7 @@ unsafe extern "C" fn arcade_oss_open(args: *const usize) -> c_int {
     };
     if !path.is_null()
         && unsafe { CStr::from_ptr(path) }.to_bytes() == b"/dev/dsp"
-        && std::env::var_os("ARCADE_AUDIO").is_some_and(|v| v == "1")
+        && std::env::var_os("ARCADE_AUDIO").is_some_and(|v| v == "1" || v == "0")
     {
         return open_device();
     }
@@ -388,7 +388,9 @@ unsafe extern "C" fn arcade_oss_ioctl(args: *const usize) -> c_int {
 /// # Safety
 /// Same buffer contract as POSIX write; the game must provide `bytes` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn write(fd: c_int, data: *const c_void, bytes: usize) -> isize {
+// POSIX thread cancellation uses a forced unwind at blocking writes/sleeps.
+// Guests may cancel their playback thread during shutdown.
+pub unsafe extern "C-unwind" fn write(fd: c_int, data: *const c_void, bytes: usize) -> isize {
     if fd < 0 || fd != FD.load(Ordering::Relaxed) {
         return sys_write(fd, data, bytes);
     }
@@ -401,6 +403,15 @@ pub unsafe extern "C" fn write(fd: c_int, data: *const c_void, bytes: usize) -> 
     let mut device = DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     if !bytes.is_multiple_of(device.channels as usize * 2) {
         return fail(libc::EINVAL) as isize;
+    }
+    if std::env::var_os("ARCADE_AUDIO").is_some_and(|v| v == "0") {
+        // Muting must retain the OSS device: some guests require it to boot.
+        // Pace discarded samples just as blocking playback would.
+        let micros =
+            bytes as u64 * 1_000_000 / (u64::from(device.channels) * 2 * u64::from(device.rate));
+        std::thread::sleep(std::time::Duration::from_micros(micros));
+        device.bytes += bytes as u64;
+        return bytes as isize;
     }
     if let Some(name) = std::env::var_os("ARCADE_AUDIO_SOCKET") {
         let pcm = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), bytes) };
@@ -566,6 +577,55 @@ mod tests {
         fn abi_ioctl(fd: c_int, request: u32, ...) -> c_int;
         #[link_name = "open"]
         fn abi_open(path: *const c_char, flags: c_int, ...) -> c_int;
+    }
+    #[test]
+    fn muted_oss_retains_device_and_supports_thread_cancellation() {
+        const CHILD: &str = "BANANA_OSS_CANCEL_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "audio::tests::muted_oss_retains_device_and_supports_thread_cancellation",
+                ])
+                .env(CHILD, "1")
+                .env("ARCADE_AUDIO", "0")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let fd = unsafe { abi_open(c"/dev/dsp".as_ptr(), libc::O_WRONLY) };
+        assert!(fd >= 0, "muting must still provide the OSS device");
+        unsafe extern "C-unwind" fn playback(context: *mut c_void) -> *mut c_void {
+            let fd = context as isize as c_int;
+            loop {
+                unsafe {
+                    write(fd, [0u8; 4096].as_ptr().cast(), 4096);
+                }
+            }
+        }
+        let mut thread = std::mem::MaybeUninit::<libc::pthread_t>::uninit();
+        let callback: extern "C" fn(*mut c_void) -> *mut c_void = unsafe {
+            std::mem::transmute(playback as unsafe extern "C-unwind" fn(*mut c_void) -> *mut c_void)
+        };
+        assert_eq!(
+            unsafe {
+                libc::pthread_create(
+                    thread.as_mut_ptr(),
+                    std::ptr::null(),
+                    callback,
+                    fd as isize as *mut c_void,
+                )
+            },
+            0
+        );
+        let thread = unsafe { thread.assume_init() };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(unsafe { libc::pthread_cancel(thread) }, 0);
+        let mut result = std::ptr::null_mut();
+        assert_eq!(unsafe { libc::pthread_join(thread, &mut result) }, 0);
+        assert_eq!(result as usize, usize::MAX);
+        assert_eq!(unsafe { close(fd) }, 0);
     }
     #[test]
     fn oss_negotiation_and_normal_file_calls_preserve_the_c_abi() {

@@ -27,3 +27,5 @@ resolution, merged-/usr layout, trimming and APK assembly. `cargo xtask android 
 builds the complete APK (the rootfs, Box64, banana-tracer and the optional Wine inputs
 described in `android.md`). Successful host tests do not establish phone gameplay
 support.
+
+Big Buck World 1.20: Linux mounted startup and resource verification were exercised with the user-supplied build and response corpus. See `game-compat/big-buck-world/docs/startup.md` for current gameplay/save evidence. Its guest tests run on `i686-unknown-linux-gnu`; OSS tests cover a muted device and cancellation of a playback thread.

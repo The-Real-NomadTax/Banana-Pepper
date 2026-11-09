@@ -90,7 +90,7 @@ pub extern "C" fn enter_game_mode() -> c_int {
     let (width, height) = window_size();
     unsafe {
         (g.init_window_size)(width, height);
-        let id = (g.create_window)(c"Banana pepper - Big Buck Hunter Pro".as_ptr());
+        let id = (g.create_window)(crate::WINDOW_TITLE.as_ptr());
         WINDOW.store(id, Ordering::Relaxed);
         if std::env::var_os("ARCADE_FULLSCREEN").is_some_and(|v| v == "1") {
             (g.full_screen)();
